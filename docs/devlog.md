@@ -2125,3 +2125,34 @@ LLM Wiki 的核心理念与思源桥底层哲学高度一致，适合作为**配
 `隐私规则/Hide Notebooks` 表格有空行时（第 5 行：Notebook ID 和名称都为空），`PrivacyRulesParseError` 会阻断整个 `siyuan_start`。应改为：
 - 空行视为 warning，跳过该行，程序继续运行。
 - warning 在启动包中提示用户自行检查，AI 不应尝试修复。
+
+---
+
+## 2026-06-02
+
+### 与 Sisyphus 的架构比较与语言路线讨论
+
+在比较分支 `codex/compare-sisyphus-edit-design` 中新增 `docs/compare-sisyphus-qa.md`，记录 Bridge 与 `D:\Github\siyuan-plugins-mcp-sisyphus` 的差异、edit 体验问题、插件化可能性和语言路线判断。
+
+阶段性结论：
+
+- Bridge 的核心问题不是 Python 语言本身，而是 `siyuan_edit_document` 以 `old_text` 文本锚点作为主要定位器，和思源“块”为核心的数据模型存在张力。
+- Sisyphus 的工程架构、测试体系、help/resource 渐进式披露、权限模型、插件包装方式值得借鉴。
+- Sisyphus 的 `fs.replace` 更接近文件编辑心智，但通过整文档重建完成替换，不适合作为 Bridge 默认安全编辑模型。
+- 当前不建议全量迁移到 TypeScript。更稳妥路线是：Bridge 继续保留 Python 主体，先重构 edit 语义；未来如需插件形态，可做 TypeScript 思源插件壳来启动 Python MCP server。
+- 若给 Sisyphus 提 PR，应聚焦小型高层编辑 action，例如 `block.patch` / `fs.patch`，以 `block_id` 为主定位，`expected_old` 作为安全校验，而不是把 Bridge 的完整产品机制并入 Sisyphus。
+
+### Bridge dev MCP 实测：happy path 顺利，但需复现日常失败路径
+
+将 Codex MCP server 注册为 `siyuan-bridge-dev` 后，Bridge 工具成功加载。最初因仓库 `config.local.json` token 过期导致鉴权失败，后在 Codex MCP env 中加入当前 `SIYUAN_TOKEN` 后连接正常。
+
+实测结果：
+
+- `siyuan_start` 能返回启动包、Workspace Index、AI Guide 和笔记本概览。
+- `siyuan_find_documents` 搜索 Hermes 文章时直接返回文档 ID、命中块 ID 和片段。
+- `siyuan_read_document(include_block_ids=true)` 的引用阅读视图对编辑定位很友好。
+- `siyuan_create_document` 自动创建快照、刷新索引，并去掉重复 H1。
+- `siyuan_edit_document` 在普通段落、短文本 + block_id 消歧义、锚点后插入、末尾追加等 happy path 下表现顺利。
+- 不存在文本和多块歧义都会快速失败，并返回可操作提示。
+
+阶段性判断：Bridge edit 并非在所有情况下都难用；它在“刚读即改、引用阅读、单块小粒度、普通段落”的条件下表现良好。用户日常感受到的难用，很可能发生在 AI 偏离最佳流程时，例如不开 `include_block_ids`、使用搜索片段/旧上下文拼 `old_text`、跨块编辑、列表/表格/超级块等复杂结构、或一次写入太多内容。后续需要专门设计“反最佳实践”测试，而不只测试 happy path。
