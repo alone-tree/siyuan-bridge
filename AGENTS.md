@@ -124,6 +124,8 @@ cmd /d /s /c "chcp 65001 >nul && python -m pytest tests -q"
 
 不要使用默认 `Get-Content AGENTS.md` 读取中文，不要把终端乱码误判为文件损坏。
 
+复杂命令优先拆成简单命令，避免多层 shell 引号。Windows CMD 不支持 Bash heredoc，不能用 `python - <<PY`。PowerShell 字符串中变量后紧跟冒号时要写成 `${p}:...`，不要写 `$p:...`。
+
 ## 常用入口
 
 ```bash

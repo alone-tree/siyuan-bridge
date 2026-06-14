@@ -42,7 +42,8 @@
 | 仓库恢复 | `/api/repo/checkoutRepo` | 恢复整个工作空间到某个快照 | 不暴露给 AI |
 | 历史 | history rollback 类端点 | 文档/资源历史恢复 | 第一阶段不使用；只作为人工恢复参考 |
 | 通知 | `/api/notification/pushMsg`, `/api/notification/pushErrMsg` | 写入完成或失败时通知用户 | 内部使用 |
-| 同步/账号/设置/插件/集市 | sync、account、setting、bazaar、plugin 类端点 | 思源应用状态管理 | 不属于本项目范围 |
+| 同步 | `/api/sync/performSync`, `/api/sync/getSyncInfo` | 触发思源内置默认同步、读取状态 | 仅通过 `siyuan_operate(action=sync)` 暴露默认同步，不修改同步配置 |
+| 账号/设置/插件/集市 | account、setting、bazaar、plugin 类端点 | 思源应用状态管理 | 不属于本项目范围 |
 
 ## 当前写入 API 组合
 
@@ -142,6 +143,20 @@ timestamp
 - 用户手动从思源快照恢复更符合这种事故级操作的风险边界。
 
 工具执行成功后应返回快照信息，方便用户在需要时定位恢复点。
+
+## 思源内置同步
+
+思源内核源码确认提供：
+
+```text
+POST /api/sync/performSync
+{}
+
+POST /api/sync/getSyncInfo
+{}
+```
+
+`siyuan_operate(action=sync)` 只按空请求体调用 `performSync`，保持与用户点击思源同步按钮一致。默认等待 10 秒；AI 可通过 `timeout_seconds` 手动调整到 5-120 秒，该参数只改变 MCP 等待时间，不改变思源同步行为。超时返回 `api:sync_timeout`，同步调用中的网络连接失败返回 `api:sync_connection`，都不等同于思源未启动。项目不暴露上传、下载、同步模式、同步提供方或云目录配置。
 
 ## 不直接暴露的高风险 API
 

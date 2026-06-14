@@ -13,6 +13,10 @@ class SiYuanConnectionError(RuntimeError):
     pass
 
 
+class SiYuanTimeoutError(SiYuanConnectionError):
+    pass
+
+
 class SiYuanApiError(RuntimeError):
     def __init__(self, message: str, *, status: int | None = None, code: int | None = None):
         super().__init__(message)
@@ -169,6 +173,22 @@ class SiYuanClient:
             raise SiYuanApiError("Unexpected repo snapshots response shape")
         return data
 
+    def perform_sync(self, *, timeout: float = 10.0) -> dict[str, Any]:
+        data = self._post("/api/sync/performSync", {}, timeout=timeout)
+        if data is None:
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return data
+
+    def get_sync_info(self) -> dict[str, Any]:
+        data = self._post("/api/sync/getSyncInfo", {})
+        if data is None:
+            return {}
+        if not isinstance(data, dict):
+            raise SiYuanApiError("Unexpected sync info response shape")
+        return data
+
     def create_notebook(self, name: str) -> dict[str, Any]:
         data = self._post("/api/notebook/createNotebook", {"name": name})
         if data is None:
@@ -315,16 +335,17 @@ class SiYuanClient:
     def push_err_msg(self, msg: str, timeout: int = 7000) -> None:
         self._post("/api/notification/pushErrMsg", {"msg": msg, "timeout": timeout})
 
-    def _post(self, path: str, payload: dict[str, Any]) -> Any:
+    def _post(self, path: str, payload: dict[str, Any], *, timeout: float | None = None) -> Any:
         body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json", "Connection": "close"}
         if self.token:
             headers["Authorization"] = f"Token {self.token}"
+        request_timeout = self.timeout if timeout is None else timeout
 
         last_error: Exception | None = None
         for attempt in range(2):
             try:
-                return self._post_once(path, body, headers)
+                return self._post_once(path, body, headers, timeout=request_timeout)
             except SiYuanConnectionError as exc:
                 last_error = exc
                 if attempt < 1:
@@ -334,7 +355,7 @@ class SiYuanClient:
                 break
         raise last_error  # type: ignore[misc]
 
-    def _post_once(self, path: str, body: bytes, headers: dict[str, str]) -> Any:
+    def _post_once(self, path: str, body: bytes, headers: dict[str, str], *, timeout: float | None = None) -> Any:
         req = request.Request(
             f"{self.base_url}{path}",
             data=body,
@@ -344,7 +365,7 @@ class SiYuanClient:
 
         try:
             opener = self.transport or request.urlopen
-            with opener(req, timeout=self.timeout) as response:
+            with opener(req, timeout=timeout if timeout is not None else self.timeout) as response:
                 raw = response.read().decode("utf-8")
         except error.HTTPError as exc:
             message = _read_http_error(exc)
@@ -352,7 +373,7 @@ class SiYuanClient:
         except error.URLError as exc:
             raise SiYuanConnectionError(str(exc.reason)) from exc
         except TimeoutError as exc:
-            raise SiYuanConnectionError("Request timed out") from exc
+            raise SiYuanTimeoutError("Request timed out") from exc
         except OSError as exc:
             raise SiYuanConnectionError(str(exc)) from exc
 

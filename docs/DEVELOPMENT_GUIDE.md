@@ -183,7 +183,8 @@
 | 工具 | 是否写思源 | 是否需要 confirmed | 是否快照 | 主要权限 |
 |---|---:|---:|---:|---|
 | `siyuan_start` | 可能创建/更新系统文档 | 否 | 否 | 内部系统操作 |
-| `siyuan_refresh_index` | 可能创建/更新系统文档 | 否 | 否 | 内部系统操作 |
+| `siyuan_operate:refresh` | 可能创建/更新系统文档 | 否 | 否 | 内部系统操作 |
+| `siyuan_operate:sync` | 否，触发思源内置同步 | 否 | 否 | 思源同步配置 |
 | `siyuan_list` | 否 | 否 | 否 | 只返回可见索引 |
 | `siyuan_find` | 否 | 否 | 否 | 返回前隐私过滤 |
 | `siyuan_read` | 否 | 否 | 否 | hidden 不可读 |
@@ -314,7 +315,7 @@ claude --permission-mode bypassPermissions --dangerously-skip-permissions --prin
 
 | 修改范围 | Claude Code 外部验证 |
 |---|---|
-| 工具名称、schema、description | `tools/list` 可见 8 个工具；关键工具 description/schema 包含改动 |
+| 工具名称、schema、description | `tools/list` 可见 9 个工具；关键工具 description/schema 包含改动 |
 | `siyuan_create` | create 临时文档后立刻用返回路径 `siyuan_read` |
 | `siyuan_doc_manage` | 对临时文档依次验证 rename/move/copy/delete 后路径同步和索引刷新 |
 | 隐私/权限 | 用临时规则或测试文档验证 hidden/read_only/read_write 行为，不读取 Privacy Rules 正文 |
@@ -353,7 +354,7 @@ python scripts/verify.py
 2. `mcp_server.py` 体积过大，局部修改容易漏同步 `tool_specs()`、Skill 或测试。
 3. Privacy Rules 文档硬隔离和系统笔记本保护存在实现差距。
 4. 写入后自动 refresh 必须保留系统文档排除参数，避免污染本地索引缓存。
-5. `siyuan_refresh_index` 不清理 `ai_workspace` 是当前设计；旧文档中“refresh 会清理 workspace”的表述需要迁移时删除。
+5. `siyuan_operate(action=refresh)` 不清理 `ai_workspace` 是当前设计；旧文档中“refresh 会清理 workspace”的表述需要迁移时删除。
 6. `siyuan_doc_manage` rename/move 后路径索引可能延迟，当前通过短轮询和安全刷新处理。
 7. `updateBlock` 多块 Markdown 会截断。
 8. `updateBlock` 会清空块样式属性，必须恢复 IAL custom attrs。
@@ -398,6 +399,13 @@ cmd /d /s /c "chcp 65001 >nul && <command>"
 ```
 
 不要把终端乱码误判为文件损坏。
+
+命令写法经验：
+
+- Windows CMD 不支持 Bash heredoc，不能使用 `python - <<PY ... PY`。需要临时 Python 片段时，优先改成 `python -c "..."`，或用 PowerShell 循环直接完成读取、切片、格式化输出。
+- 多层 `cmd /d /s /c`、`python -c`、正则和中文混在一起时，引号很容易被提前消费。优先拆成多条简单命令，或使用 PowerShell 原生命令处理局部文件读取。
+- PowerShell 双引号字符串里，变量后紧跟冒号会被解析成作用域前缀。路径标签这类场景应写 `${p}:$line`，不要写 `$p:$line`。
+- 只读局部文本时可以用 `Get-Content -Encoding UTF8`，不要用默认编码的 `Get-Content` 读取中文文件。
 
 ## Git 与工作区
 

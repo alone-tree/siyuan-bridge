@@ -4,6 +4,14 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
+## 2026-06-14：新增 siyuan_operate 并接入思源默认同步
+
+- MCP 工具面保持 9 个工具：`siyuan_operate` 替代公开的 `siyuan_refresh_index`。
+- `siyuan_operate(action=refresh)` 复用原安全索引刷新逻辑，不清理 `ai_workspace/`。
+- `siyuan_operate(action=sync)` 调用思源内置 `POST /api/sync/performSync`，请求体为空，行为对齐思源同步按钮；随后调用 `POST /api/sync/getSyncInfo` 返回当前同步状态。
+- 同步默认等待 10 秒，可通过 `timeout_seconds` 调整到 5-120 秒。`performSync` 超时返回 `api:sync_timeout`，同步调用中的网络连接失败返回 `api:sync_connection`，通过现有遥测 error_code 记录，不和连接探测阶段的“思源未启动/API 不可达”混在一起。
+- 同步更新 README、Skill、架构文档、开发指南和思源 API 能力地图。
+
 ## 2026-06-07：修复插件根入口被改成 ESM 后齿轮消失
 
 症状：思源控制台报 `plugin siyuan-bridge run error: SyntaxError: Cannot use import statement outside a module`，插件列表设置齿轮消失。

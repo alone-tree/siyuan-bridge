@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .cli import load_live_docs
-from .client import SiYuanApiError, SiYuanClient, SiYuanConnectionError
+from .client import SiYuanApiError, SiYuanClient, SiYuanConnectionError, SiYuanTimeoutError
 from .config import detect_active_profile, load_config
 from .ignore import (
     PrivacyRules,
@@ -103,6 +103,8 @@ _ERR_MULTI_DOC_OVERWRITE = "conflict:multi_doc_overwrite"
 _ERR_SNAPSHOT_KEY   = "api:snapshot_key"
 _ERR_SNAPSHOT_FAILED = "api:snapshot_failed"
 _ERR_DUPLICATE_NO_ID = "api:duplicate_no_id"
+_ERR_SYNC_TIMEOUT = "api:sync_timeout"
+_ERR_SYNC_CONNECTION = "api:sync_connection"
 
 
 def tool_error(code: str, message: str) -> ValueError:
@@ -1163,6 +1165,9 @@ def _extract_tool_action(tool_name: str, args: dict[str, Any]) -> str | None:
     if tool_name == "siyuan_doc_manage":
         action = args.get("action")
         return str(action) if action else None
+    if tool_name == "siyuan_operate":
+        action = args.get("action")
+        return str(action) if action else None
     return None
 
 
@@ -1200,7 +1205,7 @@ class McpServer:
     def call_tool(self, request_id: Any, name: str, args: dict[str, Any]) -> dict[str, Any]:
         tools: dict[str, Callable[[dict[str, Any]], str]] = {
             "siyuan_start": self.siyuan_start,
-            "siyuan_refresh_index": self.siyuan_refresh_index,
+            "siyuan_operate": self.siyuan_operate,
             "siyuan_list": self.siyuan_list,
             "siyuan_find": self.siyuan_find,
             "siyuan_read": self.siyuan_read,
@@ -1390,11 +1395,10 @@ class McpServer:
         ])
         return "\n".join(parts)
 
-    def siyuan_refresh_index(self, _args: dict[str, Any]) -> str:
+    def _refresh_safe_index(self) -> str:
         config = load_config(self.root)
         _profile, client = detect_active_profile(config)
 
-        # Ensure system notebook and parse privacy rules
         state = ensure_agent_notebook(client, self.root, config_language=config.language or None)
         write_privacy_rules_cache(self.root, state.privacy_rules)
 
@@ -1411,6 +1415,40 @@ class McpServer:
             f"可见：{result.notebook_count} 个笔记本、{result.document_count} 篇文档。\n"
             f"隐私规则：{total_rules} 条隐私规则已生效。"
         )
+
+    def siyuan_operate(self, args: dict[str, Any]) -> str:
+        action = str(args.get("action") or "").strip()
+        if action not in {"refresh", "sync"}:
+            raise tool_error(_ERR_INVALID_ENUM, "action 必须是 refresh 或 sync。")
+        if action == "refresh":
+            return self._refresh_safe_index()
+
+        timeout_seconds = clamp_int(args.get("timeout_seconds"), 10, 5, 120)
+        config = load_config(self.root)
+        _profile, client = detect_active_profile(config)
+        try:
+            client.perform_sync(timeout=float(timeout_seconds))
+        except SiYuanTimeoutError as exc:
+            raise tool_error(
+                _ERR_SYNC_TIMEOUT,
+                f"思源同步超过 {timeout_seconds} 秒仍未完成。请稍后检查同步状态；如果长期超时，请手动延长 timeout_seconds 或检查网络/同步服务。",
+            ) from exc
+        except SiYuanConnectionError as exc:
+            raise tool_error(
+                _ERR_SYNC_CONNECTION,
+                f"思源同步连接失败：{exc}。请检查网络、代理或同步服务状态。",
+            ) from exc
+        status = client.get_sync_info()
+        stat = str(status.get("stat") or "").strip()
+        synced = str(status.get("synced") or "").strip()
+        failed_markers = ("失败", "错误", "failed", "error", "不可用", "未启用")
+        title = "# 同步失败" if any(marker in stat.casefold() for marker in failed_markers) else "# 同步已完成"
+        lines = [title, "", "已调用思源内置同步。"]
+        if stat:
+            lines.append(f"状态：{stat}")
+        if synced:
+            lines.append(f"同步时间：{synced}")
+        return "\n".join(lines)
 
     def siyuan_list(self, args: dict[str, Any]) -> str:
         path = normalize_display_path(str(args.get("path") or "").strip())
@@ -2089,7 +2127,7 @@ class McpServer:
         if refresh_ok:
             parts.append(f"**索引：**已自动刷新")
         else:
-            parts.append(f"**索引：**自动刷新失败，请手动运行 `siyuan_refresh_index`")
+            parts.append(f"**索引：**自动刷新失败，请手动运行 `siyuan_operate(action=\"refresh\")`")
         parts.extend([
             "",
             "如需回滚，可通过思源快照手动恢复。",
@@ -2566,7 +2604,7 @@ class McpServer:
         if sync_status is not None:
             parts.append(f"路径同步：{sync_status.detail}")
         if action != "export":
-            parts.append("索引：已自动刷新" if refresh_ok else "索引：自动刷新失败，请手动运行 `siyuan_refresh_index`")
+            parts.append("索引：已自动刷新" if refresh_ok else "索引：自动刷新失败，请手动运行 `siyuan_operate(action=\"refresh\")`")
         if action == "delete":
             parts.append("如需回滚，可通过思源快照手动恢复。")
         return "\n".join(parts)
@@ -2868,9 +2906,17 @@ def tool_specs() -> list[dict[str, Any]]:
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
         },
         {
-            "name": "siyuan_refresh_index",
-            "description": "Explicitly refresh the safe SiYuan index when the user asks or the index is missing/stale.",
-            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            "name": "siyuan_operate",
+            "description": "Run maintenance operations. action=refresh refreshes the safe local SiYuan index without cleaning ai_workspace. action=sync triggers SiYuan's built-in default sync, equivalent to clicking the sync button in SiYuan, then returns the current sync status.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["refresh", "sync"], "description": "refresh = update the local safe index. sync = trigger SiYuan built-in default sync."},
+                    "timeout_seconds": {"type": "integer", "default": 10, "description": "For action=sync only. How long to wait for SiYuan built-in sync to return, 5-120 seconds. Does not change SiYuan sync behavior."},
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
         },
         {
             "name": "siyuan_list",

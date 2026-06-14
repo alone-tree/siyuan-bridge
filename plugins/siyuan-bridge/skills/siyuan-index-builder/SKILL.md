@@ -150,7 +150,7 @@ description: 创建和更新思源系统笔记本 思源桥 中的 Workspace Ind
 
 当用户要求更新索引时：
 
-1. 如果索引可能过时，先调用 `siyuan_refresh_index`。
+1. 如果索引可能过时，先调用 `siyuan_operate(action="refresh")`。
 2. 调用 `siyuan_start` 获取当前笔记本概览表，检测新增或删除的笔记本。
 3. 对可能变化的笔记本，用其笔记本 ID 调用 `siyuan_list`。
 4. 对新增或可能变化的文档，用 `siyuan_read` 阅读并生成或刷新摘要。

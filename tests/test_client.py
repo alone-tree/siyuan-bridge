@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from source_code.client import SiYuanApiError, SiYuanClient, SiYuanConnectionError
+from source_code.client import SiYuanApiError, SiYuanClient, SiYuanConnectionError, SiYuanTimeoutError
 
 
 class FakeResponse:
@@ -42,6 +42,15 @@ class ClientTests(unittest.TestCase):
         client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
 
         with self.assertRaises(SiYuanConnectionError):
+            client.version()
+
+    def test_timeouts_are_distinct_connection_errors(self):
+        def transport(req, timeout):
+            raise TimeoutError("slow")
+
+        client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
+
+        with self.assertRaises(SiYuanTimeoutError):
             client.version()
 
     def test_create_snapshot_posts_memo_only(self):
@@ -83,6 +92,37 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(seen["url"], "http://127.0.0.1:6806/api/repo/getRepoSnapshots")
         self.assertEqual(seen["body"], {"page": 2})
         self.assertEqual(data["totalCount"], 0)
+
+    def test_perform_sync_uses_default_siyuan_sync(self):
+        seen = {}
+
+        def transport(req, timeout):
+            seen["url"] = req.full_url
+            seen["body"] = json.loads(req.data.decode("utf-8"))
+            seen["timeout"] = timeout
+            return FakeResponse({"code": 0, "data": None})
+
+        client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
+
+        self.assertEqual(client.perform_sync(), {})
+        self.assertEqual(seen["url"], "http://127.0.0.1:6806/api/sync/performSync")
+        self.assertEqual(seen["body"], {})
+        self.assertEqual(seen["timeout"], 10.0)
+
+    def test_get_sync_info_payload(self):
+        seen = {}
+
+        def transport(req, timeout):
+            seen["url"] = req.full_url
+            seen["body"] = json.loads(req.data.decode("utf-8"))
+            return FakeResponse({"code": 0, "data": {"stat": "Synced", "synced": 123}})
+
+        client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
+
+        info = client.get_sync_info()
+        self.assertEqual(seen["url"], "http://127.0.0.1:6806/api/sync/getSyncInfo")
+        self.assertEqual(seen["body"], {})
+        self.assertEqual(info["stat"], "Synced")
 
 
     def test_create_doc_with_md_payload(self):

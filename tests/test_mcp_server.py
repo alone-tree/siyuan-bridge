@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from source_code import mcp_server
-from source_code.client import SiYuanConnectionError
+from source_code.client import SiYuanConnectionError, SiYuanTimeoutError
 from source_code.config import Profile
 from source_code.ignore import PrivacyRules, write_privacy_rules_cache
 
@@ -35,6 +35,9 @@ class FakeSearchClient:
         self._moved_docs: list[tuple[list[str], str]] = []
         self._duplicated_docs: list[str] = []
         self._hpaths: dict[str, str] = {"doc1": "/Projects/Doc One", "doc2": "/Projects/Hidden", "doc3": "/Projects/Doc One/Child"}
+        self._sync_performed = False
+        self._sync_timeout = None
+        self._sync_info = {"stat": "Synced", "synced": 20260614010101}
 
     def version(self):
         return "3.0.0"
@@ -90,6 +93,14 @@ class FakeSearchClient:
         snap = {"memo": memo, "created": "20260503000000"}
         self._snapshots.append(snap)
         return snap
+
+    def perform_sync(self, *, timeout=10.0):
+        self._sync_performed = True
+        self._sync_timeout = timeout
+        return {}
+
+    def get_sync_info(self):
+        return self._sync_info
 
     def create_doc_with_md(self, notebook, path, markdown):
         self._created_docs.append((notebook, path, markdown))
@@ -308,6 +319,99 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("思源未启动或 API 不可达", text)
         self.assertIn("请提示用户手动打开思源笔记后重试", text)
         self.assertIn("请先手动启动思源笔记", text)
+
+    def test_tool_specs_expose_operate_not_refresh_index(self):
+        names = [tool["name"] for tool in mcp_server.tool_specs()]
+        self.assertIn("siyuan_operate", names)
+        self.assertNotIn("siyuan_refresh_index", names)
+
+    def test_operate_sync_calls_default_siyuan_sync(self):
+        client = FakeSearchClient([])
+        server = mcp_server.McpServer(self.root)
+        original = mcp_server.detect_active_profile
+
+        profile = Profile(name="test", token="test")
+        def fake_detect(_config):
+            return profile, client
+
+        mcp_server.detect_active_profile = fake_detect
+        try:
+            result = server.siyuan_operate({"action": "sync"})
+        finally:
+            mcp_server.detect_active_profile = original
+
+        self.assertTrue(client._sync_performed)
+        self.assertEqual(client._sync_timeout, 10.0)
+        self.assertIn("# 同步已完成", result)
+        self.assertIn("状态：Synced", result)
+
+    def test_operate_sync_accepts_custom_timeout(self):
+        client = FakeSearchClient([])
+        server = mcp_server.McpServer(self.root)
+        original = mcp_server.detect_active_profile
+
+        profile = Profile(name="test", token="test")
+        def fake_detect(_config):
+            return profile, client
+
+        mcp_server.detect_active_profile = fake_detect
+        try:
+            server.siyuan_operate({"action": "sync", "timeout_seconds": 30})
+        finally:
+            mcp_server.detect_active_profile = original
+
+        self.assertEqual(client._sync_timeout, 30.0)
+
+    def test_operate_sync_timeout_has_specific_error_code(self):
+        class TimeoutSyncClient(FakeSearchClient):
+            def perform_sync(self, *, timeout=10.0):
+                raise SiYuanTimeoutError("Request timed out")
+
+        client = TimeoutSyncClient([])
+        server = mcp_server.McpServer(self.root)
+        original = mcp_server.detect_active_profile
+
+        profile = Profile(name="test", token="test")
+        def fake_detect(_config):
+            return profile, client
+
+        mcp_server.detect_active_profile = fake_detect
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_operate({"action": "sync"})
+        finally:
+            mcp_server.detect_active_profile = original
+
+        self.assertEqual(getattr(ctx.exception, "error_code", None), "api:sync_timeout")
+        self.assertIn("同步超过 10 秒", str(ctx.exception))
+
+    def test_operate_sync_connection_error_has_specific_error_code(self):
+        class BrokenSyncClient(FakeSearchClient):
+            def perform_sync(self, *, timeout=10.0):
+                raise SiYuanConnectionError("network unreachable")
+
+        client = BrokenSyncClient([])
+        server = mcp_server.McpServer(self.root)
+        original = mcp_server.detect_active_profile
+
+        profile = Profile(name="test", token="test")
+        def fake_detect(_config):
+            return profile, client
+
+        mcp_server.detect_active_profile = fake_detect
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_operate({"action": "sync"})
+        finally:
+            mcp_server.detect_active_profile = original
+
+        self.assertEqual(getattr(ctx.exception, "error_code", None), "api:sync_connection")
+        self.assertIn("同步连接失败", str(ctx.exception))
+
+    def test_operate_requires_known_action(self):
+        server = mcp_server.McpServer(self.root)
+        with self.assertRaises(ValueError):
+            server.siyuan_operate({"action": "bad"})
 
     def test_list_path_returns_direct_children_with_full_paths(self):
         server = mcp_server.McpServer(self.root)

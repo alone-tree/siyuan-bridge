@@ -1,6 +1,6 @@
 # SiYuan Bridge 架构文档
 
-> 当前事实基准：2026-06-07，MCP server 版本 `1.0.0`，实际暴露 9 个 MCP 工具。
+> 当前事实基准：2026-06-14，MCP server 版本 `1.0.0`，实际暴露 9 个 MCP 工具。
 > 人类可读架构图见 `docs/architecture-map.html`。如果整体架构、工具关系、主要数据流或产品边界发生较大变化，必须同步更新本 Markdown 和该 HTML。
 
 ## 整体架构
@@ -244,7 +244,7 @@ AI 工作区位于 `ai_workspace/`：
 当前实现差距：
 
 - `siyuan_start` 会清理 `ai_workspace/` 中除 README 外的内容。
-- `siyuan_refresh_index` 不清理 `ai_workspace/`。这是当前明确设计：会话中途刷新索引不应删除 AI 正在使用的附件、导出文件或临时材料。
+- `siyuan_operate(action=refresh)` 不清理 `ai_workspace/`。这是当前明确设计：会话中途刷新索引不应删除 AI 正在使用的附件、导出文件或临时材料。
 
 ## 隐私与权限模型
 
@@ -408,7 +408,7 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 
 ```text
 siyuan_start
-siyuan_refresh_index
+siyuan_operate
 siyuan_list
 siyuan_find
 siyuan_read
@@ -455,13 +455,18 @@ siyuan_bridge_feedback
 - 不应把 About 文档全文塞进启动包。
 - Workspace Index 不存在时只提示可建议用户创建，不自动创建。
 
-## `siyuan_refresh_index`
+## `siyuan_operate`
 
-用途：显式刷新安全索引。
+用途：执行维护操作。当前支持刷新安全索引和触发思源内置默认同步。
 
-参数：无。
+参数：
 
-数据流：
+| 参数     | 类型   | 默认 | 含义                         |
+| -------- | ------ | ---- | ---------------------------- |
+| `action` | string | 必填 | `refresh` / `sync` |
+| `timeout_seconds` | integer | 10 | 仅 `action=sync` 使用，等待思源内置同步返回的秒数，范围 5-120 |
+
+`action=refresh` 数据流：
 
 1. 加载配置并探测当前在线工作空间。
 2. 确保系统笔记本和 Privacy Rules。
@@ -469,9 +474,18 @@ siyuan_bridge_feedback
 4. 调用 `refresh_index()`，并传入系统笔记本 ID 和 Privacy Rules 文档 ID。
 5. 返回扫描数量、可见数量、隐藏数量。
 
+`action=sync` 数据流：
+
+1. 加载配置并探测当前在线工作空间。
+2. 调用思源内置 `POST /api/sync/performSync`，请求体为空，保持与思源同步按钮一致，默认等待 10 秒，可通过 `timeout_seconds` 调整到 5-120 秒。
+3. 调用 `POST /api/sync/getSyncInfo` 获取当前同步状态。
+4. 返回同步调用结果和状态文本。
+
+如果 `performSync` 超过等待时间未返回，工具返回 `api:sync_timeout` 错误，提示用户稍后检查同步状态、手动延长 `timeout_seconds` 或检查网络/同步服务。如果同步调用已经开始但网络连接失败，工具返回 `api:sync_connection`。连接探测阶段失败仍按普通思源未启动/API 不可达处理。
+
 当前实现差距：
 
-- 当前设计已明确：只有 `siyuan_start` 会清理 `ai_workspace`，`siyuan_refresh_index` 不清理。refresh 可能发生在 AI 工作途中，中途清理 workspace 会误删附件、导出文件或临时工作材料。旧 devlog 和旧说明文档中仍可能保留相反历史表述，迁移时需要剔除，避免继续暗示 refresh 会清理 workspace。
+- 当前设计已明确：只有 `siyuan_start` 会清理 `ai_workspace`，`siyuan_operate(action=refresh)` 不清理。refresh 可能发生在 AI 工作途中，中途清理 workspace 会误删附件、导出文件或临时工作材料。旧 devlog 和旧说明文档中仍可能保留相反历史表述，迁移时需要剔除，避免继续暗示 refresh 会清理 workspace。
 
 ## `siyuan_list`
 
@@ -815,7 +829,7 @@ scope：
 当前实现特点：
 
 - rename/move/copy/delete 后会等待思源路径接口同步，再刷新本地索引。正常情况下返回的新路径可以直接用于后续 `siyuan_read` / `siyuan_list` / `siyuan_doc_manage`。
-- 如果等待超时，工具仍返回写入结果和同步状态；连续操作时可临时使用 `document_id` 继续，或显式调用 `siyuan_refresh_index`。
+- 如果等待超时，工具仍返回写入结果和同步状态；连续操作时可临时使用 `document_id` 继续，或显式调用 `siyuan_operate(action=refresh)`。
 - copy 复制单篇源文档本身，不复制子文档；目标必须使用完整 `target_path`，目标路径已存在时拒绝覆盖。
 - move 按思源行为移动整棵子树，但不要求子孙全部 `read_write`；显式文档权限会随文档 ID 保留。为避免文档脱离只读/隐藏祖先后权限提升，源文档到笔记本根之间的祖先路径必须都是 `read_write`。
 
@@ -893,7 +907,7 @@ API 设计原则：
 
 1. 系统笔记本不能隐藏的承诺尚未由代码强制执行。
 2. Privacy Rules 的硬隔离按 hpath 名称判断，可能误挡非系统同名文档。
-3. `siyuan_refresh_index` 不清理 `ai_workspace` 是当前设计；旧 devlog 仍有相反历史记录，迁移时需要剔除。
+3. `siyuan_operate(action=refresh)` 不清理 `ai_workspace` 是当前设计；旧 devlog 仍有相反历史记录，迁移时需要剔除。
 4. `cli.py start` 仍读取旧 `knowledge_base/guide.md/index.md/START_HERE.md`，和系统笔记本方案不一致。
 5. `mcp_server.py` 文件过大，后续维护风险高。需要拆分为模块。
 6. 测试也需要模块化拆分。并需要系统性的覆盖。
