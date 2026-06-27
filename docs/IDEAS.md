@@ -14,4 +14,5 @@
 
 - [x] Worker 加 dashboard API，个人网站前端 JS fetch Worker 直连，不需要 API key
 - [x] 统计：活跃用户数、总调用次数、总体成功率、每日调用量曲线、每日成功率曲线、各工具调用及 action、各工具失败次数及场景
-- 已上线：https://zingerplayground.netlify.app/code/siyuan-bridge-telemetry/
+- [x] 开发者诊断面板：`dev/diagnostics.html`，错误下钻 + 反馈查看
+- 已上线：https://zingerplayground.top/code/siyuan-bridge-telemetry/

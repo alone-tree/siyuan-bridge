@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>思源桥 · 开发者诊断</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: #f8f9fa;
+      color: #2d3436;
+      min-height: 100vh;
+    }
+    .page-header {
+      background: #2C3639;
+      color: #DCD7C9;
+      padding: 16px 24px;
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+    }
+    .page-header h1 { font-size: 17px; font-weight: 600; }
+    .page-header .sub { font-size: 12px; opacity: 0.6; }
+    .tabs { display: flex; gap: 4px; background: rgba(255,255,255,0.08); border-radius: 8px; padding: 3px; }
+    .tabs button {
+      padding: 6px 16px; border: none; border-radius: 6px; font-size: 13px; cursor: pointer;
+      background: transparent; color: rgba(220,215,201,0.6); font-family: inherit; transition: 0.2s;
+    }
+    .tabs button.active { background: #A27B5C; color: #fff; }
+
+    .container { max-width: 1300px; margin: 0 auto; padding: 24px 20px; }
+    .controls {
+      display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 20px;
+    }
+    .controls select, .controls input {
+      padding: 7px 12px; border: 1px solid #dfe6e9; border-radius: 6px; font-size: 13px;
+      background: #fff; color: #2d3436; font-family: inherit;
+    }
+    .controls label { font-size: 13px; color: #636e72; }
+
+    .stats-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+    .stat-item { background: #fff; border-radius: 8px; padding: 14px 18px; border: 1px solid #eee; flex: 1; min-width: 140px; }
+    .stat-item .label { font-size: 11px; color: #8b8680; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+    .stat-item .value { font-size: 22px; font-weight: 700; }
+
+    .panel {
+      background: #fff; border-radius: 10px; border: 1px solid #eee; overflow: hidden; margin-bottom: 20px;
+    }
+    .panel-header { padding: 14px 18px; border-bottom: 1px solid #eee; font-size: 14px; font-weight: 600; }
+    .panel-body { padding: 0; overflow-x: auto; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th {
+      text-align: left; padding: 9px 14px; background: #f8f9fa; border-bottom: 2px solid #eee;
+      color: #636e72; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+      position: sticky; top: 0;
+    }
+    td { padding: 9px 14px; border-bottom: 1px solid #f1f2f6; }
+    tr:hover td { background: #fdfaf7; }
+
+    .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; font-family: "SF Mono", "Consolas", monospace; }
+    .tag-err { background: #fff3f3; color: #c0392b; }
+    .tag-vld { background: #fff8e1; color: #e17055; }
+    .tag-perm { background: #e8f5e9; color: #2e7d32; }
+    .tag-nf { background: #e3f2fd; color: #1565c0; }
+    .tag-cfl { background: #fce4ec; color: #c2185b; }
+    .tag-api { background: #f3e5f5; color: #7b1fa2; }
+    .tag-other { background: #eceff1; color: #546e7a; }
+
+    .badge {
+      display: inline-block; padding: 2px 7px; border-radius: 3px; font-size: 11px; font-weight: 600;
+    }
+    .badge-bug { background: #fff3f3; color: #c0392b; }
+    .badge-feature { background: #e8f5e9; color: #2e7d32; }
+    .badge-idea { background: #e3f2fd; color: #1565c0; }
+
+    .feedback-card {
+      padding: 16px 18px; border-bottom: 1px solid #f1f2f6;
+    }
+    .feedback-card:last-child { border-bottom: none; }
+    .feedback-card .fb-header { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+    .feedback-card .fb-title { font-weight: 600; font-size: 14px; }
+    .feedback-card .fb-date { font-size: 11px; color: #888; }
+    .feedback-card .fb-desc { font-size: 13px; line-height: 1.6; color: #555; white-space: pre-wrap; }
+    .feedback-card .fb-contact { font-size: 11px; color: #888; margin-top: 6px; }
+
+    .empty { text-align: center; padding: 48px 0; color: #bbb; font-size: 14px; }
+    .error-banner { background: #fff5f5; color: #c0392b; padding: 10px 16px; border-radius: 6px; margin-bottom: 16px; font-size: 13px; display: none; }
+    .footer { text-align: center; padding: 24px; font-size: 12px; color: #bbb; }
+
+    .tb { display: none; }
+    .tb.active { display: block; }
+
+    .bar-cell { display: flex; align-items: center; gap: 8px; }
+    .bar-cell .bar { height: 6px; background: #A27B5C; border-radius: 3px; min-width: 2px; opacity: 0.5; }
+
+    .mono { font-family: "SF Mono", "Consolas", "Monaco", monospace; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <div class="page-header">
+    <div>
+      <h1>思源桥 · 开发者诊断</h1>
+      <div class="sub">SiYuan Bridge Developer Diagnostics</div>
+    </div>
+    <div class="tabs">
+      <button id="tabErrors" class="active" onclick="switchTab('errors')">错误分析</button>
+      <button id="tabFeedbacks" onclick="switchTab('feedbacks')">用户反馈</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="error-banner" id="errorBanner"></div>
+
+    <!-- 概览 -->
+    <div class="stats-row" id="summaryRow"></div>
+
+    <!-- 错误分析 Tab -->
+    <div class="tb active" id="tbErrors">
+      <div class="controls">
+        <label for="toolFilter">工具</label>
+        <select id="toolFilter" onchange="loadErrors()">
+          <option value="">全部工具</option>
+        </select>
+        <label for="daysFilter">天数</label>
+        <select id="daysFilter" onchange="loadErrors()">
+          <option value="7">7 天</option>
+          <option value="14">14 天</option>
+          <option value="30" selected>30 天</option>
+          <option value="90">90 天</option>
+        </select>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">错误明细列表</div>
+        <div class="panel-body"><table id="errorsTable"></table></div>
+        <div class="empty" id="errorsEmpty" style="display:none;">该工具暂无错误记录</div>
+      </div>
+    </div>
+
+    <!-- 反馈 Tab -->
+    <div class="tb" id="tbFeedbacks">
+      <div class="controls">
+        <label for="fbDays">天数</label>
+        <select id="fbDays" onchange="loadFeedbacks()">
+          <option value="30">30 天</option>
+          <option value="90" selected>90 天</option>
+          <option value="365">一年</option>
+        </select>
+      </div>
+      <div class="panel">
+        <div class="panel-header" id="fbHeader">用户反馈</div>
+        <div class="panel-body" id="feedbacksList"></div>
+      </div>
+    </div>
+
+    <div class="footer">
+      数据来自 <code>siyuanbridgetelemetry.zingerplayground.top</code> · 无需 API Key · 公开访问
+    </div>
+  </div>
+
+  <script>
+    var API = 'https://siyuanbridgetelemetry.zingerplayground.top';
+
+    function switchTab(name) {
+      document.querySelectorAll('.tb').forEach(function(e) { e.classList.remove('active'); });
+      document.getElementById('tb' + name[0].toUpperCase() + name.slice(1)).classList.add('active');
+      document.querySelectorAll('.tabs button').forEach(function(b) { b.classList.remove('active'); });
+      document.getElementById('tab' + name[0].toUpperCase() + name.slice(1)).classList.add('active');
+      if (name === 'feedbacks') loadFeedbacks();
+    }
+
+    function errorBanner(msg) {
+      var b = document.getElementById('errorBanner');
+      b.textContent = msg; b.style.display = msg ? 'block' : 'none';
+    }
+
+    function errorTagClass(et) {
+      if (!et) return 'tag-other';
+      if (et.indexOf('validation:') === 0) return 'tag-vld';
+      if (et.indexOf('permission:') === 0) return 'tag-perm';
+      if (et.indexOf('not_found:') === 0) return 'tag-nf';
+      if (et.indexOf('conflict:') === 0) return 'tag-cfl';
+      if (et.indexOf('api:') === 0) return 'tag-api';
+      return 'tag-err';
+    }
+
+    // ---- Summary ----
+    async function loadSummary() {
+      try {
+        var res = await fetch(API + '/api/dashboard?days=30');
+        var d = await res.json();
+        var s = d.summary || {};
+        var totalErr = d.by_error ? d.by_error.reduce(function(a, e) { return a + e.count; }, 0) : 0;
+        var row = document.getElementById('summaryRow');
+        row.innerHTML =
+          '<div class="stat-item"><div class="label">活跃用户</div><div class="value">' + (s.active_users || 0) + '</div></div>' +
+          '<div class="stat-item"><div class="label">总调用</div><div class="value">' + (s.total_calls || 0).toLocaleString() + '</div></div>' +
+          '<div class="stat-item"><div class="label">成功率</div><div class="value" style="color:' + (s.success_rate >= 90 ? '#27ae60' : '#e17055') + '">' + s.success_rate + '%</div></div>' +
+          '<div class="stat-item"><div class="label">总失败次数</div><div class="value" style="color:#c0392b">' + totalErr.toLocaleString() + '</div></div>' +
+          '<div class="stat-item"><div class="label">平均耗时</div><div class="value">' + s.avg_dur_ms + ' ms</div></div>';
+      } catch(e) { errorBanner('加载概览失败: ' + e.message); }
+    }
+
+    // ---- Errors ----
+    async function loadErrors() {
+      errorBanner('');
+      var tool = document.getElementById('toolFilter').value;
+      var days = document.getElementById('daysFilter').value;
+      try {
+        var url = API + '/api/errors?days=' + days;
+        if (tool) url += '&tool=' + encodeURIComponent(tool);
+        var res = await fetch(url);
+        var d = await res.json();
+        renderErrors(d.errors || []);
+      } catch(e) { errorBanner('加载错误数据失败: ' + e.message); }
+    }
+
+    function renderErrors(errors) {
+      var table = document.getElementById('errorsTable');
+      var empty = document.getElementById('errorsEmpty');
+      if (errors.length === 0) { table.innerHTML = ''; empty.style.display = 'block'; return; }
+      empty.style.display = 'none';
+      var maxCount = errors[0].count;
+      var html = '<thead><tr><th>工具</th><th>操作</th><th>错误类型</th><th>次数</th></tr></thead><tbody>';
+      errors.forEach(function(e) {
+        html += '<tr>' +
+          '<td><span class="mono">' + esc(e.tool) + '</span></td>' +
+          '<td><span class="mono">' + (e.action ? esc(e.action) : '—') + '</span></td>' +
+          '<td><span class="tag ' + errorTagClass(e.error_type) + '">' + esc(e.error_type) + '</span></td>' +
+          '<td><div class="bar-cell"><div class="bar" style="width:' + Math.round(e.count / maxCount * 120) + 'px;"></div>' + e.count + '</div></td>' +
+          '</tr>';
+      });
+      html += '</tbody>';
+      table.innerHTML = html;
+    }
+
+    // ---- Tool filter init ----
+    async function initToolFilter() {
+      try {
+        var res = await fetch(API + '/api/dashboard?days=30');
+        var d = await res.json();
+        var sel = document.getElementById('toolFilter');
+        (d.by_tool || []).forEach(function(t) {
+          var errs = Math.round(t.calls * (1 - t.success_rate / 100));
+          var o = document.createElement('option');
+          o.value = t.tool; o.textContent = t.tool.replace('siyuan_','') + ' (' + errs + '/' + t.calls + ')';
+          sel.appendChild(o);
+        });
+      } catch(e) {}
+    }
+
+    // ---- Feedbacks ----
+    async function loadFeedbacks() {
+      errorBanner('');
+      var days = document.getElementById('fbDays').value;
+      try {
+        var res = await fetch(API + '/api/feedbacks?days=' + days);
+        var d = await res.json();
+        renderFeedbacks(d.feedbacks || [], days);
+      } catch(e) { errorBanner('加载反馈失败: ' + e.message); }
+    }
+
+    function renderFeedbacks(fbs, days) {
+      var el = document.getElementById('feedbacksList');
+      var hdr = document.getElementById('fbHeader');
+      hdr.textContent = '用户反馈 (' + fbs.length + ' 条，近 ' + days + ' 天)';
+      if (fbs.length === 0) { el.innerHTML = '<div class="empty">暂无反馈</div>'; return; }
+      var html = '';
+      fbs.forEach(function(f) {
+        var badge = f.type === 'bug' ? 'badge-bug' : f.type === 'feature' ? 'badge-feature' : 'badge-idea';
+        var typeLabel = f.type === 'bug' ? 'Bug' : f.type === 'feature' ? '功能请求' : '想法';
+        html += '<div class="feedback-card">' +
+          '<div class="fb-header">' +
+            '<span class="badge ' + badge + '">' + typeLabel + '</span>' +
+            '<span class="fb-title">' + esc(f.title) + '</span>' +
+            '<span class="fb-date">' + (f.ts || '').slice(0, 10) + '</span>' +
+          '</div>' +
+          '<div class="fb-desc">' + esc(f.description) + '</div>' +
+          (f.contact ? '<div class="fb-contact">联系: ' + esc(f.contact) + '</div>' : '') +
+          '</div>';
+      });
+      el.innerHTML = html;
+    }
+
+    function esc(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // Init
+    loadSummary();
+    initToolFilter().then(function() { loadErrors(); });
+  </script>
+</body>
+</html>

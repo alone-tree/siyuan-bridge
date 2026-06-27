@@ -11,9 +11,12 @@
 │  siyuanbridgetelemetry              │
 │      .zingerplayground.top          │
 │                                     │
-│  POST /api/telemetry   → events     │
-│  POST /api/feedback    → feedbacks  │
+│  POST /api/telemetry    → events    │
+│  POST /api/feedback     → feedbacks │
 │  GET  /api/notifications ← notifications │
+│  GET  /api/dashboard     ← 统计聚合 │
+│  GET  /api/errors        ← 错误下钻 │
+│  GET  /api/feedbacks     ← 反馈列表 │
 └──────────────┬──────────────────────┘
                │
 ┌──────────────▼──────────────────────┐
@@ -31,7 +34,8 @@
 | 调用方 | 端点 | 说明 |
 |--------|------|------|
 | 插件前端 JS | `POST /api/feedback`, `GET /api/notifications` | 用户在思源笔记内提交反馈、查看通知 |
-| Python `telemetry.py` | `POST /api/telemetry`, `POST /api/feedback` | MCP 工具调用时 fire-and-forget 上传遥测（可选择在本地保留副本）；`siyuan_bridge_feedback` 提交反馈 |
+| Python `telemetry.py` | `POST /api/telemetry`, `POST /api/feedback` | MCP 工具调用时 fire-and-forget 上传遥测；`siyuan_bridge_feedback` 提交反馈 |
+| 公开看板 / 开发者诊断 | `GET /api/dashboard`, `GET /api/errors`, `GET /api/feedbacks` | 无需认证，静态 HTML 直连 Worker |
 
 ---
 
@@ -118,6 +122,54 @@ Worker 端点**无需认证**——所有 3 个 API 均为公开访问。
 
 - 无通知或查询失败时返回 `{"notifications": []}`
 - 通知数据由维护者在 D1 `notifications` 表中手动管理
+
+### GET /api/dashboard — 统计看板
+
+- **用途**：公开看板和开发者诊断面板汇总数据
+- **参数**：`days`（默认 30，范围 1–365）
+- **响应** (200):
+
+```json
+{
+  "days": 30,
+  "summary": {"active_users": 48, "total_calls": 427, "success_rate": 78.0, "avg_dur_ms": 4088},
+  "daily": [{"date": "2026-06-01", "calls": 150, "success_rate": 96.0, "avg_dur_ms": 40}],
+  "by_tool": [{"tool": "siyuan_read", "calls": 115, "success_rate": 90.4, "avg_dur_ms": 3667}],
+  "by_error": [{"error_type": "ValueError", "count": 26}]
+}
+```
+
+### GET /api/errors — 错误下钻明细
+
+- **用途**：开发者诊断面板下钻分析
+- **参数**：`tool`（可选，不传=全部工具）、`days`（默认 30，范围 1–365）
+- **响应** (200):
+
+```json
+{
+  "days": 30,
+  "tool": "siyuan_edit",
+  "errors": [
+    {"tool": "siyuan_edit", "action": "single_block_replace", "error_type": "ValueError", "count": 4},
+    {"tool": "siyuan_edit", "action": "multi_block_replace", "error_type": "conflict:stale_block_id", "count": 3}
+  ]
+}
+```
+
+### GET /api/feedbacks — 反馈列表
+
+- **用途**：开发者诊断面板查看用户反馈
+- **参数**：`days`（默认 90，范围 1–365）
+- **响应** (200):
+
+```json
+{
+  "days": 90,
+  "feedbacks": [
+    {"id": 9, "ts": "2026-06-25T...", "type": "idea", "title": "...", "description": "...", "contact": null}
+  ]
+}
+```
 
 ---
 

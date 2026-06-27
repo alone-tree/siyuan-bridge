@@ -130,6 +130,47 @@ export default {
       }
     }
 
+    // GET /api/errors — 错误下钻明细
+    if (path === '/api/errors' && request.method === 'GET') {
+      try {
+        const tool = url.searchParams.get('tool') || '';
+        const days = Math.min(Math.max(parseInt(url.searchParams.get('days') || '30'), 1), 365);
+        const since = new Date(Date.now() - days * 86400000).toISOString();
+
+        let query = `SELECT tool, action, error_type, COUNT(*) as count
+                     FROM events WHERE ts >= ? AND ok = 0 AND error_type IS NOT NULL`;
+        const params = [since];
+
+        if (tool) {
+          query += ` AND tool = ?`;
+          params.push(tool);
+        }
+
+        query += ` GROUP BY tool, action, error_type ORDER BY tool, count DESC`;
+
+        const { results } = await env.DB.prepare(query).bind(...params).all();
+        return cors(JSON.stringify({ days, tool: tool || null, errors: results || [] }));
+      } catch (e) {
+        return cors(JSON.stringify({ error: 'query failed' }), 500);
+      }
+    }
+
+    // GET /api/feedbacks — 反馈列表（开发者用）
+    if (path === '/api/feedbacks' && request.method === 'GET') {
+      try {
+        const days = Math.min(Math.max(parseInt(url.searchParams.get('days') || '90'), 1), 365);
+        const since = new Date(Date.now() - days * 86400000).toISOString();
+
+        const { results } = await env.DB.prepare(
+          `SELECT id, ts, type, title, description, contact FROM feedbacks WHERE ts >= ? ORDER BY ts DESC`
+        ).bind(since).all();
+
+        return cors(JSON.stringify({ days, feedbacks: results || [] }));
+      } catch (e) {
+        return cors(JSON.stringify({ feedbacks: [] }));
+      }
+    }
+
     // 404
     return new Response('Not Found', { status: 404 });
   }

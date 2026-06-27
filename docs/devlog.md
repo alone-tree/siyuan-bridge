@@ -4,14 +4,21 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
-## 2026-06-27：遥测看板页面
+## 2026-06-27：遥测看板 + 开发者诊断工具
 
+### 公开看板
 - Worker 新增 `GET /api/dashboard?days=30` 统计 API（4 个并行 D1 查询：概览、每日趋势、按工具、按错误类型）
 - Worker 所有端点加 CORS 头，支持跨域访问
 - 看板页面集成到个人网站 Zingerplayground（`layouts/code/telemetry.html`），复用网站 CSS 变量和深色模式
-- 页面功能：活跃用户、调用次数、成功率、平均耗时概览卡片；每日调用量/成功率折线图；各工具柱状图；工具详情表格；失败类型排名
-- 时间窗口可选 7/14/30/90/365 天，每 5 分钟自动刷新
-- 数据来源：Worker → D1 `events` 表，实时聚合
+- 线上地址：https://zingerplayground.top/code/siyuan-bridge-telemetry/
+- 已通过通知系统向所有插件用户推送
+
+### 开发者诊断面板
+- 文件：`dev/diagnostics.html` — 纯静态 HTML，任何人 clone 后用浏览器打开即可使用
+- 包含两个 Tab：**错误分析**（按工具 + action + error_type 下钻）和 **用户反馈**（完整反馈列表）
+- Worker 新增 `GET /api/errors?tool=&days=` — 错误明细端点，支持按工具筛选
+- Worker 新增 `GET /api/feedbacks?days=` — 反馈列表端点
+- 无需 API Key，走 Worker 公开 API，同公开看板
 
 ## 2026-06-14：新增 siyuan_operate 并接入思源默认同步
 
