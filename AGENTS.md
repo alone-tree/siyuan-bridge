@@ -157,6 +157,56 @@ python -m pytest tests -q
 
 涉及 MCP 工具面、安装配置或跨 Agent 行为时，常规测试后必须做外部 Agent 验证。使用 AI 实际调用项目 MCP，没有经过实测检验的修改不允许称为“测试通过”。详细流程、宽授权 / bypass 模式、失败降级和各类改动的最低验证要求见 `docs/DEVELOPMENT_GUIDE.md` 的 “外部 Agent 验证”。
 
-## 构建与发布
+## 更新到本地思源
 
-导入测试、打包和版本发布流程见 `docs/DEVELOPMENT_GUIDE.md` 的 "构建与发布" 章节。
+### 用户版（生产环境，不覆盖配置）
+
+```powershell
+# 1. 关思源
+# 2. 杀残留 MCP 进程
+Get-Process python -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'run_mcp' } | Stop-Process -Force
+
+# 3. 导入（不加 --fresh，保留 config.local.json 和 telemetry.json）
+python scripts/import_siyuan_plugin.py --workspace D:/siyuan2
+
+# 4. 开思源
+```
+
+### 测试版（干净重装）
+
+```powershell
+python scripts/import_siyuan_plugin.py --workspace D:/Siyuan2test --fresh
+```
+
+> 测试版 workspace 路径、Hermes MCP 注册更新、文件锁处理等详细流程见 `D:\HermesSync\capability-library\skills\siyuan-bridge-ops\SKILL.md`。
+
+## 发布 Release
+
+### 1. Bump 版本号
+
+两个文件：`source_code/__init__.py`（`__version__`）和 `siyuan-plugin/plugin.json`（`"version"`）。
+
+### 2. 构建 + 提交 + 打 tag
+
+```powershell
+# 构建 package.zip（自动调用 sync_siyuan_plugin_bridge）
+python scripts/build_package.py
+
+# 提交版本号变更
+git add source_code/__init__.py siyuan-plugin/plugin.json
+git commit -m "bump version to X.Y.Z"
+
+# 打 tag
+git tag -a vX.Y.Z -m "vX.Y.Z: <简短描述>"
+
+# 推送（含 tag）
+git push origin main --follow-tags
+```
+
+### 3. 创建 GitHub Release
+
+```powershell
+gh release create vX.Y.Z --title "vX.Y.Z — <标题>" --notes "<Markdown 内容>" dist/package.zip
+```
+
+> 推送前确保 `docs/devlog.md` 已记录所有改动。
