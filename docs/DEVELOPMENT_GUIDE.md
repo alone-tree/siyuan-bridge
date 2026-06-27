@@ -207,6 +207,8 @@
 python -m pytest tests -q
 ```
 
+> **⚠️ 遥测污染红线**：测试代码中任何 `telemetry.json` 写入都必须带 `"telemetry_endpoint": "http://127.0.0.1:1"`，严禁使用默认端点。`_with_telemetry` 在 `telemetry: "upload"` 模式下会发起真实 HTTP POST，一旦漏配 endpoint 就会将测试数据打入生产 D1（`siyuanbridgetelemetry.zingerplayground.top`），污染遥测统计。新增测试时必须在 code review 中检查此项。
+
 涉及 MCP 工具面、schema、Skill、安装配置或跨 Agent 行为时，还必须做 MCP 工具列表验证：
 
 ```text
