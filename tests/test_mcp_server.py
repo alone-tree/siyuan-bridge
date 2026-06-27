@@ -1250,6 +1250,75 @@ class McpServerWriteTests(unittest.TestCase):
         finally:
             mcp_server.detect_active_profile = original
 
+    def test_siyuan_read_rejects_stale_document_path(self):
+        server, client, original = self._server_and_client({
+            "doc1": [
+                {"id": "block1", "parent_id": "doc1", "root_id": "doc1", "type": "p", "subtype": "", "markdown": "Body", "content": "", "sort": 1},
+            ]
+        })
+        client._hpaths["doc1"] = "/Projects/Renamed"
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_read({"document": "/Main/Projects/Doc One"})
+            self.assertIn("文档路径已过期", str(ctx.exception))
+            self.assertIn("/Main/Projects/Renamed", str(ctx.exception))
+            self.assertIn("siyuan_operate", str(ctx.exception))
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_rejects_stale_document_path_before_snapshot(self):
+        server, client, original = self._server_and_client({
+            "doc1": [
+                {"id": "block1", "parent_id": "doc1", "root_id": "doc1", "type": "p", "subtype": "", "markdown": "Old", "content": "", "sort": 1},
+            ]
+        })
+        client._hpaths["doc1"] = "/Projects/Renamed"
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_edit({
+                    "document": "/Main/Projects/Doc One",
+                    "action": "single_block_replace",
+                    "start_index": 1,
+                    "start_id": "block1",
+                    "markdown": "New",
+                    "confirmed": True,
+                })
+            self.assertIn("文档路径已过期", str(ctx.exception))
+            self.assertFalse(client._snapshots)
+            self.assertFalse(client._updated_blocks)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_doc_manage_rejects_stale_document_path_before_snapshot(self):
+        server, client, original = self._server_and_client()
+        client._hpaths["doc1"] = "/Projects/Renamed"
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_doc_manage({
+                    "document": "/Main/Projects/Doc One",
+                    "action": "rename",
+                    "new_title": "Next",
+                    "confirmed": True,
+                })
+            self.assertIn("文档路径已过期", str(ctx.exception))
+            self.assertFalse(client._snapshots)
+            self.assertFalse(client._renamed_docs)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_document_id_bypasses_stale_path_check(self):
+        server, client, original = self._server_and_client({
+            "doc1": [
+                {"id": "block1", "parent_id": "doc1", "root_id": "doc1", "type": "p", "subtype": "", "markdown": "Body", "content": "", "sort": 1},
+            ]
+        })
+        client._hpaths["doc1"] = "/Projects/Renamed"
+        try:
+            result = server.siyuan_read({"document_id": "doc1"})
+            self.assertIn("Body", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
     def test_siyuan_edit_single_block_replace_uses_path_index_and_block_id(self):
         blocks = {
             "doc1": [
@@ -2460,6 +2529,7 @@ class McpServerReadBlockWindowTests(unittest.TestCase):
                 return children
 
         client = ChildFakeClient([])
+        client._hpaths["doc1"] = "/Test Doc"
         if blocks_for_doc:
             client._blocks = blocks_for_doc
         client._docs["doc1"] = doc_md or "## Section\n\nBody text here.\n"

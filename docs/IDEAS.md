@@ -12,6 +12,6 @@
 
 ## 遥测看板（公开页面）
 
-- Worker 加 dashboard API，个人网站前端 JS fetch Worker 直连，不需要 API key
-- 时间窗口未定（30天/14天/7天？）
-- 想统计：活跃用户数、总调用次数、总体成功率、每日调用量曲线、每日成功率曲线、各工具调用及 action、各工具失败次数及场景
+- [x] Worker 加 dashboard API，个人网站前端 JS fetch Worker 直连，不需要 API key
+- [x] 统计：活跃用户数、总调用次数、总体成功率、每日调用量曲线、每日成功率曲线、各工具调用及 action、各工具失败次数及场景
+- 已上线：https://zingerplayground.netlify.app/code/siyuan-bridge-telemetry/

@@ -4,6 +4,15 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
+## 2026-06-27：遥测看板页面
+
+- Worker 新增 `GET /api/dashboard?days=30` 统计 API（4 个并行 D1 查询：概览、每日趋势、按工具、按错误类型）
+- Worker 所有端点加 CORS 头，支持跨域访问
+- 看板页面集成到个人网站 Zingerplayground（`layouts/code/telemetry.html`），复用网站 CSS 变量和深色模式
+- 页面功能：活跃用户、调用次数、成功率、平均耗时概览卡片；每日调用量/成功率折线图；各工具柱状图；工具详情表格；失败类型排名
+- 时间窗口可选 7/14/30/90/365 天，每 5 分钟自动刷新
+- 数据来源：Worker → D1 `events` 表，实时聚合
+
 ## 2026-06-14：新增 siyuan_operate 并接入思源默认同步
 
 - MCP 工具面保持 9 个工具：`siyuan_operate` 替代公开的 `siyuan_refresh_index`。

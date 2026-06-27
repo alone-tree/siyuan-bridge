@@ -55,7 +55,7 @@ flowchart LR
 | 首次使用 | 思源插件读取当前工作空间 Token → 写入 `bridge/config.local.json` → 用户复制 MCP JSON 到 AI 客户端 |
 | 会话启动 | AI 调 `siyuan_start` → 探测 profile → 确保系统笔记本 → 解析 Privacy Rules → 刷新安全索引 → 返回启动包 |
 | 搜索 | `siyuan_find` → 临时打开目标笔记本 → 思源搜索/SQL → 隐私过滤 → 按文档聚合结果 |
-| 阅读 | `siyuan_read` → 解析可见文档 → `getChildBlocks` → 块窗口 + 大纲 → 提取附件到 `ai_workspace/` |
+| 阅读 | `siyuan_read` → 解析可见文档 → 路径 live 校验 → `getChildBlocks` → 块窗口 + 大纲 → 提取附件到 `ai_workspace/` |
 | 写入 | `siyuan_create/edit/doc_manage` → `confirmed=true` + 权限检查 → 创建快照 → 写思源 → 路径同步 → 安全刷新索引 |
 | 语义索引 | `siyuan-index-builder` Skill → list/read 关键文档 → 经用户确认写入系统笔记本的 Workspace Index |
 
@@ -341,13 +341,14 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 核心数据流：
 
 1. 用 `document` 或 `document_id` 解析可见文档。
-2. 临时打开所属笔记本。
-3. 用 `/api/block/getChildBlocks` 按思源真实顺序构建展示块列表。
-4. 构建全文大纲。
-5. 根据 `block_start`、`block_limit`、`token_budget` 选择连续块窗口。
-6. 用 `exportMdContent` 发现附件，提取到 `ai_workspace/attachments/<doc-id>/assets/`。
-7. 把返回 Markdown 中 `assets/...` 链接改为本机绝对路径。
-8. 返回文档头、大纲、可选窗口预览、正文窗口和下一窗口提示。
+2. 如果 `document` 是路径，按文档 ID 查询思源当前 hpath；路径已变化时停止并要求 refresh 后用新路径重试，或改用 `document_id`。
+3. 临时打开所属笔记本。
+4. 用 `/api/block/getChildBlocks` 按思源真实顺序构建展示块列表。
+5. 构建全文大纲。
+6. 根据 `block_start`、`block_limit`、`token_budget` 选择连续块窗口。
+7. 用 `exportMdContent` 发现附件，提取到 `ai_workspace/attachments/<doc-id>/assets/`。
+8. 把返回 Markdown 中 `assets/...` 链接改为本机绝对路径。
+9. 返回文档头、大纲、可选窗口预览、正文窗口和下一窗口提示。
 
 块窗口参数默认值：
 
@@ -700,15 +701,16 @@ scope：
 数据流：
 
 1. 校验 `confirmed=true` 和 action。
-2. 解析可见文档并检查权限必须为 `read_write`。
-3. 用 `getChildBlocks` 重新构建引用阅读展示块。
-4. 校验 `start_index/start_id` 是否匹配当前文档。
-5. 范围操作校验 `end_index/end_id` 和连续范围。
-6. 根据 action 做类型和参数校验。
-7. 创建快照。
-8. 执行块操作。
-9. 重新读取展示块，返回原内容、新内容或上下文。
-10. 尝试 pushMsg。
+2. 解析可见文档；如果 `document` 是路径，先校验当前 live hpath，路径已变化时停止并要求 refresh 后重试。
+3. 检查权限必须为 `read_write`。
+4. 用 `getChildBlocks` 重新构建引用阅读展示块。
+5. 校验 `start_index/start_id` 是否匹配当前文档。
+6. 范围操作校验 `end_index/end_id` 和连续范围。
+7. 根据 action 做类型和参数校验。
+8. 创建快照。
+9. 执行块操作。
+10. 重新读取展示块，返回原内容、新内容或上下文。
+11. 尝试 pushMsg。
 
 重要校验：
 
@@ -812,19 +814,20 @@ scope：
 数据流：
 
 1. 解析可见源文档。
-2. 计算源文档权限。
-3. 根据 action 校验 confirmed 和参数；delete 写入前从思源 live SQL 拉取源文档子树并逐篇检查权限；move 写入前检查源文档祖先链和目标父路径权限。
-4. `export` 直接导出 Markdown 到 `ai_workspace/exports/`，不创建快照。
-5. 其他 action 先创建快照。
-6. 调用对应思源 API：
+2. 如果 `document` 是路径，先校验当前 live hpath，路径已变化时停止并要求 refresh 后用新路径重试。
+3. 计算源文档权限。
+4. 根据 action 校验 confirmed 和参数；delete 写入前从思源 live SQL 拉取源文档子树并逐篇检查权限；move 写入前检查源文档祖先链和目标父路径权限。
+5. `export` 直接导出 Markdown 到 `ai_workspace/exports/`，不创建快照。
+6. 其他 action 先创建快照。
+7. 调用对应思源 API：
    - `renameDocByID`
    - `moveDocsByID`
    - `removeDocByID`
    - `duplicateDoc` + `renameDocByID` + `moveDocsByID`
    - `exportMdContent`
-7. 尝试 pushMsg。
-8. 除 export 外，用文档 ID 短轮询确认路径变化：rename/move/copy 等目标 hpath 可见，delete 等源 ID 不再可见。
-9. 除 export 外，带系统笔记本 ID 和 Privacy Rules 文档 ID 安全刷新索引。
+8. 尝试 pushMsg。
+9. 除 export 外，用文档 ID 短轮询确认路径变化：rename/move/copy 等目标 hpath 可见，delete 等源 ID 不再可见。
+10. 除 export 外，带系统笔记本 ID 和 Privacy Rules 文档 ID 安全刷新索引。
 
 当前实现特点：
 

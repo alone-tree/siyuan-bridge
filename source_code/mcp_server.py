@@ -96,6 +96,7 @@ _ERR_BLOCK_NOT_FOUND  = "not_found:block_index"
 _ERR_ALREADY_EXISTS      = "conflict:already_exists"
 _ERR_AMBIGUOUS           = "conflict:ambiguous_path"
 _ERR_STALE_BLOCK_ID      = "conflict:stale_block_id"
+_ERR_STALE_DOCUMENT_PATH = "conflict:stale_document_path"
 _ERR_STALE_CELL_VALUE    = "conflict:stale_cell_value"
 _ERR_MULTI_DOC_OVERWRITE = "conflict:multi_doc_overwrite"
 
@@ -1931,8 +1932,9 @@ class McpServer:
         locator = str(args.get("document") or args.get("document_id") or args.get("locator") or "").strip()
         if not locator:
             raise tool_error(_ERR_MISSING_PARAM, "document/document_id 参数是必填的")
+        locator_is_path = locator.startswith("/")
         docs = filter_documents(load_docs(self.root), load_privacy_rules(self.root))
-        if locator.startswith("/"):
+        if locator_is_path:
             exact_display_path = [
                 doc
                 for doc in docs
@@ -1947,6 +1949,7 @@ class McpServer:
                     raise tool_error(_ERR_PRIVACY_RULES,
                         "Privacy Rules 文档不可通过 AI 访问。隐私规则由人类在思源中维护。"
                     )
+                self._ensure_document_path_current(doc, locator)
                 return doc
         status, matches = resolve_document(docs, locator)
         if status == "ambiguous":
@@ -1966,7 +1969,41 @@ class McpServer:
             raise tool_error(_ERR_PRIVACY_RULES,
                 "Privacy Rules 文档不可通过 AI 访问。隐私规则由人类在思源中维护。"
             )
+        if locator_is_path:
+            self._ensure_document_path_current(doc, locator)
         return doc
+
+    def _ensure_document_path_current(self, doc: dict[str, Any], requested_path: str) -> None:
+        doc_id = str(doc.get("id") or "").strip()
+        if not doc_id:
+            raise tool_error(_ERR_DOC_NOT_FOUND, "未找到匹配的可见文档。文档可能已被隐藏、尚未索引，或定位符有误。")
+        _profile, client = detect_active_profile(load_config(self.root))
+        try:
+            live_hpath = normalize_display_path(client.get_hpath_by_id(doc_id))
+        except Exception as exc:
+            raise tool_error(_ERR_STALE_DOCUMENT_PATH,
+                "无法确认文档当前路径。请先调用 `siyuan_operate(action=\"refresh\")` 刷新索引，"
+                "然后用新路径重试；或改用 document_id。"
+            ) from exc
+
+        live_doc = dict(doc)
+        live_doc["hpath"] = live_hpath
+        live_display_path = normalize_display_path(display_document_path(live_doc))
+        requested = normalize_display_path(requested_path)
+        valid_paths = {
+            live_hpath.casefold(),
+            live_display_path.casefold(),
+        }
+        if requested.casefold() in valid_paths:
+            return
+
+        raise tool_error(_ERR_STALE_DOCUMENT_PATH,
+            "文档路径已过期，已停止操作。\n"
+            f"请求路径：{requested}\n"
+            f"当前真实路径：{live_display_path}\n"
+            "请先调用 `siyuan_operate(action=\"refresh\")` 刷新索引，然后用当前真实路径重试；"
+            "或改用 document_id。"
+        )
 
     def export_document_markdown(self, document_id: str) -> str:
         _profile, client = detect_active_profile(load_config(self.root))

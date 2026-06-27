@@ -1,7 +1,21 @@
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+
+function cors(response, status = 200) {
+  return new Response(response, { status, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
+
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
 
     // POST /api/telemetry — 遥测事件写入
     if (path === '/api/telemetry' && request.method === 'POST') {
@@ -23,15 +37,9 @@ export default {
         );
 
         await env.DB.batch(batch);
-        return new Response(JSON.stringify({ ok: true, count: events.length }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
+        return cors(JSON.stringify({ ok: true, count: events.length }));
       } catch (e) {
-        return new Response(JSON.stringify({ ok: false, error: 'invalid payload' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        });
+        return cors(JSON.stringify({ ok: false, error: 'invalid payload' }), 400);
       }
     }
 
@@ -40,10 +48,7 @@ export default {
       try {
         const body = await request.json();
         if (!body.type || !body.title || !body.description) {
-          return new Response(JSON.stringify({ ok: false, error: 'missing required fields' }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json' }
-          });
+          return cors(JSON.stringify({ ok: false, error: 'missing required fields' }), 400);
         }
 
         await env.DB.prepare(
@@ -53,15 +58,9 @@ export default {
           new Date().toISOString(), body.type, body.title, body.description, body.contact || null
         ).run();
 
-        return new Response(JSON.stringify({ ok: true }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
+        return cors(JSON.stringify({ ok: true }));
       } catch (e) {
-        return new Response(JSON.stringify({ ok: false, error: 'invalid payload' }), {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        });
+        return cors(JSON.stringify({ ok: false, error: 'invalid payload' }), 400);
       }
     }
 
@@ -72,15 +71,62 @@ export default {
           `SELECT id, title, url FROM notifications ORDER BY created_at DESC`
         ).all();
 
-        return new Response(JSON.stringify({ notifications: results }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
+        return cors(JSON.stringify({ notifications: results }));
       } catch (e) {
-        return new Response(JSON.stringify({ notifications: [] }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
+        return cors(JSON.stringify({ notifications: [] }));
+      }
+    }
+
+    // GET /api/dashboard — 遥测统计看板
+    if (path === '/api/dashboard' && request.method === 'GET') {
+      try {
+        const days = Math.min(Math.max(parseInt(url.searchParams.get('days') || '30'), 1), 365);
+        const since = new Date(Date.now() - days * 86400000).toISOString();
+
+        const [summary, daily, byTool, byError] = await Promise.all([
+          env.DB.prepare(
+            `SELECT COUNT(DISTINCT anonymous_id) as active_users,
+                    COUNT(*) as total_calls,
+                    ROUND(100.0 * SUM(ok) / COUNT(*), 1) as success_rate,
+                    ROUND(AVG(dur_ms), 0) as avg_dur_ms
+             FROM events WHERE ts >= ?`
+          ).bind(since).first(),
+
+          env.DB.prepare(
+            `SELECT DATE(ts) as date,
+                    COUNT(*) as calls,
+                    ROUND(100.0 * SUM(ok) / COUNT(*), 1) as success_rate,
+                    ROUND(AVG(dur_ms), 0) as avg_dur_ms
+             FROM events WHERE ts >= ?
+             GROUP BY DATE(ts) ORDER BY date`
+          ).bind(since).all(),
+
+          env.DB.prepare(
+            `SELECT tool,
+                    COUNT(*) as calls,
+                    ROUND(100.0 * SUM(ok) / COUNT(*), 1) as success_rate,
+                    ROUND(AVG(dur_ms), 0) as avg_dur_ms
+             FROM events WHERE ts >= ?
+             GROUP BY tool ORDER BY calls DESC`
+          ).bind(since).all(),
+
+          env.DB.prepare(
+            `SELECT error_type,
+                    COUNT(*) as count
+             FROM events WHERE ts >= ? AND ok = 0 AND error_type IS NOT NULL
+             GROUP BY error_type ORDER BY count DESC LIMIT 20`
+          ).bind(since).all(),
+        ]);
+
+        return cors(JSON.stringify({
+          days,
+          summary: summary || { active_users: 0, total_calls: 0, success_rate: 0, avg_dur_ms: 0 },
+          daily: daily.results || [],
+          by_tool: byTool.results || [],
+          by_error: byError.results || [],
+        }));
+      } catch (e) {
+        return cors(JSON.stringify({ error: 'query failed' }), 500);
       }
     }
 

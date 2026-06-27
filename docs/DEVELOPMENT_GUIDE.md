@@ -111,6 +111,7 @@
 
 涉及 `siyuan_read`、展示块、附件、数据库、超级块、列表、表格的改动，必须验证：
 
+- `document` 路径命中缓存但 live hpath 已变化时，必须停止读取并要求 refresh 后用新路径重试，或改用 `document_id`。
 - 普通阅读不显示块 ID。
 - 引用阅读显示 `[index] id=... type=...`。
 - 大纲始终返回，并标注标题块位置。
@@ -133,6 +134,7 @@
 涉及 `siyuan_create`、`siyuan_edit`、`siyuan_doc_manage` 的改动，必须验证：
 
 - 写入必须要求 `confirmed=true`。
+- `siyuan_edit` 使用路径定位时，必须先校验 live hpath；路径已变化时拒绝写入，且不得创建快照。
 - 写入前必须创建思源快照。
 - 快照失败必须拒绝写入。
 - 数据仓库密钥未初始化时错误提示清晰。
@@ -165,6 +167,7 @@
 涉及 `siyuan_doc_manage` 的改动，必须验证：
 
 - rename/move/delete 需要 `read_write` 和 `confirmed=true`。
+- 使用路径定位源文档时，必须先校验 live hpath；路径已变化时拒绝操作，且不得创建快照。
 - copy 源文档可以是 `read_only`，但目标路径必须 `read_write`。
 - delete 会影响整棵子树，必须验证子孙文档中存在 `read_only` 或 `hidden` 时拒绝操作，且错误信息不能泄露隐藏文档名称、数量或权限分布。
 - move 会移动整棵子树但不要求子孙全部可写；必须验证源文档祖先链和目标父路径都是 `read_write`。
