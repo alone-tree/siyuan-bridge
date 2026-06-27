@@ -20,6 +20,14 @@
 - Worker 新增 `GET /api/feedbacks?days=` — 反馈列表端点
 - 无需 API Key，走 Worker 公开 API，同公开看板
 
+### 已知 Bug：siyuan_create overwrite 时 RuntimeError × 10
+
+- **根因**：[agent_notebook.py:122](source_code/agent_notebook.py#L122) 裸 `raise RuntimeError(f"无法创建系统笔记本: {target_name}")`
+- **触发路径**：`siyuan_create` → 写入后 `_refresh_index_with_system_context` → `ensure_agent_notebook` → `_ensure_system_notebook` → `client.create_notebook()` 返回无 id → re-list 也找不到 → RuntimeError
+- **影响**：遥测中 `siyuan_create` action=overwrite 出现 10 次 `error_type: RuntimeError`（无法与真正的思源连接错误区分）
+- **待修复**：替换裸 RuntimeError 为带 error_code 的 `tool_error()`；给 create_notebook 调用加更鲁棒的错误处理
+- **状态**：已知，待排期
+
 ## 2026-06-14：新增 siyuan_operate 并接入思源默认同步
 
 - MCP 工具面保持 9 个工具：`siyuan_operate` 替代公开的 `siyuan_refresh_index`。
