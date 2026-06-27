@@ -185,7 +185,7 @@ class TestTelemetryConfig(unittest.TestCase):
 
     def test_local_copy_enabled(self):
         (self.root / "telemetry.json").write_text(
-            json.dumps({"telemetry": "upload", "local_copy": True}), encoding="utf-8"
+            json.dumps({"telemetry": "upload", "local_copy": True, "telemetry_endpoint": "http://127.0.0.1:1"}), encoding="utf-8"
         )
         self.assertTrue(should_keep_local(self.root))
 
@@ -232,7 +232,7 @@ class TestRecordEvent(unittest.TestCase):
         shutil.rmtree(self.root, ignore_errors=True)
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / "telemetry.json").write_text(
-            json.dumps({"telemetry": "upload", "local_copy": True}), encoding="utf-8"
+            json.dumps({"telemetry": "upload", "local_copy": True, "telemetry_endpoint": "http://127.0.0.1:1"}), encoding="utf-8"
         )
         telemetry._anonymous_id = None
         telemetry._session_id = None
@@ -298,7 +298,7 @@ class TestWithTelemetry(unittest.TestCase):
         shutil.rmtree(self.root, ignore_errors=True)
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / "telemetry.json").write_text(
-            json.dumps({"telemetry": "upload", "local_copy": True}), encoding="utf-8"
+            json.dumps({"telemetry": "upload", "local_copy": True, "telemetry_endpoint": "http://127.0.0.1:1"}), encoding="utf-8"
         )
         telemetry._anonymous_id = None
         telemetry._session_id = None
