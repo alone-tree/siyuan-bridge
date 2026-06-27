@@ -331,7 +331,7 @@ class TestWithTelemetry(unittest.TestCase):
 
     def test_no_local_when_upload_only(self):
         (self.root / "telemetry.json").write_text(
-            json.dumps({"telemetry": "upload"}), encoding="utf-8"
+            json.dumps({"telemetry": "upload", "telemetry_endpoint": "http://127.0.0.1:1"}), encoding="utf-8"
         )
         events_dir = self.root / "stats" / "events"
         if events_dir.exists():
