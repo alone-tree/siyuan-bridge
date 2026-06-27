@@ -4,6 +4,15 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
+## 2026-06-27：anonymous_id 持久化修复
+
+- **问题**：`anonymous_id` 存在 `{cwd}/stats/telemetry_id`，开发时 CWD 变化导致每次启动生成新 ID，遥测数据出现 45 个单次噪音 ID（已清理）
+- **修复**：
+  - JS 插件初始化时生成 `anonymous_id` 写入 `telemetry.json`（`ensureTelemetryConfig()`）
+  - Python `load_anonymous_id()` 优先从 `telemetry.json` 读 → fallback `stats/telemetry_id` → 新建
+  - `telemetry.json` 位于插件数据目录，跨 MCP 重启/沙箱隔离稳定
+- **影响文件**：`siyuan-plugin/src/index.js`、`siyuan-plugin/index.js`、`siyuan-plugin/dist/index.js`、`source_code/telemetry.py`、`tests/test_telemetry.py`
+
 ## 2026-06-27：遥测看板 + 开发者诊断工具
 
 ### 公开看板

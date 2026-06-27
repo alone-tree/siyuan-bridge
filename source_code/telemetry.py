@@ -77,28 +77,75 @@ class TelemetryEvent:
 # ---------------------------------------------------------------------------
 
 
+def _read_anonymous_id_from_telemetry_json(root: Path) -> str | None:
+    """从 telemetry.json 读取 anonymous_id（优先来源，JS 端生成）。"""
+    config_file = root / _TELEMETRY_FILE
+    if not config_file.exists():
+        return None
+    try:
+        cfg = json.loads(config_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if isinstance(cfg, dict):
+        aid = cfg.get("anonymous_id")
+        if isinstance(aid, str) and aid.strip():
+            return aid.strip()
+    return None
+
+
+def _write_anonymous_id_to_telemetry_json(root: Path, aid: str) -> None:
+    """回写 anonymous_id 到 telemetry.json（兼容 JS 未初始化的情况）。"""
+    config_file = root / _TELEMETRY_FILE
+    cfg: dict[str, Any] = {}
+    if config_file.exists():
+        try:
+            cfg = json.loads(config_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    cfg["anonymous_id"] = aid
+    try:
+        config_file.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
 def generate_anonymous_id(root: Path) -> str:
-    """生成新的匿名 ID 并写入 stats/telemetry_id。"""
+    """生成新的匿名 ID 并写入 telemetry.json 和 stats/telemetry_id。"""
     global _anonymous_id
+    _anonymous_id = None
+    aid = uuid.uuid4().hex
     stats_dir = root / _STATS_DIR
     stats_dir.mkdir(parents=True, exist_ok=True)
-    aid = uuid.uuid4().hex
     (stats_dir / _TELEMETRY_ID_FILE).write_text(aid, encoding="utf-8")
+    _write_anonymous_id_to_telemetry_json(root, aid)
     _anonymous_id = aid
     return aid
 
 
 def load_anonymous_id(root: Path) -> str:
-    """读取或生成匿名 ID。结果缓存到模块变量。"""
+    """读取或生成匿名 ID。优先级：telemetry.json → stats/telemetry_id → 新建。"""
     global _anonymous_id
     if _anonymous_id is not None:
         return _anonymous_id
+
+    # 1) telemetry.json（JS 端维护，跨 CWD 稳定）
+    aid = _read_anonymous_id_from_telemetry_json(root)
+    if aid:
+        _anonymous_id = aid
+        return aid
+
+    # 2) stats/telemetry_id（旧版兼容）
     id_file = root / _STATS_DIR / _TELEMETRY_ID_FILE
     if id_file.exists():
         aid = id_file.read_text(encoding="utf-8").strip()
         if aid:
+            # 回写到 telemetry.json 以便后续优先使用
+            _write_anonymous_id_to_telemetry_json(root, aid)
             _anonymous_id = aid
             return aid
+
     return generate_anonymous_id(root)
 
 

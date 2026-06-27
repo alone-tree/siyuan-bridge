@@ -12,8 +12,10 @@ from source_code.telemetry import (
     DEFAULT_ENDPOINT,
     TelemetryEvent,
     _build_proxy_handler,
+    _read_anonymous_id_from_telemetry_json,
     _resolve_proxy,
     _with_telemetry,
+    _write_anonymous_id_to_telemetry_json,
     ensure_session_id,
     generate_anonymous_id,
     get_effective_endpoint,
@@ -43,6 +45,11 @@ class TestAnonymousId(unittest.TestCase):
         id_file = self.root / "stats" / "telemetry_id"
         self.assertTrue(id_file.exists())
         self.assertEqual(id_file.read_text(encoding="utf-8").strip(), aid)
+        # Also writes to telemetry.json
+        tj = self.root / "telemetry.json"
+        self.assertTrue(tj.exists())
+        cfg = json.loads(tj.read_text(encoding="utf-8"))
+        self.assertEqual(cfg.get("anonymous_id"), aid)
 
     def test_load_returns_existing_id(self):
         generate_anonymous_id(self.root)
@@ -56,10 +63,38 @@ class TestAnonymousId(unittest.TestCase):
         telemetry._anonymous_id = None
         aid = load_anonymous_id(self.root)
         self.assertTrue(len(aid) == 32)
+        # Both telemetry.json and stats/telemetry_id created
+        tj = self.root / "telemetry.json"
+        self.assertTrue(tj.exists())
 
     def test_load_uses_cache(self):
         telemetry._anonymous_id = "cached_id"
         self.assertEqual(load_anonymous_id(self.root), "cached_id")
+
+    def test_load_prefers_telemetry_json(self):
+        """telemetry.json 优先于 stats/telemetry_id"""
+        # Write different IDs to both sources
+        tj = self.root / "telemetry.json"
+        tj.parent.mkdir(parents=True, exist_ok=True)
+        tj.write_text(json.dumps({"telemetry": "off", "anonymous_id": "json_abc123"}), encoding="utf-8")
+        stats_dir = self.root / "stats"
+        stats_dir.mkdir(parents=True, exist_ok=True)
+        (stats_dir / "telemetry_id").write_text("stats_def456", encoding="utf-8")
+        telemetry._anonymous_id = None
+        self.assertEqual(load_anonymous_id(self.root), "json_abc123")
+
+    def test_fallback_to_stats_when_json_missing(self):
+        """telemetry.json 不存在时回退到 stats/telemetry_id"""
+        stats_dir = self.root / "stats"
+        stats_dir.mkdir(parents=True, exist_ok=True)
+        (stats_dir / "telemetry_id").write_text("stats_def456", encoding="utf-8")
+        telemetry._anonymous_id = None
+        self.assertEqual(load_anonymous_id(self.root), "stats_def456")
+        # Should also write back to telemetry.json
+        tj = self.root / "telemetry.json"
+        self.assertTrue(tj.exists())
+        cfg = json.loads(tj.read_text(encoding="utf-8"))
+        self.assertEqual(cfg.get("anonymous_id"), "stats_def456")
 
 
 class TestSessionId(unittest.TestCase):

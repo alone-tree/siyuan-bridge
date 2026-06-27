@@ -25,6 +25,9 @@ export default class SiyuanBridgePlugin extends Plugin {
     ensureDefaultBridgeConfig().catch((error) => {
       console.warn("Siyuan Bridge config init failed", error);
     });
+    ensureTelemetryConfig().catch((error) => {
+      console.warn("Siyuan Bridge telemetry init failed", error);
+    });
   }
 
   onLayoutReady() {
@@ -254,6 +257,37 @@ async function loadTelemetryConfig(root) {
   } catch (_error) {
     if (telemetryCheckbox) telemetryCheckbox.checked = false;
     if (localCopyCheckbox) localCopyCheckbox.checked = false;
+  }
+}
+
+async function ensureTelemetryConfig() {
+  try {
+    const text = await getFile(TELEMETRY_PATH);
+    const cfg = JSON.parse(text);
+    if (cfg && typeof cfg === "object" && cfg.anonymous_id) {
+      return; // already initialized
+    }
+  } catch (_error) {
+    // Missing or corrupt — initialize
+  }
+
+  let existing = {};
+  try {
+    const text = await getFile(TELEMETRY_PATH);
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object") {
+      existing = parsed;
+    }
+  } catch (_error) { /* start fresh */ }
+
+  if (!existing.anonymous_id) {
+    existing.anonymous_id = crypto.randomUUID().replace(/-/g, "");
+  }
+
+  try {
+    await putFile(TELEMETRY_PATH, JSON.stringify(existing, null, 2) + "\n");
+  } catch (_error) {
+    console.error("Failed to save telemetry config:", _error);
   }
 }
 
