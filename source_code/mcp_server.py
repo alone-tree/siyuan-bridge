@@ -2521,15 +2521,30 @@ class McpServer:
             exports_dir = self.root / "ai_workspace" / "exports"
             exports_dir.mkdir(parents=True, exist_ok=True)
             safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", doc_path.strip("/") or doc_id)
-            export_path = exports_dir / f"{safe_name}.md"
-            export_path.write_text(markdown, encoding="utf-8")
-            return "\n".join([
+
+            # Create a self-contained export directory with assets
+            export_dir = exports_dir / safe_name
+            export_dir.mkdir(parents=True, exist_ok=True)
+            attachment_count = extract_attachments(markdown, client, doc_id, self.root)
+            attachments_src = attachment_root_dir(self.root, doc_id) / "assets"
+            export_assets_dir = export_dir / "assets"
+            if attachments_src.exists():
+                if export_assets_dir.exists():
+                    shutil.rmtree(export_assets_dir)
+                shutil.copytree(attachments_src, export_assets_dir)
+            export_md_path = export_dir / f"{safe_name}.md"
+            export_md_path.write_text(markdown, encoding="utf-8")
+
+            parts = [
                 "# 文档已导出",
                 "",
                 f"文档：{doc_path}（`{doc_id}`）",
-                f"格式：Markdown",
-                f"路径：{export_path.resolve()}",
-            ])
+                f"格式：Markdown（自包含目录）",
+                f"路径：{export_md_path.resolve()}",
+            ]
+            if attachment_count:
+                parts.append(f"附件：{attachment_count} 个已复制到 {export_assets_dir.resolve()}")
+            return "\n".join(parts)
 
         new_title = ""
         target_id = ""

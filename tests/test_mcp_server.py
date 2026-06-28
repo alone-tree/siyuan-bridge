@@ -1243,10 +1243,13 @@ class McpServerWriteTests(unittest.TestCase):
                 "action": "export",
             })
             self.assertIn("文档已导出", result)
+            self.assertIn("自包含目录", result)
             self.assertFalse(client._snapshots)
-            exported = list((self.root / "ai_workspace" / "exports").glob("*.md"))
-            self.assertEqual(len(exported), 1)
-            self.assertEqual(exported[0].read_text(encoding="utf-8"), "# Exported\n\nBody")
+            export_dir = self.root / "ai_workspace" / "exports" / "Main_Projects_Doc One"
+            self.assertTrue(export_dir.is_dir())
+            exported_md = export_dir / "Main_Projects_Doc One.md"
+            self.assertTrue(exported_md.exists())
+            self.assertEqual(exported_md.read_text(encoding="utf-8"), "# Exported\n\nBody")
         finally:
             mcp_server.detect_active_profile = original
 
