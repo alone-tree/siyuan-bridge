@@ -2,7 +2,7 @@
   "name": "siyuan-bridge",
   "author": "alone-tree",
   "url": "https://github.com/alone-tree/siyuan-bridge",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "minAppVersion": "3.3.0",
   "backends": [
     "windows",
@@ -15,15 +15,15 @@
   "disabledInPublish": false,
   "displayName": {
     "default": "Siyuan Bridge",
-    "zh_CN": "思源桥"
+    "zh-CN": "思源桥"
   },
   "description": {
     "default": "Lean, fast, and hassle-free SiYuan MCP tool.",
-    "zh_CN": "精简、高效、省心的思源笔记 MCP 工具。"
+    "zh-CN": "精简、高效、省心的思源笔记 MCP 工具。"
   },
   "readme": {
-    "default": "README_en_US.md",
-    "zh_CN": "README_zh_CN.md"
+    "default": "README.md",
+    "zh-CN": "README.zh-CN.md"
   },
   "keywords": [
     "siyuan",

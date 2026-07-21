@@ -24,8 +24,8 @@ PLUGIN_ROOT_FILES = [
     "index.js",
     "plugin.json",
     "preview.png",
-    "README_en_US.md",
-    "README_zh_CN.md",
+    "README.md",
+    "README.zh-CN.md",
 ]
 
 PLUGIN_ROOT_DIRS = [
@@ -33,6 +33,10 @@ PLUGIN_ROOT_DIRS = [
     "dist",
     "i18n",
     "src",
+]
+
+PACKAGE_EXTRA_DIRS = [
+    (ROOT / "image" / "README", Path("image") / "README"),
 ]
 
 
@@ -49,7 +53,7 @@ def main() -> int:
     files = [PLUGIN / f for f in PLUGIN_ROOT_FILES]
     dirs = [PLUGIN / d for d in PLUGIN_ROOT_DIRS if (PLUGIN / d).exists()]
 
-    verify_required(files)
+    verify_required(files + [source for source, _ in PACKAGE_EXTRA_DIRS])
 
     DIST.mkdir(parents=True, exist_ok=True)
 
@@ -68,6 +72,14 @@ def main() -> int:
                 elif p.is_dir():
                     pass
             print(f"  + {arcroot}*")
+
+        for source_dir, archive_dir in PACKAGE_EXTRA_DIRS:
+            for file_path in source_dir.rglob("*"):
+                if file_path.is_file():
+                    relative_path = file_path.relative_to(source_dir)
+                    arcname = (archive_dir / relative_path).as_posix()
+                    zf.write(file_path, arcname)
+            print(f"  + {archive_dir.as_posix()}/*")
 
     size_kb = PACKAGE.stat().st_size / 1024
     print(f"\nBuilt {PACKAGE.relative_to(ROOT)} ({size_kb:.0f} KB)")

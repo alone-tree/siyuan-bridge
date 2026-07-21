@@ -458,7 +458,9 @@ python scripts/build_package.py
 
 输出：`dist/package.zip`。
 
-zip 包含：`plugin.json`、`icon.png`、`preview.png`、`index.js`、`index.css`、`README*.md`、`bridge/`、`dist/`、`src/`。`bridge/` 由 sync 脚本生成，包含完整 Python 运行文件。
+zip 包含：`plugin.json`、`icon.png`、`preview.png`、`index.js`、`index.css`、英文默认说明 `README.md`、中文说明 `README.zh-CN.md`、README 图片目录 `image/README/`、`bridge/`、`dist/`、`src/`。`bridge/` 由 sync 脚本生成，包含完整 Python 运行文件。
+
+根目录 `README.md` 是中文内容基准，根目录 `README.en-US.md` 是对应英文版。发布前将两者分别同步到 `siyuan-plugin/README.zh-CN.md` 和 `siyuan-plugin/README.md`。Package 内 README 的图片路径统一使用 `image/README/...`；构建脚本必须把仓库根目录同名图片目录映射到 Package 根目录，确保在线集市和安装后的本地详情页都能显示图片。
 
 ### 文件去向
 

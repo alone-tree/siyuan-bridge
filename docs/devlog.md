@@ -4,6 +4,15 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
+## 2026-07-21：v1.0.3 集市 README 与打包修复
+
+- 按思源集市官方约定，将 Package 默认说明改为英文 `README.md`，中文说明改为 `README.zh-CN.md`，清单 locale 统一为 `zh-CN`。
+- 根目录 `README.md` 作为中文内容基准，新增逐段对应的 `README.en-US.md`；两份内容分别同步到插件目录。
+- README 新增隐私规则、AI 使用指南、遥测看板、插件主页和 MCP 配置截图。
+- `build_package.py` 将两份 README 和 `image/README/` 打入 Package 根目录，保证在线集市与安装后本地详情的相对图片路径均可用。
+- 版本号从 `1.0.2` 升级到 `1.0.3`。
+- 验证：`python -m pytest tests -q` 为 256 passed；实际构建 `dist/package.zip` 成功，检查确认 6 个 README 图片资源全部存在，`icon.png` 与 `preview.png` 均低于集市体积上限。
+
 ## 2026-06-27：anonymous_id 持久化修复
 
 - **问题**：`anonymous_id` 存在 `{cwd}/stats/telemetry_id`，开发时 CWD 变化导致每次启动生成新 ID，遥测数据出现 45 个单次噪音 ID（已清理）
