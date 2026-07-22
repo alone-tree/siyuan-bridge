@@ -369,7 +369,8 @@ async function handleSubmitFeedback(root) {
 
 async function getPluginContext() {
   const systemConf = await getSystemConf();
-  const workspaceDir = systemConf.workspaceDir || window.siyuan?.config?.system?.workspaceDir || "";
+  const activeWorkspaceDir = await getActiveWorkspaceDir();
+  const workspaceDir = activeWorkspaceDir || systemConf.workspaceDir || "";
   const guessedPluginDir = workspaceDir ? joinPath(workspaceDir, "data", "plugins", PLUGIN_NAME) : "";
   const guessedBridgeDir = guessedPluginDir ? joinPath(guessedPluginDir, "bridge") : "";
   const guessedRunMcp = guessedBridgeDir
@@ -570,7 +571,9 @@ function bindSettings(root, config, context) {
       }
     }
     if (action === "refresh-json") {
+      await refreshDetectedPaths(container, state);
       refreshJson();
+      showMessage("已按当前电脑刷新 MCP 路径");
     }
     if (action === "copy-json") {
       refreshJson();
@@ -593,6 +596,19 @@ function readContext(container, state) {
     const input = container.querySelector(`[data-field='${key}']`);
     if (input instanceof HTMLInputElement) {
       state.context[key] = input.value.trim();
+    }
+  }
+}
+
+async function refreshDetectedPaths(container, state) {
+  const detected = await getPluginContext();
+  for (const key of ["currentWorkspaceName", "currentToken", "workspaceDir", "pluginDir", "bridgeDir", "runMcpPath"]) {
+    state.context[key] = detected[key];
+  }
+  for (const key of ["pluginDir", "bridgeDir", "runMcpPath"]) {
+    const input = container.querySelector(`[data-field='${key}']`);
+    if (input instanceof HTMLInputElement) {
+      input.value = state.context[key] || "";
     }
   }
 }
@@ -657,6 +673,22 @@ async function getSystemConf() {
     };
   } catch (_error) {
     return {token: "", workspaceDir: ""};
+  }
+}
+
+async function getActiveWorkspaceDir() {
+  try {
+    const response = await fetch("/api/system/getWorkspaces", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: "{}",
+    });
+    const envelope = await response.json();
+    const workspaces = Array.isArray(envelope?.data) ? envelope.data : [];
+    const active = workspaces.find((workspace) => workspace?.closed === false && workspace?.path);
+    return String(active?.path || "");
+  } catch (_error) {
+    return "";
   }
 }
 

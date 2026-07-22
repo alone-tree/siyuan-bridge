@@ -25,7 +25,9 @@
 - `bridge/config.local.json`：profiles、Token、语言。Token 不写入 MCP JSON。
 - `bridge/telemetry.json`：匿名 ID、遥测开关、端点、代理。
 
-首次启用插件时，前端从思源 `/api/system/getConf` 读取当前工作空间 Token 和路径，并在缺失配置时自动创建 `config.local.json`。
+首次启用插件时，前端从思源 `/api/system/getConf` 读取当前工作空间 Token，并在缺失配置时自动创建 `config.local.json`。
+
+工作空间绝对路径不写入配置文件。每次打开 MCP 配置页或点击“刷新 JSON”时，前端调用 `/api/system/getWorkspaces`，选择 `closed=false` 的当前工作空间，重新生成本机插件目录、Bridge 目录、`run_mcp.py` 绝对路径和 MCP JSON。这样插件整体同步到另一台电脑后，设置页仍会显示另一台电脑自己的路径。
 
 ## 验证
 
@@ -46,4 +48,5 @@ python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE% --fre
 - 插件能启用，设置齿轮存在。
 - 首次启用能生成 `bridge/config.local.json`。
 - MCP JSON 不包含 Token。
+- MCP JSON 中的 `run_mcp.py` 是当前设备、当前工作空间的绝对路径；切换电脑后重新打开配置页应自动变化。
 - Home Dialog 的通知、反馈、遥测开关不会阻塞 MCP 配置。

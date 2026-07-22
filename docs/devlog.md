@@ -4,6 +4,18 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
+## 2026-07-22：v1.0.4 多设备同步后按本机工作空间刷新 MCP 路径
+
+症状：思源会同步整个插件。电脑 A 生成的 MCP 绝对路径同步到电脑 B 后，设置页仍可能显示 A 的路径，无法直接复制给 B 的 AI 客户端。
+
+处理：插件每次打开 MCP 配置页时，通过 `/api/system/getWorkspaces` 选择 `closed=false` 的当前本机工作空间；点击“刷新 JSON”时再次探测，并更新插件目录、Bridge 目录、`run_mcp.py` 绝对路径和 MCP JSON。绝对路径不写入 `config.local.json`，profiles、Token 和语言仍按原模型保存。
+
+取舍：继续生成绝对路径。相对路径依赖 AI 客户端进程的工作目录，Python 在执行 `run_mcp.py` 内部的自定位逻辑之前，必须先找到该脚本，因此不能作为跨客户端的可靠配置。
+
+版本：插件清单与 Python MCP Server 版本统一升级到 `1.0.4`。
+
+验证：JS 三个入口语法检查通过；`python -m pytest tests -q` 为 256 passed；Windows、Mac 和工作空间识别失败三种路径场景通过；`dist/package.zip` 构建与内容检查通过；直接启动构建后的 Bridge，JSON-RPC `initialize` 返回 `1.0.4`，`tools/list` 返回 9 个工具。Hermes 外部调用因现有 MCP 注册指向已关闭的测试空间而返回 `ClosedResourceError`，未重复尝试，也未改写用户 Hermes 配置。
+
 ## 2026-07-21：v1.0.3 集市 README 与打包修复
 
 - 按思源集市官方约定，将 Package 默认说明改为英文 `README.md`，中文说明改为 `README.zh-CN.md`，清单 locale 统一为 `zh-CN`。
