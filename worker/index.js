@@ -8,6 +8,14 @@ function cors(response, status = 200) {
   return new Response(response, { status, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } });
 }
 
+const ACTIVE_ID_FILTER = `anonymous_id IN (
+  SELECT anonymous_id
+  FROM events
+  WHERE tool <> 'test_tool'
+  GROUP BY anonymous_id
+  HAVING COUNT(*) >= 2
+)`;
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -22,6 +30,10 @@ export default {
       try {
         const body = await request.json();
         const events = Array.isArray(body) ? body : [body];
+
+        if (events.some(e => e.tool === 'test_tool')) {
+          return cors(JSON.stringify({ ok: false, error: 'test_tool is not accepted' }), 400);
+        }
 
         const stmt = env.DB.prepare(
           `INSERT INTO events (ts, anonymous_id, platform, siyuan_ver, mcp_ver, session_id, tool, action, ok, error_type, dur_ms)
@@ -89,7 +101,7 @@ export default {
                     COUNT(*) as total_calls,
                     ROUND(100.0 * SUM(ok) / COUNT(*), 1) as success_rate,
                     ROUND(AVG(dur_ms), 0) as avg_dur_ms
-             FROM events WHERE ts >= ?`
+             FROM events WHERE ts >= ? AND tool <> 'test_tool' AND ${ACTIVE_ID_FILTER}`
           ).bind(since).first(),
 
           env.DB.prepare(
@@ -97,7 +109,7 @@ export default {
                     COUNT(*) as calls,
                     ROUND(100.0 * SUM(ok) / COUNT(*), 1) as success_rate,
                     ROUND(AVG(dur_ms), 0) as avg_dur_ms
-             FROM events WHERE ts >= ?
+             FROM events WHERE ts >= ? AND tool <> 'test_tool' AND ${ACTIVE_ID_FILTER}
              GROUP BY DATE(ts) ORDER BY date`
           ).bind(since).all(),
 
@@ -106,14 +118,15 @@ export default {
                     COUNT(*) as calls,
                     ROUND(100.0 * SUM(ok) / COUNT(*), 1) as success_rate,
                     ROUND(AVG(dur_ms), 0) as avg_dur_ms
-             FROM events WHERE ts >= ?
+             FROM events WHERE ts >= ? AND tool <> 'test_tool' AND ${ACTIVE_ID_FILTER}
              GROUP BY tool ORDER BY calls DESC`
           ).bind(since).all(),
 
           env.DB.prepare(
             `SELECT error_type,
                     COUNT(*) as count
-             FROM events WHERE ts >= ? AND ok = 0 AND error_type IS NOT NULL
+             FROM events WHERE ts >= ? AND tool <> 'test_tool' AND ${ACTIVE_ID_FILTER}
+               AND ok = 0 AND error_type IS NOT NULL
              GROUP BY error_type ORDER BY count DESC LIMIT 20`
           ).bind(since).all(),
         ]);
@@ -138,7 +151,8 @@ export default {
         const since = new Date(Date.now() - days * 86400000).toISOString();
 
         let query = `SELECT tool, action, error_type, COUNT(*) as count
-                     FROM events WHERE ts >= ? AND ok = 0 AND error_type IS NOT NULL`;
+                     FROM events WHERE ts >= ? AND tool <> 'test_tool' AND ${ACTIVE_ID_FILTER}
+                       AND ok = 0 AND error_type IS NOT NULL`;
         const params = [since];
 
         if (tool) {

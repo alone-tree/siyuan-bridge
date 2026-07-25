@@ -4,6 +4,14 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
+## 2026-07-25：遥测测试事件拒绝与有效匿名 ID 过滤
+
+- 原因：复查 D1 发现 7 月 22—23 日新增 17 个单次匿名 ID，事件 `mcp_ver` 均为 `1.0.0`，调用组合与旧版 `TestWithTelemetry` 完全一致。此前 dummy endpoint 修复只覆盖当前主分支，旧 Tag、旧构建产物或其他设备上的旧代码仍可向生产端点上传。
+- 入库约束：Worker `/api/telemetry` 遇到单条或批量请求中包含 `tool="test_tool"` 时返回 400，整批不写入。
+- 查询约束：Dashboard 四组统计和 `/api/errors` 只统计在整个 `events` 表中累计至少有 2 条非 `test_tool` 调用的匿名 ID。累计调用次数不受查询时间窗口限制；返回事件仍按 `days` 过滤。
+- 历史数据：历史 `test_tool` 事件在查询中排除，原始 D1 事件不删除。
+- 测试：新增 `worker/index.test.mjs`，覆盖拒绝 `test_tool`、Dashboard 全库累计门槛和错误下钻相同口径，`node --test worker/index.test.mjs` 为 3 passed；`wrangler deploy --dry-run` 编译通过；远端 D1 只读执行同口径 SQL 成功。Python 完整测试未运行，因为当前 Hermes Python 环境未安装 pytest，本次未改 Python 代码，也未为此安装依赖。
+
 ## 2026-07-22：v1.0.4 多设备同步后按本机工作空间刷新 MCP 路径
 
 症状：思源会同步整个插件。电脑 A 生成的 MCP 绝对路径同步到电脑 B 后，设置页仍可能显示 A 的路径，无法直接复制给 B 的 AI 客户端。

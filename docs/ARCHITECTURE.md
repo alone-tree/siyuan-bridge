@@ -874,6 +874,12 @@ scope：
 4. upload 模式：后台线程 fire-and-forget POST 到 Worker `/api/telemetry`。
 5. 上传失败静默丢弃，不影响工具返回。
 
+Worker 统计边界：
+
+- `/api/telemetry` 拒绝包含 `tool="test_tool"` 的请求，不写入 D1。
+- Dashboard 和错误下钻只统计在整个 `events` 表中累计至少有 2 条非 `test_tool` 调用的匿名 ID；时间窗口只限制返回的事件范围，不限制 ID 的累计调用次数判断。
+- 历史 `test_tool` 事件不参与任何 Dashboard 或错误统计。原始历史事件保留，不做物理删除。
+
 代理探测优先级：`telemetry.json` 显式 proxy → 环境变量 `HTTPS_PROXY` → 系统代理设置 → 直连。
 
 遥测默认关闭（`telemetry.json` 缺失 = off），用户需主动创建配置文件开启。
