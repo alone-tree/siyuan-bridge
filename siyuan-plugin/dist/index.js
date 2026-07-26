@@ -121,6 +121,26 @@ function renderHome() {
       </div>
 
       <div class="siyuan-bridge-home__section">
+        <div class="siyuan-bridge-home__section-title">用户体验改进</div>
+        <label class="siyuan-bridge-home__checkbox-row">
+          <input class="b3-switch" type="checkbox" data-telemetry="checkbox" />
+          <span class="siyuan-bridge-home__checkbox-label">加入用户体验改进计划</span>
+        </label>
+        <p class="siyuan-bridge-home__hint">
+          匿名收集工具使用数据（功能调用、成功率等），帮助我们改进思源桥。不包含任何笔记内容或个人身份信息。
+        </p>
+        <div data-telemetry="local-copy-area" style="display:none">
+          <label class="siyuan-bridge-home__checkbox-row">
+            <input class="b3-switch" type="checkbox" data-telemetry="local-copy" />
+            <span class="siyuan-bridge-home__checkbox-label">遥测数据保留本地副本</span>
+          </label>
+          <p class="siyuan-bridge-home__hint">
+            在 stats/events/ 目录保留每日 JSONL 文件，方便自行查看上传内容，打消隐私顾虑。
+          </p>
+        </div>
+      </div>
+
+      <div class="siyuan-bridge-home__section">
         <div class="siyuan-bridge-home__section-title">MCP 配置</div>
         <p class="siyuan-bridge-home__hint">配置 Python 路径、工作空间 Token 并生成 MCP JSON。</p>
         <button class="b3-button" data-action="open-mcp-settings">打开 MCP 配置</button>
@@ -166,25 +186,6 @@ function renderHome() {
         </div>
       </div>
 
-      <div class="siyuan-bridge-home__section">
-        <div class="siyuan-bridge-home__section-title">用户体验改进</div>
-        <label class="siyuan-bridge-home__checkbox-row">
-          <input class="b3-switch" type="checkbox" data-telemetry="checkbox" />
-          <span class="siyuan-bridge-home__checkbox-label">加入用户体验改进计划</span>
-        </label>
-        <p class="siyuan-bridge-home__hint">
-          匿名收集工具使用数据（功能调用、成功率等），帮助我们改进思源桥。不包含任何笔记内容或个人身份信息。
-        </p>
-        <div data-telemetry="local-copy-area" style="display:none">
-          <label class="siyuan-bridge-home__checkbox-row">
-            <input class="b3-switch" type="checkbox" data-telemetry="local-copy" />
-            <span class="siyuan-bridge-home__checkbox-label">遥测数据保留本地副本</span>
-          </label>
-          <p class="siyuan-bridge-home__hint">
-            在 stats/events/ 目录保留每日 JSONL 文件，方便自行查看上传内容，打消隐私顾虑。
-          </p>
-        </div>
-      </div>
     </div>
   `;
 }
@@ -600,6 +601,12 @@ async function ensureAboutDocument(docs, notebookId, language, documentCache) {
     doc = await createSystemDocument(
       docs, notebookId, SYSTEM_DOC_NAMES[key][language], template
     );
+  } else if (systemDocTitle(doc) !== SYSTEM_DOC_NAMES[key][language]) {
+    await callSiyuanApi("/api/filetree/renameDocByID", {
+      id: doc.id,
+      title: SYSTEM_DOC_NAMES[key][language],
+    });
+    doc.hpath = `/${SYSTEM_DOC_NAMES[key][language]}`;
   }
   let markdown = await exportSystemDocument(doc.id);
   const currentHash = await sha256Text(normalizeManagedMarkdown(markdown));
@@ -1065,7 +1072,10 @@ function renderSettings(config, context) {
       <div class="siyuan-bridge__section">
         <div class="siyuan-bridge__header">
           <span>MCP JSON</span>
-          <button class="b3-button" data-action="copy-json">复制 JSON</button>
+          <div class="siyuan-bridge__header-actions">
+            <button class="b3-button b3-button--outline" data-action="copy-json">复制 JSON</button>
+            <button class="b3-button" data-action="copy-for-ai">复制给 AI</button>
+          </div>
         </div>
         <textarea class="b3-text-field siyuan-bridge__json" data-field="mcpJson" readonly></textarea>
       </div>
@@ -1152,6 +1162,13 @@ function bindSettings(root, config, context) {
       refreshJson();
       await navigator.clipboard.writeText(container.querySelector("[data-field='mcpJson']").value);
       showMessage("MCP JSON 已复制");
+    }
+    if (action === "copy-for-ai") {
+      refreshJson();
+      const mcpJson = container.querySelector("[data-field='mcpJson']").value;
+      const prompt = "注册这个MCP工具，注意这是Claude code的语法，注册时需要使用本平台正确的MCP注册语法";
+      await navigator.clipboard.writeText(`${prompt}\n\n${mcpJson}`);
+      showMessage("MCP 配置已复制给 AI");
     }
     if (action === "save") {
       readContext(container, state);

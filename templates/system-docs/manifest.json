@@ -2,33 +2,41 @@
   "schema_version": 1,
   "templates": {
     "mcp_usage_guide": {
-      "version": 1,
+      "version": 2,
       "files": {
         "zh-CN": "mcp-usage-guide.zh-CN.md",
         "en": "mcp-usage-guide.en.md"
       },
       "source_sha256": {
-        "zh-CN": "14ffa9d6256bfc807005a21217df1cce8e00036306079c47131f9e866a16bff9",
-        "en": "7a240423e3d4e68871bdcc6bd7fdd6943cbce405e00f378693667b3708b3e9f4"
+        "zh-CN": "48401423bff2a38f9d05689d01083ce56a6bf78d328910718bbe18992cd887d0",
+        "en": "ee69a8786d737335c8002a1261baeeda4e0f90326ceedc8083ee525c849dc207"
       },
       "historical_normalized_sha256": {
-        "zh-CN": [],
-        "en": []
+        "zh-CN": [
+          "e5e630b2a016e48778c7e0b5cf6ac78a961a765ebd52edfd7a53c1f62b4fe99a"
+        ],
+        "en": [
+          "0ff9098174028a4394d4f5a1b200b9c12be60bbfdda666d1930f4e8e6884ed48"
+        ]
       }
     },
     "workspace_index_guide": {
-      "version": 1,
+      "version": 2,
       "files": {
         "zh-CN": "workspace-index-guide.zh-CN.md",
         "en": "workspace-index-guide.en.md"
       },
       "source_sha256": {
-        "zh-CN": "6933e1805a2f4dc41ee1c66ff975f766783da3d93b8e453659a927c7e1cca5ad",
-        "en": "1690755faf278afdda2a52df7d5b3ec2a02841ea04ca748677824a3557675c36"
+        "zh-CN": "b16dd972d26846c505f6a7e1f01937f621b79e63c7feb59937609570151176e9",
+        "en": "1ca5a8141093fffea818935a3e92b845bd21ce11b4f52cf9e3942e29aeb05eaa"
       },
       "historical_normalized_sha256": {
-        "zh-CN": [],
-        "en": []
+        "zh-CN": [
+          "a5f8442be9e072109cb9f900b77abf9342b8864e4fa5456a8d748b641bb092dd"
+        ],
+        "en": [
+          "364576ba6d1f918b4cd77a3220bea5d6d0886f614e3673a12bf983cfae3a61a8"
+        ]
       }
     }
   }

@@ -126,6 +126,9 @@ class AgentNotebookMigrationTests(unittest.TestCase):
         )
         self.assertTrue(state.workspace_index_is_placeholder)
         self.assertIn("用户尚未创建工作空间索引", state.workspace_index_markdown)
+        self.assertTrue(state.ai_guide_markdown.lstrip().startswith(">"))
+        self.assertNotIn("# 用户个性化要求", state.ai_guide_markdown)
+        self.assertNotIn("# AI 使用指南", state.ai_guide_markdown)
         registry = self._workspace_state()
         self.assertEqual(registry["system_notebook"]["id"], "system-nb")
         self.assertEqual(set(registry["documents"]), {
@@ -211,7 +214,7 @@ class AgentNotebookMigrationTests(unittest.TestCase):
         manifest_path = self.root / "templates/system-docs/manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         entry = manifest["templates"]["mcp_usage_guide"]
-        entry["version"] = 2
+        entry["version"] = 3
         entry["source_sha256"]["zh-CN"] = hashlib.sha256(
             new_markdown.encode("utf-8")
         ).hexdigest()
@@ -225,7 +228,7 @@ class AgentNotebookMigrationTests(unittest.TestCase):
         self.assertEqual(second.mcp_usage_guide_doc_id, guide_id)
         self.assertIn("新增开发者说明", second.mcp_usage_guide_markdown)
         registry_entry = self._workspace_state()["documents"]["mcp_usage_guide"]
-        self.assertEqual(registry_entry["template_version"], 2)
+        self.assertEqual(registry_entry["template_version"], 3)
         self.assertFalse(registry_entry["user_modified"])
 
     def test_stale_registry_id_falls_back_to_current_name_and_repairs_registry(self):
@@ -254,7 +257,26 @@ class AgentNotebookMigrationTests(unittest.TestCase):
         second = ensure_agent_notebook(client, self.root, "zh-CN")
 
         self.assertEqual(second.about_doc_id, about_id)
-        self.assertIn("会被系统覆盖", client.docs[about_id]["markdown"])
+        self.assertIn("自动维护", client.docs[about_id]["markdown"])
+        self.assertIn("template_version: 6", client.docs[about_id]["markdown"])
+
+    def test_about_renamed_by_user_is_restored_and_overwritten_by_registry_id(self):
+        client = FakeSystemClient()
+        first = ensure_agent_notebook(client, self.root, "zh-CN")
+        about_id = first.about_doc_id
+        client.docs[about_id]["hpath"] = "/用户修改后的 About 标题"
+        client.docs[about_id]["markdown"] = "用户临时修改的 About 正文"
+
+        second = ensure_agent_notebook(client, self.root, "zh-CN")
+
+        self.assertEqual(second.about_doc_id, about_id)
+        self.assertEqual(client.docs[about_id]["hpath"], "/关于思源桥")
+        self.assertIn("template_version: 6", client.docs[about_id]["markdown"])
+        self.assertIn((about_id, "关于思源桥"), client.renames)
+        self.assertEqual(
+            len([doc for doc in client.docs.values() if doc["hpath"] == "/关于思源桥"]),
+            1,
+        )
 
     def test_existing_workspace_index_is_never_overwritten(self):
         client = FakeSystemClient()

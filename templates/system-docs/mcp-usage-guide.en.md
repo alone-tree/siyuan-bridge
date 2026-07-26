@@ -1,30 +1,24 @@
-# MCP Usage Guide
+This guide only supplements principles that tool descriptions do not explain clearly. Refer to the MCP tool descriptions for individual tools and parameters.
 
-This document explains how AI should combine SiYuan Bridge tools. Refer to each MCP tool description for its exact parameters.
+## Locating material
 
-## Recommended workflow
+- The Workspace Index helps identify likely notebooks and paths, but it is navigation rather than a factual source. Read the original notes after locating them.
+- Do not force a fixed list → find → read sequence. Search or read directly when the target is clear; inspect the document tree when the notebook's structure matters.
+- The system notebook mainly stores SiYuan Bridge configuration and AI guidance. Do not treat its guides, About document, or Privacy Rules as user knowledge.
 
-1. Start each new session with `siyuan_start`, then read the user preferences, notebook overview, and Workspace Index in the startup packet.
-2. Use `siyuan_list` to browse one document-tree level and `siyuan_find` to search content.
-3. Use `siyuan_read` to read documents; continue long documents with `block_start`.
-4. Before editing, read the target again with `include_block_ids=true`.
-5. Pass `confirmed=true` only when the user has explicitly requested a write.
+## Editing and block references
 
-## Editing and block IDs
+- Choose an editing action from the final structure the user wants. Do not change the plan merely to preserve block IDs; when no backlinks exist, whether an old ID survives normally has no practical effect.
+- Operations that remove block IDs automatically check backlinks. When backlinks exist, the tool refuses the operation and explains when the referenced ID should be preserved and when the user may be asked to allow the reference to break.
+- Re-plan the edit from that conflict guidance. Use `reference_policy=break` only after the user explicitly accepts breaking the references reported for that operation; it is not standing permission for later changes.
 
-- When replacing one block with one block, prefer `single_block_replace` so the original block ID is preserved.
-- When the structure must change, let the AI choose `multi_block_replace` from the user's intent. Do not mechanically match old and new blocks by position.
-- `delete`, `multi_block_replace`, document overwrite, and document-tree deletion check whether disappearing block IDs have external references.
-- References reject the operation by default. Report visible sources and the count of hidden sources first. Retry the same operation with `reference_policy=break` only after the user explicitly allows those references to break.
-- Do not automatically rewrite references in other documents.
+## System notebook
 
-## Paths, permissions, and refresh
+- **MCP Usage Guide:** additional MCP usage principles; user-editable.
+- **User Preferences:** the user's long-term instructions for AI; follow them and do not proactively rewrite them.
+- **Workspace Index:** navigation for new sessions, created or updated by AI when requested.
+- **Workspace Index Guide:** rules for creating and updating the index; user-editable.
+- **About SiYuan Bridge:** user-facing product information that upgrades may overwrite.
+- **Privacy Rules:** maintained by the user and inaccessible to AI.
 
-- Prefer the complete document path returned by tools. If a path is stale, call `siyuan_operate(action="refresh")` or use `document_id`.
-- `read_only` content can be read, copied, and exported, but not edited, renamed, moved, or deleted.
-- The Privacy Rules document is maintained by the user in SiYuan. AI must not read or modify it.
-- `siyuan_start` clears the temporary AI workspace; refreshing the index during a session does not.
-
-## Workspace Index
-
-The Workspace Index helps new sessions locate notes quickly. See the system notebook's Workspace Index Guide for creation and update instructions.
+Except for Privacy Rules, documents in the system notebook behave like ordinary visible documents.

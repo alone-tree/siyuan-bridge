@@ -34,6 +34,11 @@
   justify-content: space-between;
 }
 
+.siyuan-bridge__header-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .siyuan-bridge__profile {
   display: grid;
   gap: 8px;

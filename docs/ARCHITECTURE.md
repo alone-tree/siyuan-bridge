@@ -203,7 +203,7 @@ MCP JSON 只包含 Python 命令、`run_mcp.py` 绝对路径和 `PYTHONUTF8=1`�
 | `workspace_index_guide` | `工作空间索引创建指南` | `Workspace Index Guide` | 由现有索引构建 Skill 转为普通文档模板；生命周期同上 |
 | `ai_guide` | `用户个性化要求` | `User Preferences` | 沿用内部 key；旧 `AI 使用指南` / `AI Guide` 按原 ID 更名；正文不覆盖 |
 | `workspace_index` | `工作空间索引` | `Workspace Index` | 缺失时创建一句占位提示；之后不自动覆盖 |
-| `about` | `关于思源桥` | `About SiYuan Bridge` | 开发者控制；和当前模板不一致时按原 ID 覆盖 |
+| `about` | `关于思源桥` | `About SiYuan Bridge` | 开发者控制；按 JSON 文档 ID 定位；标题或正文被修改时恢复标准标题并按原 ID 覆盖 |
 | `privacy_rules` | `隐私规则` | `Privacy Rules` | 不存在时创建；存在后不覆盖；只供 MCP 内部解析 |
 
 启动时数据流：
@@ -737,7 +737,9 @@ scope：
 当前实现特点：
 
 - `siyuan_edit` 成功后不会自动刷新 `docs.jsonl` 统计。正文已经修改，但本地索引中的字数/块数可能等下一次 refresh 才更新。当前通常可接受，因为路径和文档 ID 未变；后续若要求统计实时准确，应在每次 edit 后刷新索引，并确保 refresh 调用继续排除系统笔记本和 Privacy Rules。
-- `single_block_replace` 保留块 ID，是已有引用存在时的首选路径。
+- 未被引用的块 ID 是否保留不影响用户；只有反链冲突出现后，才需要判断是否应保留对应 ID。
+- 冲突结果附带语义判断说明：修改后仍是同一个事实、观点、任务或条目时，重新规划为保留该 ID 的单块更新；原语义已撤销、合并或替代，保留 ID 反而会误导现有引用时，才请求用户允许破坏引用。
+- 多块冲突按每个被引用 ID 分别判断；只要其中仍有应保留的块，就不能直接对整个范围使用 `break`。
 - 所有会让 ID 消失的现有入口都检查 `refs` 反链：`siyuan_edit` 的 delete/multi、`siyuan_create(if_exists=overwrite)`、`siyuan_doc_manage(action=delete)`。
 - 默认 `reference_policy=reject`。可见引用返回文档路径、引用源块 ID 和内容；隐藏或未知来源只返回引用次数和受保护文档数。
 - 同一删除集合内部的引用不阻止操作。只有用户看过冲突报告并明确允许破坏引用后，AI 才能用相同参数加 `reference_policy=break` 重试。

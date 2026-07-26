@@ -377,6 +377,10 @@ def _ensure_about(
         )
         markdown = _export_markdown(client, notebook_id, str(existing["id"]))
     else:
+        desired_name = get_doc_name(key, language)
+        if _doc_title(existing) != desired_name:
+            client.rename_doc_by_id(str(existing["id"]), desired_name)
+            existing["hpath"] = f"/{desired_name}"
         markdown = _export_markdown(client, notebook_id, str(existing["id"]))
         entry = document_cache.get(key)
         entry = entry if isinstance(entry, dict) else {}

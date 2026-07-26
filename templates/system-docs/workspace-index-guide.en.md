@@ -1,58 +1,48 @@
-# Workspace Index Guide
+The Workspace Index is semantic navigation for helping a new session locate material quickly. It should answer which notebook and path contain relevant material and what to read first. It is not a copy of the full directory, a replacement for search, or a summary of every document.
 
-The Workspace Index is a path-first semantic navigation document stored in the system notebook. AI creates or updates it only when requested by the user; the system never scans the workspace and rewrites it automatically.
+## Reading scope
 
-## Reading depth
+Inspect the size and full hierarchy of every visible notebook before deciding how it is organized:
 
-- **Quick (default):** Read one hub document per notebook, such as an index, overview, project background, required reading, or README document.
-- **Detailed:** In addition to hub documents, read 2–4 important documents in each key notebook.
+- summarize deep trees by major paths and structural patterns;
+- list principal documents in small, flat notebooks;
+- treat index pages, project introductions, and overview documents as hubs.
 
-Never write a content summary from the title alone. For documents you have not read, record only their path.
+## Creation modes
 
-## Creation workflow
+- **Fast mode (default):** obtain each notebook's complete document tree down to the deepest level, then read a small number of representative documents in every notebook before summarizing it. Use creation time, word count, block count, position, and other available signals together when selecting documents.
+- **Detailed mode (only when explicitly requested):** expand the reading scope beyond fast mode and learn as much of the important detail as practical.
 
-1. Call `siyuan_start` for the notebook overview and statistics.
-2. Call `siyuan_list` for each non-empty notebook and classify its structure as a deep tree, flat collection, or hub-and-spoke layout.
-3. Read hub documents with `siyuan_read` at the depth requested by the user.
-4. Generate the index with the template below.
-5. A user's request to create the index is itself write confirmation. Use `siyuan_create` to overwrite the placeholder in Workspace Index.
+## Index contents
+
+Include:
+
+1. generation or update date;
+2. a small number of reliable “question area → notebook” routes;
+3. each notebook's structural pattern, principal contents, and important documents;
+4. a place for user notes or priorities.
+
+Prefer missing routes over wrong ones. Several small notebooks may be combined into one short description or list. Group large notebooks by path and identify hubs, representative documents, and principal contents. Keep the entire index under 1,000 words according to SiYuan's word count. Describe the system notebook only as configuration; do not treat its guides, About document, or Privacy Rules as user knowledge.
+
+Suggested structure:
 
 ```markdown
-# Knowledge Base Index
-> Generated YYYY-MM-DD
+> Updated: YYYY-MM-DD
 
-## Quick Navigation
-| Topic | Notebook |
-|------|----------|
-| ... | ... |
+## Quick navigation
+| Question area | Notebook or path |
+|---|---|
 
-## Notebook Name (N documents)
+## Notebook name
+> Structure: …
+> User notes:
 
-> Structure: one-sentence organization summary
-> Priority:
-
-### /path/to/key/subtree
-
-- `doc-id` Document title
-  - AI summary: summarize only content actually read
+### /major/path
+- Hub document: one-sentence summary
 ```
 
-## Content rules
+## Update rules
 
-- Keep Quick Navigation conservative; a wrong route is worse than a missing route.
-- Leave `> Priority:` empty for the user and preserve it exactly during updates.
-- Preserve user corrections, notes, and all other manually written content.
-- List every document for notebooks with no more than 20 documents; summarize larger notebooks by path and structure pattern.
-- Keep the complete index within roughly 300 lines.
-- System guides, About, and Privacy Rules are not user knowledge and must not be summarized as such.
+Write only when the user asks to create or update the index, or agrees after the startup packet reports that it is stale. Compare current paths, document counts, and update times, then revisit only added, removed, or potentially changed areas.
 
-## Update workflow
-
-1. Call `siyuan_operate(action="refresh")` to refresh the objective index.
-2. Call `siyuan_start` and compare the current overview with the existing Workspace Index.
-3. Recheck only new, removed, or potentially changed notebooks and documents.
-4. Read new or changed key documents; never infer summaries from titles.
-5. Use reference reading to get block IDs, then update Workspace Index locally with `siyuan_edit`.
-6. Preserve user priorities, corrections, and all other manually written content.
-
-After updating, report which index entries were added, removed, or refreshed.
+Preserve user-written priorities, corrections, explanations, and other human content. When authorship is uncertain, keep the text. Report only what was added, removed, or re-summarized.
