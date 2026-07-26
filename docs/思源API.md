@@ -36,6 +36,7 @@
 | 属性 | `/api/attr/getBlockAttrs`, `/api/attr/setBlockAttrs` | 读取或设置块属性 | 暂不开放。后续可用于 AI 修改标记 |
 | 搜索 | `/api/search/fullTextSearchBlock` | 全文搜索正文、标题和块 | 已作为 `siyuan_find` 的召回源 |
 | SQL | `/api/query/sql` | 结构化读取 blocks 表、诊断、定位 | 内部使用，不开放任意 SQL |
+| 反链 | `/api/query/sql` 查询 `refs` 并关联 `blocks` | 写前检查即将消失的文档/块 ID 是否仍被引用 | 仅由写入保护内部使用 |
 | 导出 | `/api/export/exportMdContent` 等 | 读取文档 Markdown、导出资源 | 已用于阅读；不作为写入主路径 |
 | 资源 | asset 上传、查询、OCR、清理类端点 | 图片、附件、资源管理 | 第一阶段不开放 |
 | 仓库快照 | `/api/repo/createSnapshot`, `/api/repo/getRepoSnapshots` | 写入前备份；必要时帮助用户找到恢复点 | `createSnapshot` 内部强制使用；查询可后续做只读诊断 |
@@ -51,9 +52,9 @@
 
 | MCP 工具 | 用户语义 | 内部 API 组合 |
 |----------|----------|---------------|
-| `siyuan_edit` | 在已有可见文档中替换、追加、删除、插入文本，或编辑普通 Markdown 表格 | 隐私检查；引用阅读定位校验；`repo/createSnapshot`；`block/updateBlock` / `appendBlock` / `insertBlock` / `deleteBlock`；`notification/pushMsg` |
-| `siyuan_create` | 通过完整可读路径创建、覆盖或新增同名文档 | 隐私和路径检查；`repo/createSnapshot`；`filetree/createDocWithMd` 或 `block/deleteBlock` + `block/appendBlock`；`notification/pushMsg`；`filetree/getHPathByID` 等待路径同步 |
-| `siyuan_doc_manage` | 管理文档树：改名、移动、删除、复制、导出 | 权限检查；`copy/export` 允许只读源文档；`rename/move/delete` 需可写；`delete` 写前扫描子孙权限；`move` 写前检查源文档祖先链和目标父路径权限；写操作调用 `repo/createSnapshot`；内部使用 `renameDocByID` / `moveDocsByID` / `removeDocByID` / `duplicateDoc` / `exportMdContent`；写后用 `getHPathByID` 确认路径同步 |
+| `siyuan_edit` | 在已有可见文档中替换、追加、删除、插入文本，或编辑普通 Markdown 表格 | 隐私检查；引用阅读定位校验；delete/multi 写前查询 `refs`；`repo/createSnapshot`；`block/updateBlock` / `appendBlock` / `insertBlock` / `deleteBlock`；`notification/pushMsg` |
+| `siyuan_create` | 通过完整可读路径创建、覆盖或新增同名文档 | 隐私和路径检查；overwrite 写前查询旧正文块反链；`repo/createSnapshot`；`filetree/createDocWithMd` 或 `block/deleteBlock` + `block/appendBlock`；`notification/pushMsg`；`filetree/getHPathByID` 等待路径同步 |
+| `siyuan_doc_manage` | 管理文档树：改名、移动、删除、复制、导出 | 权限检查；`copy/export` 允许只读源文档；`rename/move/delete` 需可写；`delete` 写前扫描子孙权限和整棵子树反链；`move` 写前检查源文档祖先链和目标父路径权限；写操作调用 `repo/createSnapshot`；内部使用 `renameDocByID` / `moveDocsByID` / `removeDocByID` / `duplicateDoc` / `exportMdContent`；写后用 `getHPathByID` 确认路径同步 |
 
 AI 不需要知道这些底层端点。它只提供：
 
@@ -167,7 +168,7 @@ POST /api/sync/getSyncInfo
 | `checkoutRepo` | 恢复整个工作空间，可能覆盖用户后续修改 |
 | `removeNotebook` | 删除范围大，笔记本管理是人工决策 |
 | `moveBlock` | 块移动会改变正文结构，暂不开放 |
-| `deleteBlock` 独立工具 | 删除由 `siyuan_edit` 的 `delete` 动作封装，仍受引用阅读定位和快照约束 |
+| `deleteBlock` 独立工具 | 删除由 `siyuan_edit` 的 `delete` 动作封装，仍受引用阅读定位、反链检查和快照约束 |
 | 任意 SQL 工具 | 容易泄露隐私边界外的数据，也可能诱导 AI 绕过高层工具 |
 | 设置、同步、账号、插件、集市类 API | 和笔记编辑目标无关，风险大于收益 |
 
@@ -177,7 +178,7 @@ POST /api/sync/getSyncInfo
 
 | 能力 | 可能方案 |
 |------|----------|
-| 块 ID 引用 | `siyuan_read(include_block_ids=true)` 返回块序号和块 ID 定位头 |
+| 块 ID 引用 | 已由 `siyuan_read(include_block_ids=true)` 返回块序号和块 ID 定位头；删除 ID 前由 `refs` 反链保护 |
 | 资源写入 | 在 `siyuan_create` 或专门的资产工具中封装上传和 Markdown 插入 |
 | 只读快照查询 | 增加诊断工具列出由本项目创建的最近快照 |
 | 自动回滚 | 等写入稳定后再评估块级操作日志，不直接使用 repo checkout |

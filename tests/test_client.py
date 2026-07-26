@@ -315,6 +315,31 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(SiYuanApiError):
             client.list_document_blocks("doc1")
 
+    def test_list_block_references_queries_refs_and_source_blocks(self):
+        seen = {}
+        fake_refs = [{
+            "def_block_id": "target1",
+            "block_id": "source1",
+            "root_id": "doc2",
+            "type": "textmark",
+            "content": "Visible reference",
+            "markdown": "((target1))",
+            "block_type": "p",
+        }]
+
+        def transport(req, timeout):
+            seen["body"] = json.loads(req.data.decode("utf-8"))
+            return FakeResponse({"code": 0, "data": fake_refs})
+
+        client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
+        rows = client.list_block_references(["target1", "target2", "target1"])
+
+        stmt = seen["body"]["stmt"]
+        self.assertIn("FROM refs r LEFT JOIN blocks b", stmt)
+        self.assertIn("'target1'", stmt)
+        self.assertIn("'target2'", stmt)
+        self.assertEqual(rows, fake_refs)
+
     def test_get_child_blocks_posts_parent_id(self):
         seen = {}
 

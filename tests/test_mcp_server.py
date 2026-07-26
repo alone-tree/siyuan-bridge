@@ -23,6 +23,7 @@ class FakeSearchClient:
         self._snapshots: list[dict[str, Any]] = []
         self._docs: dict[str, str] = {}  # doc_id -> markdown
         self._blocks: dict[str, dict[str, Any]] = {}  # block_id -> block info
+        self._refs: list[dict[str, Any]] = []
         self._push_msgs: list[str] = []
         self._updated_blocks: list[tuple[str, str]] = []
         self._appended_blocks: list[tuple[str, str]] = []
@@ -193,6 +194,14 @@ class FakeSearchClient:
         stmt = f"SELECT id, parent_id, root_id, type, subtype, markdown, content, sort FROM blocks WHERE root_id = '{doc_id}' AND type != 'd' ORDER BY sort"
         return self.query_sql(stmt)
 
+    def list_block_references(self, block_ids):
+        wanted = {str(block_id) for block_id in block_ids}
+        return [
+            dict(row)
+            for row in self._refs
+            if str(row.get("def_block_id", "")) in wanted
+        ]
+
     def get_child_blocks(self, block_id):
         blocks = self._blocks.get(block_id)
         if isinstance(blocks, list):
@@ -299,6 +308,12 @@ class McpServerTests(unittest.TestCase):
         result = server.siyuan_list({})
         self.assertIn("# 可见笔记本", result)
         self.assertIn("| notebook | notebook_id | 权限 |", result)
+        self.assertIn("| Main | `nb1` | read_write |", result)
+
+    def test_list_root_path_lists_notebooks(self):
+        server = mcp_server.McpServer(self.root)
+        result = server.siyuan_list({"path": "/"})
+        self.assertIn("# 可见笔记本", result)
         self.assertIn("| Main | `nb1` | read_write |", result)
 
     def test_tool_call_detects_siyuan_before_local_list(self):
@@ -877,6 +892,28 @@ class McpServerWriteTests(unittest.TestCase):
         finally:
             mcp_server.detect_active_profile = original
 
+    def test_create_document_rejects_live_path_missing_from_cached_index(self):
+        server, client, original = self._server_and_client()
+        client._hpaths["external-doc"] = "/Projects/External"
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_create({
+                    "title": "External",
+                    "path": "/Main/Projects/External",
+                    "markdown": "must not create a duplicate",
+                    "if_exists": "reject",
+                    "confirmed": True,
+                })
+            self.assertEqual(
+                getattr(ctx.exception, "error_code", None),
+                "conflict:already_exists",
+            )
+            self.assertIn("`external-doc`", str(ctx.exception))
+            self.assertFalse(client._snapshots)
+            self.assertFalse(client._created_docs)
+        finally:
+            mcp_server.detect_active_profile = original
+
     def test_create_document_existing_path_can_overwrite_preserving_doc_id(self):
         blocks = {
             "doc1": [
@@ -1391,6 +1428,173 @@ class McpServerWriteTests(unittest.TestCase):
         finally:
             mcp_server.detect_active_profile = original
 
+    def test_siyuan_doc_manage_delete_checks_entire_subtree_references(self):
+        blocks = {
+            "doc1": [
+                {"id": "block1", "type": "p", "markdown": "Root body.", "parent_id": "doc1"},
+            ],
+            "doc3": [
+                {"id": "child-block", "type": "p", "markdown": "Child body.", "parent_id": "doc3"},
+            ],
+        }
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        client._hpaths["refdoc"] = "/References/External Ref"
+        client._refs = [{
+            "def_block_id": "child-block",
+            "block_id": "external-ref-block",
+            "root_id": "refdoc",
+            "type": "textmark",
+            "content": "External reference to child document content.",
+            "markdown": "External ((child-block)).",
+            "block_type": "p",
+        }]
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_doc_manage({
+                    "document": "/Main/Projects/Doc One",
+                    "action": "delete",
+                    "confirmed": True,
+                })
+            self.assertIn("被引用块 `child-block`", str(ctx.exception))
+            self.assertIn("/Main/References/External Ref", str(ctx.exception))
+            self.assertFalse(client._snapshots)
+            self.assertFalse(client._removed_docs)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_doc_manage_delete_ignores_references_inside_same_deleted_subtree(self):
+        blocks = {
+            "doc1": [
+                {"id": "block1", "type": "p", "markdown": "Root body.", "parent_id": "doc1"},
+            ],
+            "doc3": [
+                {"id": "child-ref", "type": "p", "markdown": "Internal ((block1)).", "parent_id": "doc3"},
+            ],
+        }
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        client._refs = [{
+            "def_block_id": "block1",
+            "block_id": "child-ref",
+            "root_id": "doc3",
+            "type": "textmark",
+            "content": "Internal reference.",
+            "markdown": "Internal ((block1)).",
+            "block_type": "p",
+        }]
+        try:
+            result = server.siyuan_doc_manage({
+                "document": "/Main/Projects/Doc One",
+                "action": "delete",
+                "confirmed": True,
+            })
+            self.assertEqual(client._removed_docs, ["doc1"])
+            self.assertIn("已删除文档", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_create_overwrite_rejects_when_body_block_is_referenced(self):
+        blocks = {
+            "doc1": [
+                {"id": "block1", "type": "p", "markdown": "Old first.", "parent_id": "doc1", "sort": 1},
+            ]
+        }
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        client._hpaths["refdoc"] = "/References/Visible Ref"
+        client._refs = [{
+            "def_block_id": "block1",
+            "block_id": "refblock",
+            "root_id": "refdoc",
+            "type": "textmark",
+            "content": "This paragraph cites the old block.",
+            "markdown": "This paragraph cites ((block1)).",
+            "block_type": "p",
+        }]
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_create({
+                    "title": "Doc One",
+                    "path": "/Main/Projects/Doc One",
+                    "markdown": "Fresh content.",
+                    "if_exists": "overwrite",
+                    "confirmed": True,
+                })
+            self.assertEqual(getattr(ctx.exception, "error_code", None), "conflict:referenced_blocks")
+            self.assertIn("/Main/References/Visible Ref", str(ctx.exception))
+            self.assertIn("This paragraph cites the old block.", str(ctx.exception))
+            self.assertFalse(client._snapshots)
+            self.assertFalse(client._deleted_blocks)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_multi_block_replace_summary_filters_stale_deleted_blocks(self):
+        blocks = {
+            "doc1": [
+                {"id": "block1", "type": "p", "markdown": "First."},
+                {"id": "block2", "type": "p", "markdown": "Second."},
+            ]
+        }
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+
+        def delayed_delete(block_id):
+            client._deleted_blocks.append(block_id)
+
+        client.delete_block = delayed_delete
+        try:
+            result = server.siyuan_edit({
+                "document": "/Main/Projects/Doc One",
+                "action": "multi_block_replace",
+                "start_index": 1,
+                "start_id": "block1",
+                "end_index": 2,
+                "end_id": "block2",
+                "markdown": "New first.\n\nNew second.",
+                "confirmed": True,
+            })
+            new_content = result.split("## 新内容", 1)[1]
+            self.assertIn("New first.", new_content)
+            self.assertIn("New second.", new_content)
+            self.assertNotIn("id=block1", new_content)
+            self.assertNotIn("id=block2", new_content)
+            self.assertNotIn("First.", new_content)
+            self.assertNotIn("Second.", new_content)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_multi_block_replace_checks_descendant_block_references(self):
+        blocks = {
+            "doc1": [
+                {"id": "heading1", "type": "h", "markdown": "## Heading", "parent_id": "doc1"},
+                {"id": "child1", "type": "p", "markdown": "Child content.", "parent_id": "heading1"},
+            ]
+        }
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        client._hpaths["refdoc"] = "/References/Visible Ref"
+        client._refs = [{
+            "def_block_id": "child1",
+            "block_id": "refblock",
+            "root_id": "refdoc",
+            "type": "textmark",
+            "content": "Reference to the heading child.",
+            "markdown": "Reference ((child1)).",
+            "block_type": "p",
+        }]
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_edit({
+                    "document": "/Main/Projects/Doc One",
+                    "action": "multi_block_replace",
+                    "start_index": 1,
+                    "start_id": "heading1",
+                    "markdown": "Replacement.",
+                    "confirmed": True,
+                })
+            self.assertIn("被引用块 `child1`", str(ctx.exception))
+            self.assertFalse(client._snapshots)
+            self.assertFalse(client._inserted_before)
+            self.assertFalse(client._deleted_blocks)
+        finally:
+            mcp_server.detect_active_profile = original
+
     def test_siyuan_edit_multi_block_replace_can_replace_single_block_with_multi_block_markdown(self):
         blocks = {
             "doc1": [
@@ -1661,6 +1865,115 @@ class McpServerWriteTests(unittest.TestCase):
             self.assertIn("siyuan_edit", client._snapshots[0]["memo"])
             self.assertEqual(client._deleted_blocks, ["block1"])
             self.assertIn("delete", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_delete_rejects_visible_reference(self):
+        blocks = {
+            "doc1": [
+                {"id": "block1", "type": "p", "markdown": "Text to delete.", "parent_id": "doc1"},
+            ]
+        }
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        client._hpaths["refdoc"] = "/References/Visible Ref"
+        client._refs = [{
+            "def_block_id": "block1",
+            "block_id": "refblock",
+            "root_id": "refdoc",
+            "type": "textmark",
+            "content": "Visible citing paragraph.",
+            "markdown": "Visible ((block1)).",
+            "block_type": "p",
+        }]
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_edit({
+                    "document": "/Main/Projects/Doc One",
+                    "action": "delete",
+                    "start_index": 1,
+                    "start_id": "block1",
+                    "confirmed": True,
+                })
+            message = str(ctx.exception)
+            self.assertEqual(getattr(ctx.exception, "error_code", None), "conflict:referenced_blocks")
+            self.assertIn("被引用块 `block1`", message)
+            self.assertIn("/Main/References/Visible Ref", message)
+            self.assertIn("引用块：`refblock`", message)
+            self.assertIn("Visible citing paragraph.", message)
+            self.assertIn('reference_policy="break"', message)
+            self.assertFalse(client._snapshots)
+            self.assertFalse(client._deleted_blocks)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_delete_break_allows_explicitly_confirmed_reference_damage(self):
+        blocks = {
+            "doc1": [
+                {"id": "block1", "type": "p", "markdown": "Text to delete.", "parent_id": "doc1"},
+            ]
+        }
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        client._hpaths["refdoc"] = "/References/Visible Ref"
+        client._refs = [{
+            "def_block_id": "block1",
+            "block_id": "refblock",
+            "root_id": "refdoc",
+            "type": "textmark",
+            "content": "Visible citing paragraph.",
+            "markdown": "Visible ((block1)).",
+            "block_type": "p",
+        }]
+        try:
+            result = server.siyuan_edit({
+                "document": "/Main/Projects/Doc One",
+                "action": "delete",
+                "start_index": 1,
+                "start_id": "block1",
+                "reference_policy": "break",
+                "confirmed": True,
+            })
+            self.assertEqual(client._deleted_blocks, ["block1"])
+            self.assertEqual(len(client._snapshots), 1)
+            self.assertIn("用户已明确允许破坏引用", result)
+            self.assertIn("影响 1 处引用", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_delete_hides_protected_reference_details(self):
+        blocks = {
+            "doc1": [
+                {"id": "block1", "type": "p", "markdown": "Text to delete.", "parent_id": "doc1"},
+            ]
+        }
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        client._hpaths["secret-doc"] = "/Private/Secret Ref"
+        client._refs = [{
+            "def_block_id": "block1",
+            "block_id": "secret-ref-block",
+            "root_id": "secret-doc",
+            "type": "textmark",
+            "content": "Highly secret citing paragraph.",
+            "markdown": "Secret ((block1)).",
+            "block_type": "p",
+        }]
+        write_privacy_rules_cache(
+            self.root,
+            PrivacyRules(ignore=[{"scope": "document", "id": "secret-doc"}], allow=[]),
+        )
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_edit({
+                    "document": "/Main/Projects/Doc One",
+                    "action": "delete",
+                    "start_index": 1,
+                    "start_id": "block1",
+                    "confirmed": True,
+                })
+            message = str(ctx.exception)
+            self.assertIn("1 篇受保护文档", message)
+            self.assertNotIn("Secret Ref", message)
+            self.assertNotIn("secret-ref-block", message)
+            self.assertNotIn("Highly secret", message)
         finally:
             mcp_server.detect_active_profile = original
 

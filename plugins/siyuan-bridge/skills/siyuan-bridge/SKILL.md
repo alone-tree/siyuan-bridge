@@ -35,11 +35,13 @@ description: Use when the user wants to read, search, or write their private SiY
 - `siyuan_find` —— 搜索知识库，通过思源 API 实时搜索后经隐私规则过滤返回结果。
 - `siyuan_read` —— 只读取可见文档；隐藏文档和隐私规则文档即使已知 ID 也不会被读取。
 - `siyuan_read` / `siyuan_edit` / `siyuan_doc_manage` 使用路径定位时会校验思源当前真实路径。若提示路径已过期，先调用 `siyuan_operate(action="refresh")`，再用当前真实路径重试；或改用 `document_id`。
-- `siyuan_list` —— 返回可见笔记本/文档的有效权限。`read_write` 可写，`read_only` 只能读取、复制或导出；隐私规则文档和隐藏内容不会出现在列表中。
+- `siyuan_list` —— 无参数或 `path="/"` 时列出可见笔记本；其他路径列出直接子文档及有效权限。`read_write` 可写，`read_only` 只能读取、复制或导出；隐私规则文档和隐藏内容不会出现在列表中。
 - `siyuan_create`、`siyuan_edit` —— 写入工具。始终 `confirmed=true`。写入前自动创建思源工作空间快照。默认不写入，除非用户明确要求。
 - `siyuan_create` 优先传完整可读路径 `path=/Notebook/Folder/Doc`；只有笔记本名称重名或使用内部路径时才补充 `notebook_id`。目标已存在时默认 `if_exists=reject`，可显式用 `overwrite` 清空块后重写并保留文档 ID，或用 `create_new` 新增同名文档。
 - `siyuan_create` 成功后会等待思源路径同步并自动刷新安全索引；正常情况下可直接使用返回路径继续读取或管理。
 - 编辑已有文档前，先用 `siyuan_read(include_block_ids=true)` 进行引用阅读，并把返回的块序号和块 ID 作为 `siyuan_edit` 定位参数。
+- 优先让 AI 根据用户意图选择编辑动作：一块内容更新用 `single_block_replace` 保留原块 ID；结构重写才用 `multi_block_replace`。不要按位置机械猜测哪些新旧块语义相同。
+- `delete`、`multi_block_replace`、`siyuan_create(if_exists=overwrite)` 和整棵文档树删除都会检查即将消失的 ID 是否被外部引用，默认 `reference_policy=reject`。若返回引用冲突，先把可见来源和隐藏来源计数告知用户；只有用户明确允许破坏这些引用后，才能用相同参数加 `reference_policy=break` 重试。不得自行使用 `break`。
 - `siyuan_doc_manage` —— 管理文档树。`rename/move/delete/copy` 需要用户明确要求和 `confirmed=true`；`rename/move/delete` 还需要可写权限。`delete` 会删除整棵子树，子孙文档也必须全部可写；`move` 保留子树权限，但如果源文档来自只读/隐藏祖先路径则拒绝移动。`copy` 必须传完整 `target_path`，只复制源文档本身，不复制子文档。`export` 只导出可读文档到 `ai_workspace/exports/`。
 - `siyuan_doc_manage` 的 rename/move/copy/delete 成功后会等待路径同步并自动刷新安全索引；如果返回提示路径同步超时，临时改用 `document_id` 或显式调用 `siyuan_operate(action="refresh")`。
 - 编辑普通 Markdown 表格时，使用引用阅读返回的网格坐标：`row=0` 是表头，`row>=1` 是数据行，`column_index` 从 1 开始。表格不是数据库，不要把表头、字段或多维表语义混在一起。

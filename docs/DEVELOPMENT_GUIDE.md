@@ -144,6 +144,10 @@
 - 写入后 pushMsg 失败不应影响主操作。
 - 写入后需要刷新的工具必须带系统上下文刷新索引，且不得把 Privacy Rules 写入 AI 可见缓存。
 - create/rename/move/copy/delete 后必须等待思源路径接口同步，返回路径同步状态。
+- `siyuan_create(if_exists=reject)` 必须检查思源当前 live 文档列表，不能只依赖可能过期的 `docs.jsonl`。
+- 任何会删除现有文档/块 ID 的操作必须在快照和写入前检查反链；有外部引用时默认拒绝且不得创建快照。
+- 可见引用可以返回来源文档和块内容；隐藏或未知来源只能返回聚合数量，不得泄露路径、标题、块 ID 或内容。
+- `reference_policy=break` 只能在用户已看到冲突报告并明确允许破坏引用后使用；同一删除集合内部的引用不应阻止操作。
 - 返回信息必须让 AI 确认改了什么。
 
 `siyuan_edit` 特别要求：
@@ -154,6 +158,8 @@
 - 可能产生多块的内容必须用 `multi_block_replace`。
 - `single_block_replace` 和 `table_edit` 必须保留块属性。
 - `multi_block_replace` 必须明确旧块 ID 会失效。
+- `delete` / `multi_block_replace` 必须检查目标块及其随同删除的子孙块 ID。
+- `multi_block_replace` 的返回摘要不得把本轮已删除的旧块列入“新内容”，即使思源写后读取短暂返回旧块。
 - 表格编辑必须使用 `row` 和 `column_index` 坐标。
 
 已知真实问题：
@@ -170,6 +176,7 @@
 - 使用路径定位源文档时，必须先校验 live hpath；路径已变化时拒绝操作，且不得创建快照。
 - copy 源文档可以是 `read_only`，但目标路径必须 `read_write`。
 - delete 会影响整棵子树，必须验证子孙文档中存在 `read_only` 或 `hidden` 时拒绝操作，且错误信息不能泄露隐藏文档名称、数量或权限分布。
+- delete 的反链检查必须覆盖整棵子树中的文档 ID 和正文块 ID。
 - move 会移动整棵子树但不要求子孙全部可写；必须验证源文档祖先链和目标父路径都是 `read_write`。
 - copy 必须使用 `target_path`，通过 `duplicateDoc` 复制源文档本身；不应退回 export + create 作为主路径。
 - export 不创建快照、不写思源，只写 `ai_workspace/exports/`。

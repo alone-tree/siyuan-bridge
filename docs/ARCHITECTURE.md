@@ -496,7 +496,7 @@ siyuan_bridge_feedback
 
 | 参数              | 类型    | 默认 | 含义                                               |
 | ----------------- | ------- | ---- | -------------------------------------------------- |
-| `path`          | string  | 空   | 可读路径，如 `/Notebook` 或 `/Notebook/Folder` |
+| `path`          | string  | 空   | 可读路径；省略或 `/` 列出笔记本，其他值如 `/Notebook/Folder` 列出直接子文档 |
 | `limit`         | integer | 100  | 最多返回多少个直接子项，1-500                      |
 | `offset`        | integer | 0    | 分页偏移                                           |
 | `notebook_id`   | string  | 空   | 兼容参数，等价于列出该笔记本根目录                 |
@@ -504,7 +504,7 @@ siyuan_bridge_feedback
 
 数据流：
 
-- 无参数时读取 `knowledge_base/notebooks.json`，返回可见笔记本和有效权限。
+- 无参数或 `path=/` 时读取 `knowledge_base/notebooks.json`，返回可见笔记本和有效权限。
 - 有 path / notebook 参数时读取 `docs.jsonl` 和 `notebooks.json`，按完整可读路径计算直接子文档。
 - 返回每个子文档的完整 `document` 路径、`document_id`、有效权限、字数、块数、更新时间、子文档数量（剔除隐藏文档）。
 
@@ -622,6 +622,7 @@ scope：
 | `path`        | string  | 可选       | 首选完整可读路径 `/Notebook/Folder/Doc`   |
 | `notebook_id` | string  | 可选       | 笔记本重名或使用内部路径时消歧              |
 | `if_exists`   | enum    | `reject` | `reject` / `overwrite` / `create_new` |
+| `reference_policy` | enum | `reject` | `overwrite` 删除旧块前的引用策略：`reject` / `break` |
 | `confirmed`   | boolean | 必填       | 必须为 true                                 |
 
 路径语义：
@@ -642,17 +643,18 @@ scope：
 数据流：
 
 1. 校验 `confirmed=true`、title、markdown、if_exists。
-2. 从可见笔记本和文档解析目标路径。
+2. 从可见笔记本和缓存文档解析目标路径，再读取思源当前 live 文档列表重新判断同路径文档，避免外部新建后缓存未刷新导致 `if_exists=reject` 漏检。
 3. 检查目标路径权限必须是 `read_write`。
 4. 拒绝创建 Privacy Rules 文档。
 5. 若目标已存在，按 `if_exists` 决策。
-6. 创建快照。
-7. 去掉与 title 重复的首个 H1，避免重复标题。
-8. 创建文档或覆盖已有文档。
-9. 尝试 pushMsg。
-10. 用文档 ID 短轮询 `getHPathByID`，等待思源暴露目标人类可读路径。
-11. 用系统笔记本 ID 和 Privacy Rules 文档 ID 安全刷新索引。
-12. 返回写入结果、路径同步状态和回滚提示。
+6. `overwrite` 删除旧正文块前检查反链；存在外部引用时默认拒绝。
+7. 创建快照。
+8. 去掉与 title 重复的首个 H1，避免重复标题。
+9. 创建文档或覆盖已有文档。
+10. 尝试 pushMsg。
+11. 用文档 ID 短轮询 `getHPathByID`，等待思源暴露目标人类可读路径。
+12. 用系统笔记本 ID 和 Privacy Rules 文档 ID 安全刷新索引。
+13. 返回写入结果、路径同步状态和回滚提示。
 
 当前实现差距：
 
@@ -684,6 +686,7 @@ scope：
 | `end_id`      | string  | 范围操作可选            | 结束块 ID              |
 | `markdown`    | string  | 部分 action 必填        | 新内容                 |
 | `table_edit`  | object  | table_edit 必填         | 表格编辑对象           |
+| `reference_policy` | enum | `reject` | 删除旧块时的引用策略：`reject` / `break` |
 | `confirmed`   | boolean | 必填                    | 必须为 true            |
 
 支持 actions：
@@ -707,10 +710,11 @@ scope：
 5. 校验 `start_index/start_id` 是否匹配当前文档。
 6. 范围操作校验 `end_index/end_id` 和连续范围。
 7. 根据 action 做类型和参数校验。
-8. 创建快照。
-9. 执行块操作。
-10. 重新读取展示块，返回原内容、新内容或上下文。
-11. 尝试 pushMsg。
+8. 对 `delete` / `multi_block_replace` 计算会消失的目标块及其子孙块 ID，检查外部反链。
+9. 创建快照。
+10. 执行块操作。
+11. 重新读取展示块，返回原内容、新内容或上下文；`multi_block_replace` 的“新内容”会排除本轮已删除的旧块 ID，避免思源块树短暂滞后时误报旧块仍存在。
+12. 尝试 pushMsg。
 
 重要校验：
 
@@ -728,15 +732,11 @@ scope：
 当前实现特点：
 
 - `siyuan_edit` 成功后不会自动刷新 `docs.jsonl` 统计。正文已经修改，但本地索引中的字数/块数可能等下一次 refresh 才更新。当前通常可接受，因为路径和文档 ID 未变；后续若要求统计实时准确，应在每次 edit 后刷新索引，并确保 refresh 调用继续排除系统笔记本和 Privacy Rules。
-- `delete` 和 `multi_block_replace` 可能删除已有块 ID。如果这些块曾被其他文档引用，引用会失效。当前尚未设计引用检查与二次确认机制，后续需要补充。
-
-块引用保留是核心优化方向。思源桥的产品定位是把思源当作 AI 的结构化知识库来处理，尽量接近文档编辑体验，同时尊重思源的块结构系统。实现块引用保留是"像文档一样编辑"的关键一环——用户做内容重组时，跨文档引用链不能断裂。
-
-设计方向（待确认）：
-- single_block_replace 保留块 ID，引用自然有效——这是当前最安全的路径，也是首选路径。
-- 涉及多块删除/替换时，写入前检测目标块是否被其他文档引用。如果有引用，向 AI 报告受影响的文档和引用数量，由 AI 或用户决定是否继续。
-- 不做自动重写引用（不修改其他文档内容来更新引用），只做告知和确认。
-- 具体实现方案（反向链接检测、校验时机、冲突处理）待设计讨论。
+- `single_block_replace` 保留块 ID，是已有引用存在时的首选路径。
+- 所有会让 ID 消失的现有入口都检查 `refs` 反链：`siyuan_edit` 的 delete/multi、`siyuan_create(if_exists=overwrite)`、`siyuan_doc_manage(action=delete)`。
+- 默认 `reference_policy=reject`。可见引用返回文档路径、引用源块 ID 和内容；隐藏或未知来源只返回引用次数和受保护文档数。
+- 同一删除集合内部的引用不阻止操作。只有用户看过冲突报告并明确允许破坏引用后，AI 才能用相同参数加 `reference_policy=break` 重试。
+- 不自动判断内容语义，也不自动重写其他文档中的引用。
 
 历史踩坑：
 
@@ -799,6 +799,7 @@ scope：
 | `new_title`     | string  | rename 必填      | 新标题                                                     |
 | `target_parent` | string  | move 必填        | 目标笔记本或父文档路径                                     |
 | `target_path`   | string  | copy 必填        | 复制目标完整路径                                           |
+| `reference_policy` | enum | `reject` | delete 的引用策略：`reject` / `break` |
 | `confirmed`     | boolean | 部分 action 必填 | rename/move/delete/copy 需要                               |
 
 权限：
@@ -816,7 +817,7 @@ scope：
 1. 解析可见源文档。
 2. 如果 `document` 是路径，先校验当前 live hpath，路径已变化时停止并要求 refresh 后用新路径重试。
 3. 计算源文档权限。
-4. 根据 action 校验 confirmed 和参数；delete 写入前从思源 live SQL 拉取源文档子树并逐篇检查权限；move 写入前检查源文档祖先链和目标父路径权限。
+4. 根据 action 校验 confirmed 和参数；delete 写入前从思源 live SQL 拉取源文档子树并逐篇检查权限，再检查整棵子树中所有将消失的文档/块 ID 的外部反链；move 写入前检查源文档祖先链和目标父路径权限。
 5. `export` 直接导出 Markdown 到 `ai_workspace/exports/`，不创建快照。
 6. 其他 action 先创建快照。
 7. 调用对应思源 API：
@@ -939,7 +940,7 @@ API 设计原则：
 | AI 自动回滚                 | 不做，用户通过思源快照手动恢复                   |
 | WinError 10054              | HTTP 请求加 `Connection: close`                |
 | 附件相对路径                | read 时提取并重写为绝对路径                      |
-| 跨文档块引用断裂            | multi_block_replace/delete 会删除旧块 ID，被引用方失效。尚未实现写入前反向链接检测。核心优化方向 |
+| 跨文档块引用断裂            | 已对 multi/delete/overwrite/文档树删除实现写前反链检查；默认拒绝，用户明确允许后可 `reference_policy=break` |
 | 数据库/属性视图             | 只读渲染为 Markdown 表格，不支持编辑             |
 | rename/move 路径同步延迟    | 写入后用 `getHPathByID` 短轮询，再带系统上下文刷新索引 |
 

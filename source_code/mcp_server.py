@@ -58,6 +58,7 @@ from . import __version__
 
 SERVER_NAME = "siyuan-bridge"
 DEFAULT_SNIPPETS_PER_DOC = 5
+MAX_REFERENCE_DETAILS_PER_BLOCK = 20
 POST_WRITE_SYNC_TIMEOUT = 5.0
 POST_WRITE_SYNC_INTERVAL = 0.25
 
@@ -99,6 +100,7 @@ _ERR_STALE_BLOCK_ID      = "conflict:stale_block_id"
 _ERR_STALE_DOCUMENT_PATH = "conflict:stale_document_path"
 _ERR_STALE_CELL_VALUE    = "conflict:stale_cell_value"
 _ERR_MULTI_DOC_OVERWRITE = "conflict:multi_doc_overwrite"
+_ERR_REFERENCED_BLOCKS    = "conflict:referenced_blocks"
 
 # api — 思源 API 层错误（从 SiYuanApiError 转换）
 _ERR_SNAPSHOT_KEY   = "api:snapshot_key"
@@ -805,6 +807,35 @@ def document_subtree(doc: dict[str, Any], docs: list[dict[str, Any]]) -> list[di
     return result
 
 
+def expand_deleted_block_ids(blocks: list[dict[str, Any]], root_ids: set[str]) -> set[str]:
+    """Include every descendant that disappears when one of *root_ids* is deleted."""
+    children: dict[str, list[str]] = {}
+    for block in blocks:
+        block_id = str(block.get("id") or "").strip()
+        parent_id = str(block.get("parent_id") or "").strip()
+        if block_id and parent_id:
+            children.setdefault(parent_id, []).append(block_id)
+    deleted = {block_id for block_id in root_ids if block_id}
+    pending = list(deleted)
+    while pending:
+        parent_id = pending.pop()
+        for child_id in children.get(parent_id, []):
+            if child_id not in deleted:
+                deleted.add(child_id)
+                pending.append(child_id)
+    return deleted
+
+
+def reference_excerpt(row: dict[str, Any], limit: int = 180) -> str:
+    text = str(row.get("content") or row.get("markdown") or "").strip()
+    text = re.sub(r"\s+", " ", text)
+    if not text:
+        return "（引用块内容为空或无法读取）"
+    if len(text) > limit:
+        return text[:limit].rstrip() + "…"
+    return text
+
+
 def parent_display_path(document_path: str) -> str:
     parts = normalize_display_path(document_path).strip("/").split("/")
     if len(parts) <= 1:
@@ -1458,7 +1489,7 @@ class McpServer:
         limit = clamp_int(args.get("limit"), 100, 1, 500)
         offset = max(int(args.get("offset") or 0), 0)
 
-        if not path and not notebook_id and not notebook_name:
+        if (not path or path == "/") and not notebook_id and not notebook_name:
             # List all notebooks
             notebooks = read_json(self.root / KNOWLEDGE_BASE_DIR / "notebooks.json")
             docs = load_docs(self.root)
@@ -2029,8 +2060,14 @@ class McpServer:
         notebooks = read_json(self.root / KNOWLEDGE_BASE_DIR / "notebooks.json")
         docs = filter_documents(load_docs(self.root), load_privacy_rules(self.root))
         target = resolve_create_target(args, notebooks, docs, title)
-        all_docs = load_docs(self.root)
         privacy = load_privacy_rules(self.root)
+        _profile, client = detect_active_profile(load_config(self.root))
+        all_docs = load_live_docs(client)
+        target.existing_docs = _existing_docs_at_path(
+            filter_documents(all_docs, privacy),
+            target.notebook_id,
+            target.internal_path,
+        )
         target_doc_for_permission = {
             "id": "",
             "notebook_id": target.notebook_id,
@@ -2071,7 +2108,17 @@ class McpServer:
                 + choices
             )
 
-        _profile, client = detect_active_profile(load_config(self.root))
+        reference_notice = ""
+        existing_doc: dict[str, Any] | None = target.existing_docs[0] if target.existing_docs else None
+        if existing_doc and if_exists == "overwrite":
+            existing_doc_id = str(existing_doc.get("id") or "")
+            with ensure_notebooks_open(client, [target.notebook_id]):
+                deleting_ids = {
+                    str(block.get("id") or "")
+                    for block in client.list_document_blocks(existing_doc_id)
+                    if str(block.get("id") or "")
+                }
+            reference_notice = self._protect_referenced_blocks(client, deleting_ids, args)
 
         # Create snapshot before writing
         ts = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -2095,7 +2142,6 @@ class McpServer:
 
         action_status = "created"
         overwritten_blocks: list[DisplayBlock] = []
-        existing_doc: dict[str, Any] | None = target.existing_docs[0] if target.existing_docs else None
 
         with ensure_notebooks_open(client, [target.notebook_id]):
             if existing_doc and if_exists == "overwrite":
@@ -2157,6 +2203,8 @@ class McpServer:
             parts.append(f"**文档 ID：**`{doc_id}`")
         if overwritten_blocks:
             parts.append(f"**覆盖：**已清空并重写 {len(overwritten_blocks)} 个原块，保留当前文档 ID。")
+        if reference_notice:
+            parts.append(f"**引用保护：**{reference_notice}")
         parts.append(f"**端点：**{client.base_url}")
         parts.append(f"**快照：**{snapshot_status}")
         if sync_status is not None:
@@ -2186,6 +2234,136 @@ class McpServer:
                     "请打开思源 -> 设置 -> 关于 -> 数据仓库密钥，初始化密钥后重试。"
                 ) from exc
             raise tool_error(_ERR_SNAPSHOT_FAILED, f"快照创建失败，拒绝写入。错误：{msg}") from exc
+
+    def _protect_referenced_blocks(
+        self,
+        client: Any,
+        deleting_ids: set[str],
+        args: dict[str, Any],
+    ) -> str:
+        policy = str(args.get("reference_policy") or "reject").strip().casefold()
+        if policy not in {"reject", "break"}:
+            raise tool_error(_ERR_INVALID_ENUM, "reference_policy 只支持 reject 或 break，默认 reject。")
+        deleting_ids = {block_id for block_id in deleting_ids if block_id}
+        if not deleting_ids:
+            return ""
+
+        with ensure_notebooks_open(client):
+            live_docs = load_live_docs(client)
+            references = client.list_block_references(sorted(deleting_ids))
+
+        external_refs = [
+            row for row in references
+            if str(row.get("block_id") or "") not in deleting_ids
+            and str(row.get("root_id") or "") not in deleting_ids
+        ]
+        if not external_refs:
+            return ""
+
+        referenced_target_ids = {
+            str(row.get("def_block_id") or "")
+            for row in external_refs
+            if str(row.get("def_block_id") or "")
+        }
+        if policy == "break":
+            return (
+                f"用户已明确允许破坏引用；"
+                f"本次删除 {len(referenced_target_ids)} 个被引用块 ID，影响 {len(external_refs)} 处引用。"
+            )
+
+        privacy = load_privacy_rules(self.root)
+        docs_by_id = {str(doc.get("id") or ""): doc for doc in live_docs}
+        permission_cache: dict[str, str] = {}
+
+        def source_permission(root_id: str) -> str:
+            if root_id not in permission_cache:
+                source_doc = docs_by_id.get(root_id)
+                permission_cache[root_id] = (
+                    document_permission(source_doc, privacy, live_docs)
+                    if source_doc is not None
+                    else "hidden"
+                )
+            return permission_cache[root_id]
+
+        lines = [
+            "操作已拒绝：本次操作会破坏现有块引用。",
+            "",
+            f"即将删除 {len(deleting_ids)} 个块 ID，其中 "
+            f"{len(referenced_target_ids)} 个仍被 {len(external_refs)} 处引用。",
+        ]
+        for target_id in sorted(referenced_target_ids):
+            target_refs = [
+                row for row in external_refs
+                if str(row.get("def_block_id") or "") == target_id
+            ]
+            source_blocks = {
+                str(row.get("block_id") or "")
+                for row in target_refs
+                if str(row.get("block_id") or "")
+            }
+            source_docs = {
+                str(row.get("root_id") or "")
+                for row in target_refs
+                if str(row.get("root_id") or "")
+            }
+            visible_refs = [
+                row for row in target_refs
+                if source_permission(str(row.get("root_id") or "")) != "hidden"
+            ]
+            hidden_refs = [
+                row for row in target_refs
+                if source_permission(str(row.get("root_id") or "")) == "hidden"
+            ]
+            lines.extend([
+                "",
+                f"## 被引用块 `{target_id}`",
+                f"- 引用次数：{len(target_refs)}",
+                f"- 引用块：{len(source_blocks)}",
+                f"- 引用文档：{len(source_docs)}",
+            ])
+
+            if visible_refs:
+                lines.extend(["", "可见引用："])
+                seen_visible: set[tuple[str, str]] = set()
+                visible_count = 0
+                for row in visible_refs:
+                    root_id = str(row.get("root_id") or "")
+                    source_block_id = str(row.get("block_id") or "")
+                    key = (root_id, source_block_id)
+                    if key in seen_visible:
+                        continue
+                    seen_visible.add(key)
+                    if visible_count >= MAX_REFERENCE_DETAILS_PER_BLOCK:
+                        continue
+                    source_doc = docs_by_id[root_id]
+                    lines.extend([
+                        f"- 文档：{display_document_path(source_doc)}",
+                        f"  引用块：`{source_block_id}`",
+                        f"  内容：{reference_excerpt(row)}",
+                    ])
+                    visible_count += 1
+                remaining = len(seen_visible) - visible_count
+                if remaining > 0:
+                    lines.append(f"- 其余 {remaining} 个可见引用块未展开。")
+
+            if hidden_refs:
+                hidden_docs = {
+                    str(row.get("root_id") or "")
+                    for row in hidden_refs
+                    if str(row.get("root_id") or "")
+                }
+                lines.extend([
+                    "",
+                    f"受保护引用：另有 {len(hidden_refs)} 次引用来自 "
+                    f"{len(hidden_docs)} 篇受保护文档，具体信息已隐藏。",
+                ])
+
+        lines.extend([
+            "",
+            "默认拒绝本次操作。只有用户明确允许破坏上述引用关系后，"
+            "才能使用相同参数并额外传入 `reference_policy=\"break\"` 重试。",
+        ])
+        raise tool_error(_ERR_REFERENCED_BLOCKS, "\n".join(lines))
 
     @staticmethod
     def _update_block_preserving_attrs(client: Any, block_id: str, markdown: str) -> None:
@@ -2350,6 +2528,16 @@ class McpServer:
         )
         last_before_append = display_blocks[-1] if display_blocks else None
 
+        reference_notice = ""
+        if action in {"delete", "multi_block_replace"}:
+            with ensure_notebooks_open(client, [notebook_id]):
+                all_block_rows = client.list_document_blocks(doc_id)
+            deleting_ids = expand_deleted_block_ids(
+                all_block_rows,
+                {block.id for block in target_blocks},
+            )
+            reference_notice = self._protect_referenced_blocks(client, deleting_ids, args)
+
         self._create_snapshot_or_raise(client, "siyuan_edit", doc_title)
 
         with ensure_notebooks_open(client, [notebook_id]):
@@ -2397,6 +2585,8 @@ class McpServer:
                     previous_anchor.id if previous_anchor else None,
                     next_anchor.id if next_anchor else None,
                 )
+                deleted_ids = {block.id for block in target_blocks}
+                replaced = [block for block in replaced if block.id not in deleted_ids]
             parts.extend([
                 f"已替换 {len(target_blocks)} 个块：{block_range_label(target_blocks)}",
                 "",
@@ -2487,6 +2677,8 @@ class McpServer:
             "",
             "如需回滚，可通过思源快照手动恢复。",
         ])
+        if reference_notice:
+            parts.extend(["", f"引用保护：{reference_notice}"])
         return "\n".join(parts)
 
     def siyuan_doc_manage(self, args: dict[str, Any]) -> str:
@@ -2552,6 +2744,7 @@ class McpServer:
         copy_target: CreateTarget | None = None
         copy_title = ""
         copy_parent_id = ""
+        reference_notice = ""
         if action == "rename":
             new_title = str(args.get("new_title") or "").strip()
             if not new_title:
@@ -2587,7 +2780,21 @@ class McpServer:
             copy_parent = parent_display_path(copy_target.display_path)
             copy_parent_id, _copy_parent_label = self.resolve_doc_manage_parent(copy_parent)
         elif action == "delete":
-            self._ensure_doc_manage_subtree_writable(client, doc, privacy, action="delete")
+            delete_subtree = self._ensure_doc_manage_subtree_writable(client, doc, privacy, action="delete")
+            deleting_ids = {
+                str(item.get("id") or "")
+                for item in delete_subtree
+                if str(item.get("id") or "")
+            }
+            with ensure_notebooks_open(client, [notebook_id]):
+                for subtree_doc in delete_subtree:
+                    subtree_doc_id = str(subtree_doc.get("id") or "")
+                    deleting_ids.update(
+                        str(block.get("id") or "")
+                        for block in client.list_document_blocks(subtree_doc_id)
+                        if str(block.get("id") or "")
+                    )
+            reference_notice = self._protect_referenced_blocks(client, deleting_ids, args)
 
         snapshot_status = self._create_snapshot_or_raise(client, "siyuan_doc_manage", doc_path)
         sync_status: PostWriteSyncStatus | None = None
@@ -2659,6 +2866,8 @@ class McpServer:
             parts.append("索引：已自动刷新" if refresh_ok else "索引：自动刷新失败，请手动运行 `siyuan_operate(action=\"refresh\")`")
         if action == "delete":
             parts.append("如需回滚，可通过思源快照手动恢复。")
+        if reference_notice:
+            parts.append(f"引用保护：{reference_notice}")
         return "\n".join(parts)
 
     def _ensure_doc_manage_subtree_writable(
@@ -2668,7 +2877,7 @@ class McpServer:
         privacy: PrivacyRules,
         *,
         action: str,
-    ) -> None:
+    ) -> list[dict[str, Any]]:
         notebook_id = str(doc.get("notebook_id") or "")
         with ensure_notebooks_open(client, [notebook_id]):
             live_docs = load_live_docs(client)
@@ -2685,6 +2894,7 @@ class McpServer:
                 "权限不足，子文档中存在只读或隐藏文档，不允许删除整个文档树。"
                 "请让用户调整隐私规则后重试。"
             )
+        return subtree
 
     def _ensure_doc_manage_ancestors_writable(
         self,
@@ -2972,11 +3182,11 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_list",
-            "description": "List visible notebooks or one level of visible documents. No arguments lists notebooks. Provide path=/Notebook or /Notebook/Folder to list only direct child documents at that path. Each row returns effective permission (read_write/read_only), a full readable document path for siyuan_read/siyuan_edit, plus document_id fallback, word count, block count, update date, and descendant document count. Hidden items are not listed. Results are paginated with offset/limit. notebook_id/notebook_name are compatibility shortcuts for path=/Notebook.",
+            "description": "List visible notebooks or one level of visible documents. No arguments or path=/ lists notebooks. Provide path=/Notebook or /Notebook/Folder to list only direct child documents at that path. Each row returns effective permission (read_write/read_only), a full readable document path for siyuan_read/siyuan_edit, plus document_id fallback, word count, block count, update date, and descendant document count. Hidden items are not listed. Results are paginated with offset/limit. notebook_id/notebook_name are compatibility shortcuts for path=/Notebook.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Readable path to list one level under, e.g. /Notebook or /Notebook/Folder. Omit to list all notebooks."},
+                    "path": {"type": "string", "description": "Readable path to list one level under, e.g. /Notebook or /Notebook/Folder. Omit or use / to list all notebooks."},
                     "limit": {"type": "integer", "default": 100, "description": "Maximum direct children to return, 1-500."},
                     "offset": {"type": "integer", "default": 0, "description": "Pagination offset within the direct children of path."},
                     "notebook_id": {"type": "string", "description": "Compatibility shortcut. Lists the root level of this notebook."},
@@ -3020,7 +3230,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_create",
-            "description": "Create or write a SiYuan document. Prefer path as the full readable path including notebook name, e.g. /Notebook/Folder/Doc; the server resolves the notebook ID and internal hpath. If the notebook name is ambiguous, use notebook_id plus an internal path like /Folder/Doc. Creates a SiYuan workspace snapshot before writing. After writing, waits for SiYuan to expose the target path and refreshes the safe index. Existing target behavior is controlled by if_exists: reject refuses by default, overwrite clears all blocks in the existing document and rewrites it while preserving the document ID, create_new asks SiYuan to create another same-name document.",
+            "description": "Create or write a SiYuan document. Prefer path as the full readable path including notebook name, e.g. /Notebook/Folder/Doc; the server resolves the notebook ID and internal hpath. If the notebook name is ambiguous, use notebook_id plus an internal path like /Folder/Doc. Creates a SiYuan workspace snapshot before writing. After writing, waits for SiYuan to expose the target path and refreshes the safe index. Existing target behavior is controlled by if_exists: reject refuses by default, overwrite clears all blocks in the existing document and rewrites it while preserving the document ID, create_new asks SiYuan to create another same-name document. overwrite checks backlinks for every disappearing body block and refuses by default.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -3029,6 +3239,7 @@ def tool_specs() -> list[dict[str, Any]]:
                     "path": {"type": "string", "description": "Preferred: full readable path /Notebook/Folder/Doc. With notebook_id, legacy internal path /Folder/Doc is also accepted. If omitted, notebook_id is required and path defaults to /<title> inside that notebook."},
                     "markdown": {"type": "string", "description": "Markdown content to write."},
                     "if_exists": {"type": "string", "enum": ["reject", "overwrite", "create_new"], "default": "reject", "description": "Behavior when the target path already exists. reject refuses and explains options. overwrite clears all existing blocks and appends markdown, preserving document ID. create_new creates another same-name document."},
+                    "reference_policy": {"type": "string", "enum": ["reject", "break"], "default": "reject", "description": "For overwrite only. reject refuses when any disappearing block ID is referenced. Use break only after the user explicitly confirms that those reported references may be broken."},
                     "confirmed": {"type": "boolean", "description": "Must be true. Writing to SiYuan requires explicit user approval."},
                 },
                 "required": ["title", "markdown", "confirmed"],
@@ -3037,7 +3248,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_edit",
-            "description": "Edit a visible SiYuan document by document path plus reference-read block index and block ID. Requires confirmed=true and creates a SiYuan workspace snapshot before writing. Use siyuan_read(include_block_ids=true) first to get start_index/start_id. Actions: single_block_replace = one existing block -> one block, uses updateBlock, preserves the target block ID and block attrs, so existing block references stay valid. multi_block_replace = one or more existing blocks -> one or more new blocks, inserts new markdown then deletes old blocks, so old block IDs/attrs are not preserved and references to old blocks become invalid. Use multi_block_replace whenever block count may change. insert_after/insert_before do not modify the anchor block. append adds to document end. delete removes blocks. table_edit edits one normal Markdown table block.",
+            "description": "Edit a visible SiYuan document by document path plus reference-read block index and block ID. Requires confirmed=true and creates a SiYuan workspace snapshot before writing. Use siyuan_read(include_block_ids=true) first to get start_index/start_id. Actions: single_block_replace = one existing block -> one block, uses updateBlock, preserves the target block ID and block attrs, so existing block references stay valid. multi_block_replace = one or more existing blocks -> one or more new blocks, inserts new markdown then deletes old blocks, so old block IDs/attrs are not preserved. multi_block_replace and delete check backlinks for every disappearing block ID and refuse by default. insert_after/insert_before do not modify the anchor block. append adds to document end. table_edit edits one normal Markdown table block.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -3049,6 +3260,7 @@ def tool_specs() -> list[dict[str, Any]]:
                     "end_index": {"type": "integer", "description": "Inclusive global display block index for multi_block_replace/delete range operations."},
                     "end_id": {"type": "string", "description": "Inclusive end block ID for multi_block_replace/delete range operations."},
                     "markdown": {"type": "string", "description": "Markdown to insert or replace with. For single_block_replace this must render as exactly one display block. For multi_block_replace it may render as one or more new blocks."},
+                    "reference_policy": {"type": "string", "enum": ["reject", "break"], "default": "reject", "description": "For delete and multi_block_replace only. reject refuses when any disappearing block ID is referenced. Use break only after the user explicitly confirms that those reported references may be broken."},
                     "table_edit": {
                         "type": "object",
                         "description": "Required for action=table_edit on a normal Markdown table block. Use the table coordinate view from siyuan_read(include_block_ids=true): row=0 is header, row>=1 are data rows, column_index is 1-based.",
@@ -3074,7 +3286,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_doc_manage",
-            "description": "Manage visible SiYuan documents at the document-tree level, not document body editing. Actions: rename, move, delete, copy, export. copy/export are allowed for readable documents. rename/move/delete require read_write permission, confirmed=true, and create a SiYuan workspace snapshot before writing. delete affects the whole subtree and is rejected if any descendant is not read_write. move preserves the moved subtree but is rejected if the source document inherits restrictions from any non-read_write ancestor or if the target parent is not read_write. copy uses SiYuan duplicateDoc for the source document only, requires target_path and confirmed=true, then renames/moves the duplicate. After rename/move/delete/copy, waits for SiYuan path sync and refreshes the safe index. export writes Markdown to ai_workspace/exports and does not modify SiYuan.",
+            "description": "Manage visible SiYuan documents at the document-tree level, not document body editing. Actions: rename, move, delete, copy, export. copy/export are allowed for readable documents. rename/move/delete require read_write permission, confirmed=true, and create a SiYuan workspace snapshot before writing. delete affects the whole subtree, is rejected if any descendant is not read_write, and checks backlinks for every document/block ID that would disappear. move preserves the moved subtree but is rejected if the source document inherits restrictions from any non-read_write ancestor or if the target parent is not read_write. copy uses SiYuan duplicateDoc for the source document only, requires target_path and confirmed=true, then renames/moves the duplicate. After rename/move/delete/copy, waits for SiYuan path sync and refreshes the safe index. export writes Markdown to ai_workspace/exports and does not modify SiYuan.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -3084,6 +3296,7 @@ def tool_specs() -> list[dict[str, Any]]:
                     "new_title": {"type": "string", "description": "Required for action=rename."},
                     "target_parent": {"type": "string", "description": "Required for action=move. Visible target notebook or parent document path, e.g. /Notebook or /Notebook/Folder."},
                     "target_path": {"type": "string", "description": "Required for action=copy. Full readable target path /Notebook/Folder/New Doc. The target path must not already exist and must be read_write."},
+                    "reference_policy": {"type": "string", "enum": ["reject", "break"], "default": "reject", "description": "For action=delete only. reject refuses when any disappearing document/block ID is referenced. Use break only after the user explicitly confirms that those reported references may be broken."},
                     "confirmed": {"type": "boolean", "description": "Required for rename/move/delete/copy. Not required for export."},
                 },
                 "required": ["action"],

@@ -4,6 +4,24 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
+## 2026-07-26：v1.0.5 块 ID 反链保护
+
+- 所有现有的 ID 删除入口统一增加写前反链检查：`siyuan_edit` 的 delete/multi、`siyuan_create(if_exists=overwrite)`、`siyuan_doc_manage(action=delete)`。
+- 默认 `reference_policy=reject`；冲突时返回被引用 ID、引用次数、可见来源文档路径、引用源块 ID 和内容。隐藏或未知来源只返回聚合数量，不泄露标题、路径、块 ID 或内容。
+- 同一删除集合内部的引用不拦截。只有用户看过冲突报告并明确允许后，AI 才能传 `reference_policy=break`；不引入确认 token，也不自动重写其他文档的引用。
+- 多块或容器块删除会递归覆盖随同消失的子孙块 ID；文档删除覆盖整棵子树的文档 ID 和正文块 ID。
+- 底层通过只读 SQL 查询思源 `refs` 表并关联引用源 `blocks`，不向 MCP 暴露任意 SQL。
+- 验证：完整单元测试 267 passed。Hermes 新会话使用隔离的 `siyuan-bridge-test` MCP 创建目标块和跨文档引用；默认删除返回 `conflict:referenced_blocks` 且未执行，明确传 `reference_policy=break` 后删除成功。两个临时文档已删除，搜索确认无残留。
+
+## 2026-07-26：v1.0.5 创建防重、编辑摘要与根路径修复
+
+- `siyuan_create(if_exists=reject)` 创建前改用思源 live 文档列表重新判断同路径文档，避免文档由思源 UI、官方 MCP 或其他客户端新建后，本地索引未刷新而错误创建同名副本。
+- `siyuan_edit(action=multi_block_replace)` 的“新内容”摘要排除本轮已删除的旧块 ID，避免思源块树写后短暂滞后时把旧块误报为仍然存在。
+- `siyuan_list(path="/")` 与无参数调用统一为列出可见笔记本。
+- 真实复现：外部 MCP 创建文档后，旧版思源桥 `reject` 新建出第二个 ID；多块替换实际只剩新块，但返回摘要同时列出新旧块；根路径返回“未找到可见路径：/”。
+- 验证：新增 3 个回归测试，相关 create/list/multi-block 测试 28 passed，完整测试 259 passed。Hermes 新会话通过测试插件真实调用三个场景，确认 live 冲突拒绝、根路径列表、多块摘要与最终读回全部正确，临时文档已清理。
+- 版本：Python MCP Server 与插件清单统一升级到 `1.0.5`。
+
 ## 2026-07-25：遥测测试事件拒绝与有效匿名 ID 过滤
 
 - 原因：复查 D1 发现 7 月 22—23 日新增 17 个单次匿名 ID，事件 `mcp_ver` 均为 `1.0.0`，调用组合与旧版 `TestWithTelemetry` 完全一致。此前 dummy endpoint 修复只覆盖当前主分支，旧 Tag、旧构建产物或其他设备上的旧代码仍可向生产端点上传。

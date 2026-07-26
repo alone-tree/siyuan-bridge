@@ -150,6 +150,22 @@ class SiYuanClient:
             raise SiYuanApiError("Unexpected blocks response shape")
         return data
 
+    def list_block_references(self, block_ids: list[str]) -> list[dict[str, Any]]:
+        """Return reference rows whose definition block is in *block_ids*."""
+        normalized = list(dict.fromkeys(str(block_id).strip() for block_id in block_ids if str(block_id).strip()))
+        rows: list[dict[str, Any]] = []
+        for start in range(0, len(normalized), 200):
+            chunk = normalized[start:start + 200]
+            quoted = ", ".join("'" + block_id.replace("'", "''") + "'" for block_id in chunk)
+            stmt = (
+                "SELECT r.def_block_id, r.block_id, r.root_id, r.type, "
+                "b.content, b.markdown, b.type AS block_type "
+                "FROM refs r LEFT JOIN blocks b ON b.id = r.block_id "
+                f"WHERE r.def_block_id IN ({quoted})"
+            )
+            rows.extend(self.query_sql(stmt))
+        return rows
+
     def get_child_blocks(self, block_id: str) -> list[dict[str, Any]]:
         data = self._post("/api/block/getChildBlocks", {"id": block_id})
         if not isinstance(data, list):
