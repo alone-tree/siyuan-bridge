@@ -4,6 +4,16 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
+## 2026-07-26：v1.0.5 系统笔记本与启动包升级
+
+- 系统笔记本扩展为六篇固定文档；新增 MCP 使用指南、工作空间索引创建指南，并将旧“AI 使用指南 / AI Guide”按原文档 ID 更名为“用户个性化要求 / User Preferences”。
+- 新增 `knowledge_base/system_state.json`，按当前系统笔记本 ID 记录笔记本和六篇文档 ID。新旧名称同时存在时使用新名称，旧文档保留但忽略。
+- 插件激活时自动协调系统笔记本；MCP 启动仍保留幂等兜底。About 由开发者模板维护，用户个性化要求和工作空间索引不覆盖，两个指南仅在用户未修改时随模板更新，并可在插件面板按原 ID 重置。
+- `siyuan_start` 返回思源版本/工作空间/隐私状态、完整 MCP 指南、完整用户个性化要求、笔记本概览和完整工作空间索引；索引超过 30 天只在返回结果提示，不改写思源文档。
+- 系统笔记本恢复为普通可读写笔记本，仅 JSON 中记录的 Privacy Rules 文档 ID 硬隔离；同名普通文档不受影响。
+- 真实升级验证：旧用户个性化要求和工作空间索引的文档 ID、正文均保留，两篇新指南创建成功，Privacy Rules 对外仍隐藏；Hermes 新会话无需额外 refresh 即看到 5 篇可见系统文档。
+- 自动化验证：`python -m pytest tests -q` 为 284 passed；三个 JS 入口语法检查通过；`dist/package.zip` 构建成功。插件 UI 激活流程留给测试空间手动验收。
+
 ## 2026-07-26：v1.0.5 块 ID 反链保护
 
 - 所有现有的 ID 删除入口统一增加写前反链检查：`siyuan_edit` 的 delete/multi、`siyuan_create(if_exists=overwrite)`、`siyuan_doc_manage(action=delete)`。
