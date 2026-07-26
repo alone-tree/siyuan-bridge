@@ -25,6 +25,7 @@ env/
 Thumbs.db
 .idea/
 .vscode/
+/.workbuddy/
 /.playwright-mcp
 /siyuan-index-builder-workspace/iteration-1
 /ai_workspace/attachments
