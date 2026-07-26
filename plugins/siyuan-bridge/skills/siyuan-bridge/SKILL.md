@@ -9,14 +9,14 @@ description: Use when the user wants to read, search, or write their private SiY
 
 ## 启动流程
 
-1. 调用 `siyuan_start` —— 刷新安全索引，确保系统笔记本及其文档就绪，返回启动包（语言偏好、笔记本概览表、工作空间索引（如存在）、AI 使用指南、隐私规则状态）。
+1. 调用 `siyuan_start` —— 刷新安全索引，确保系统笔记本及其六篇文档就绪，返回启动包（运行状态、MCP 使用指南、用户个性化要求、笔记本概览、工作空间索引）。
 2. 阅读返回的启动包。
-3. **遵循启动包中的语言偏好。** 除非用户明确要求，否则使用启动包声明的语言回复用户。
+3. 遵循启动包中的 MCP 使用指南和用户个性化要求。
 4. **以工作空间索引为导航主入口。** 快速导航表将用户意图映射到笔记本，笔记本详情是 AI 扫描后浓缩的结构摘要和判断——信任它来定位相关笔记本。
-5. 若启动包不包含工作空间索引，提示用户："我可以先快速扫一遍你的笔记本结构，创建一个导航索引，之后每次新会话都能更快定位。"
+5. 若启动包提示用户尚未创建或长期未更新工作空间索引，先询问用户是否需要创建或更新。具体方法见系统笔记本中的《工作空间索引创建指南》。
 6. 用 `siyuan_list`（带 `notebook_id`）查看单个笔记本的文档树，含有效权限、字数和更新时间。
 7. 用 `siyuan_read` 按需深读。始终按展示块窗口返回，不截断字符。始终返回大纲（标题→block 位置映射）。长文档用 `block_start=N` 翻页继续阅读，用 `block_limit` 和 `token_budget` 控制窗口大小。需要精确跨文档块引用或编辑定位时，开启 `include_block_ids=true`（引用阅读模式）。
-8. 遵循启动包中 AI 使用指南的持久偏好。系统笔记本 `思源桥` 中还有一篇 `/关于思源桥`（给人看的说明），普通任务无需读取。
+8. 系统笔记本 `思源桥` / `SiYuan Bridge` 和普通笔记本一样可读写；只有 Privacy Rules 文档本身被硬隔离。
 
 若 MCP 工具不可用，告知用户思源桥 MCP 未注册或不可达。不要回退到扫描文件。
 
@@ -31,7 +31,7 @@ description: Use when the user wants to read, search, or write their private SiY
 
 ## Tool Use Hints
 
-- `siyuan_start` —— 始终最先调用。返回语言偏好、笔记本概览、Workspace Index、AI Guide、隐私规则状态。
+- `siyuan_start` —— 始终最先调用。返回运行状态、MCP Usage Guide、User Preferences、笔记本概览和 Workspace Index。
 - `siyuan_find` —— 搜索知识库，通过思源 API 实时搜索后经隐私规则过滤返回结果。
 - `siyuan_read` —— 只读取可见文档；隐藏文档和隐私规则文档即使已知 ID 也不会被读取。
 - `siyuan_read` / `siyuan_edit` / `siyuan_doc_manage` 使用路径定位时会校验思源当前真实路径。若提示路径已过期，先调用 `siyuan_operate(action="refresh")`，再用当前真实路径重试；或改用 `document_id`。
@@ -47,7 +47,7 @@ description: Use when the user wants to read, search, or write their private SiY
 - 编辑普通 Markdown 表格时，使用引用阅读返回的网格坐标：`row=0` 是表头，`row>=1` 是数据行，`column_index` 从 1 开始。表格不是数据库，不要把表头、字段或多维表语义混在一起。
 - `siyuan_operate` —— `action=refresh` 会话中途刷新安全索引，不清理 `ai_workspace/`；`action=sync` 调用思源内置默认同步，相当于点击思源同步按钮，并返回当前同步状态。同步默认等待 10 秒；慢同步可设置 `timeout_seconds` 到 5-120 秒，该参数只改变 MCP 等待时间，不改变思源同步行为。超时说明同步尚未在等待窗口内完成，不等同于思源未启动。只有 `siyuan_start` 会在新会话启动时清理 workspace。
 - `siyuan_bridge_feedback` —— 通过对话提交对思源桥 MCP 的反馈。type 为 bug/feature/idea，title 和 description 必填，contact 可选。不修改思源内容，不需要 confirmed=true，即使思源未启动也可使用（只要配置了遥测端点）。
-- 系统笔记本 `思源桥` / `SiYuan Bridge` 及其文档会被自动创建和维护。
+- 系统笔记本 `思源桥` / `SiYuan Bridge` 及其六篇固定文档会被自动创建和维护。MCP 使用指南和工作空间索引创建指南允许用户修改，并可在插件设置中重置。
 
 ## Safety Rules
 
@@ -58,7 +58,7 @@ description: Use when the user wants to read, search, or write their private SiY
 - 不要全量扫描 `knowledge_base/tree.md` —— 使用 `siyuan_start` 返回的概览表。
 - 长文档不要一次性塞进回复 —— 使用 `siyuan_read` 的 `block_start` 参数分段翻页读取。
 - 派生分析和草稿放在 `ai_workspace/`。
-- 系统笔记本中的文档不作为用户原始资料。不要把 AI Guide、Workspace Index、About 中的内容当作用户的知识库内容。
+- 注意区分系统文档的用途：User Preferences 是用户写给 AI 的要求，Workspace Index 是导航，About 和两篇指南是工具说明。
 
 ## Cross-References
 

@@ -129,9 +129,9 @@
 
       <rect x="1000" y="225" width="150" height="130" rx="8" class="node purple"/>
       <text x="1022" y="261" class="title">系统笔记本</text>
-      <text x="1022" y="289" class="text">AI Guide</text>
+      <text x="1022" y="289" class="text">Guides / Preferences</text>
       <text x="1022" y="313" class="text">Workspace Index</text>
-      <text x="1022" y="337" class="text">Privacy Rules</text>
+      <text x="1022" y="337" class="text">About / Privacy Rules</text>
 
       <rect x="1000" y="425" width="150" height="105" rx="8" class="node red"/>
       <text x="1022" y="461" class="title">隐私硬边界</text>
@@ -239,7 +239,7 @@
       <rect x="640" y="445" width="210" height="105" rx="8" class="node purple"/>
       <text x="663" y="481" class="title">agent_notebook.py</text>
       <text x="663" y="509" class="text">系统笔记本服务层</text>
-      <text x="663" y="533" class="text">AI Guide / Index / About</text>
+      <text x="663" y="533" class="text">六篇文档 / ID 注册 / 模板</text>
 
       <rect x="640" y="585" width="210" height="82" rx="8" class="node blue"/>
       <text x="663" y="621" class="title">telemetry.py</text>
@@ -253,12 +253,12 @@
       <rect x="930" y="220" width="200" height="110" rx="8" class="node yellow"/>
       <text x="953" y="256" class="title">本地文件</text>
       <text x="953" y="284" class="text">config.local.json</text>
-      <text x="953" y="308" class="text">knowledge_base/ / ai_workspace/</text>
+      <text x="953" y="308" class="text">system_state.json / 安全索引</text>
 
       <rect x="930" y="380" width="200" height="120" rx="8" class="node purple"/>
       <text x="953" y="416" class="title">系统笔记本</text>
-      <text x="953" y="444" class="text">AI Guide / Workspace Index</text>
-      <text x="953" y="468" class="text">About / Privacy Rules</text>
+      <text x="953" y="444" class="text">Guides / User Preferences</text>
+      <text x="953" y="468" class="text">Index / About / Privacy Rules</text>
 
       <rect x="930" y="565" width="200" height="82" rx="8" class="node blue"/>
       <text x="953" y="601" class="title">Worker + D1</text>
@@ -337,10 +337,10 @@ flowchart TD
   E["siyuan_start 再次探测<br/>load_config()<br/>detect_active_profile()"]
   F["读取思源版本<br/>client.version()"]
   G["初始化遥测会话<br/>set_siyuan_version()<br/>load_anonymous_id()<br/>ensure_session_id()"]
-  H["确保系统笔记本<br/>ensure_agent_notebook()<br/>AI Guide / About / Privacy Rules<br/>Workspace Index 只查找，不自动创建"]
+  H["协调系统笔记本<br/>ensure_agent_notebook()<br/>六篇固定文档 + 旧名迁移<br/>校验 system_state.json 文档 ID"]
   I["缓存隐私规则<br/>write_privacy_rules_cache()<br/>不向 AI 暴露规则内容"]
   J["清理并刷新索引<br/>清理 ai_workspace/ 非 README<br/>refresh_index(system ids)"]
-  K["组装启动包<br/>build_language_config()<br/>build_notebook_overview()<br/>Workspace Index + AI Guide"]
+  K["组装启动包<br/>状态 + MCP Usage Guide<br/>User Preferences + 概览<br/>Workspace Index + 临时过期提醒"]
   L["返回 MCP content<br/>启动包 Markdown<br/>isError = false"]
   M["返回错误 content<br/>连接/API/参数错误<br/>isError = true"]
   N["遥测收尾（仅 upload）<br/>record_event()<br/>_fire_upload()<br/>失败静默，不影响结果"]

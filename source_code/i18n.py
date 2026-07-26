@@ -21,6 +21,8 @@ LEGACY_NOTEBOOK_NAMES: dict[str, str] = {
 
 SYSTEM_DOC_KEYS = [
     "ai_guide",
+    "mcp_usage_guide",
+    "workspace_index_guide",
     "workspace_index",
     "about",
     "privacy_rules",
@@ -30,6 +32,10 @@ SYSTEM_DOC_KEYS = [
 # notebooks/documents created under the old project name "SiYuan Agent Bridge / 思源代理桥".
 # Particularly "关于Siyuan Agent Bridge" was observed in the wild (hybrid zh-CN prefix + en notebook name).
 LEGACY_DOC_NAMES: dict[str, list[str]] = {
+    "ai_guide": [
+        "AI 使用指南",
+        "AI Guide",
+    ],
     "about": [
         "关于思源代理桥",
         "About SiYuan Agent Bridge",
@@ -39,8 +45,16 @@ LEGACY_DOC_NAMES: dict[str, list[str]] = {
 
 SYSTEM_DOC_NAMES: dict[str, dict[str, str]] = {
     "ai_guide": {
-        "zh-CN": "AI 使用指南",
-        "en": "AI Guide",
+        "zh-CN": "用户个性化要求",
+        "en": "User Preferences",
+    },
+    "mcp_usage_guide": {
+        "zh-CN": "MCP 使用指南",
+        "en": "MCP Usage Guide",
+    },
+    "workspace_index_guide": {
+        "zh-CN": "工作空间索引创建指南",
+        "en": "Workspace Index Guide",
     },
     "workspace_index": {
         "zh-CN": "工作空间索引",
@@ -57,6 +71,11 @@ SYSTEM_DOC_NAMES: dict[str, dict[str, str]] = {
 }
 
 AI_GUIDE_TEMPLATES: dict[str, str] = {
+    "zh-CN": "> 请在这里写下希望 AI 长期遵循的个性化要求。\n",
+    "en": "> Write the preferences you want AI to follow here.\n",
+}
+
+LEGACY_AI_GUIDE_TEMPLATES: dict[str, str] = {
     "zh-CN": (
         "# AI 使用指南\n\n"
         "此文档存储给 AI 的长期规则。你可以在这里写下偏好、重点笔记本、写作风格和限制。\n\n"
@@ -77,6 +96,11 @@ AI_GUIDE_TEMPLATES: dict[str, str] = {
         "## Preferences & Rules\n\n"
         "> TODO: Add your long-term preferences here.\n"
     ),
+}
+
+WORKSPACE_INDEX_PLACEHOLDERS: dict[str, str] = {
+    "zh-CN": "用户尚未创建工作空间索引，请询问用户是否需要创建。创建方法见《工作空间索引创建指南》。\n",
+    "en": "The user has not created a Workspace Index. Ask whether they want one. See the Workspace Index Guide for instructions.\n",
 }
 
 PRIVACY_RULES_TEMPLATES: dict[str, str] = {
@@ -133,20 +157,22 @@ PRIVACY_RULES_TEMPLATES: dict[str, str] = {
 
 ABOUT_TEMPLATES: dict[str, str] = {
     "zh-CN": (
-        "<!-- template_version: 4 -->\n\n"
+        "<!-- template_version: 5 -->\n\n"
         "# 关于思源桥\n\n"
-        "本文档由思源桥自动维护，可能在刷新时更新。请不要在这里记录个人内容。\n\n"
+        "本文档由思源桥自动维护并会被系统覆盖。请不要在这里记录重要内容。\n\n"
         "思源桥是连接思源笔记和 AI 助手的本地桥接工具。"
         "它让 AI 在隐私规则保护下阅读、搜索和维护你的思源知识库。\n\n"
         "## 当前工具能力\n\n"
-        "- `siyuan_start`：启动入口，刷新安全索引并返回笔记本概览、工作空间索引和 AI 使用指南。\n"
+        "- `siyuan_start`：启动入口，刷新安全索引并返回 MCP 使用指南、用户个性化要求、笔记本概览和工作空间索引。\n"
         "- `siyuan_list`：列出可见笔记本和文档树。\n"
         "- `siyuan_find`：搜索可见知识库。\n"
         "- `siyuan_read`：按块窗口阅读文档；需要编辑时可开启引用阅读，取得块序号和块 ID。\n"
         "- `siyuan_create`：创建新文档。\n"
         "- `siyuan_edit`：基于引用阅读定位进行结构化编辑，支持替换、插入、追加、删除和普通 Markdown 表格编辑。\n\n"
-        "## 系统笔记本里的四份文档\n\n"
-        "- **AI 使用指南**：给 AI 看的长期规则，你可以在这里写下偏好、重点笔记本、写作风格和限制。\n"
+        "## 系统笔记本里的六份文档\n\n"
+        "- **MCP 使用指南**：告诉 AI 如何组合使用思源桥工具以及需要避免的常见问题。你可以修改，也可以在插件设置中重置。\n"
+        "- **工作空间索引创建指南**：指导 AI 创建和更新工作空间索引。你可以修改，也可以在插件设置中重置。\n"
+        "- **用户个性化要求**：你写给 AI 的长期要求，系统只确保它存在，不覆盖正文。\n"
         "- **工作空间索引**：AI 生成的语义导航索引，帮助新会话快速了解这个工作空间里有什么。\n"
         "- **隐私规则**：由人类在思源中维护的 Markdown 表格，控制哪些笔记对 AI 隐藏或只读。AI 无法读取此文档。\n"
         "- **关于思源桥**：就是本文档，给人看的工具说明。\n\n"
@@ -154,24 +180,26 @@ ABOUT_TEMPLATES: dict[str, str] = {
         "你平时正常在思源里写笔记。需要时告诉 AI「帮我查一下笔记里关于 XX 的内容」。"
         "如果要让 AI 修改文档，先让它读取目标文档并确认要修改的位置；写入前会创建思源工作空间快照。"
         "如果某些笔记不想被 AI 看到或想限制为只读，在隐私规则文档的表格里添加规则即可。"
-        "不要删除或隐藏这个系统笔记本。\n\n"
+        "系统笔记本可以像普通笔记本一样被 AI 读取和维护，只有隐私规则文档本身对 AI 硬隔离。\n\n"
         "更多信息请阅读项目 README、项目网站，或联系开发者。\n"
     ),
     "en": (
-        "<!-- template_version: 4 -->\n\n"
+        "<!-- template_version: 5 -->\n\n"
         "# About SiYuan Bridge\n\n"
-        "This document is maintained by SiYuan Bridge and may be updated during refresh. Do not store personal notes here.\n\n"
+        "This document is maintained and overwritten by SiYuan Bridge. Do not store important content here.\n\n"
         "SiYuan Bridge is a local bridge between SiYuan notes and AI agents, "
         "letting AI read, search, and maintain your knowledge base under privacy rules.\n\n"
         "## Current Tool Capabilities\n\n"
-        "- `siyuan_start`: startup entry, refreshes the safe index and returns notebook overview, Workspace Index, and AI Guide.\n"
+        "- `siyuan_start`: startup entry, refreshes the safe index and returns the MCP Usage Guide, User Preferences, notebook overview, and Workspace Index.\n"
         "- `siyuan_list`: lists visible notebooks and document trees.\n"
         "- `siyuan_find`: searches the visible knowledge base.\n"
         "- `siyuan_read`: reads documents by block windows; reference reading exposes block indexes and IDs for editing.\n"
         "- `siyuan_create`: creates new documents.\n"
         "- `siyuan_edit`: structured editing based on reference-reading coordinates, including replace, insert, append, delete, and normal Markdown table edits.\n\n"
-        "## Four Documents in This Notebook\n\n"
-        "- **AI Guide**: Long-term instructions for AI — your preferences, important notebooks, writing style, and constraints.\n"
+        "## Six Documents in This Notebook\n\n"
+        "- **MCP Usage Guide**: Tool combinations and important pitfalls. You may edit it or reset it in plugin settings.\n"
+        "- **Workspace Index Guide**: Instructions for creating and updating the Workspace Index. You may edit it or reset it in plugin settings.\n"
+        "- **User Preferences**: Your long-term instructions for AI. The system only ensures that it exists and never overwrites its body.\n"
         "- **Workspace Index**: AI-generated semantic navigation map for new sessions.\n"
         "- **Privacy Rules**: Human-maintained Markdown tables controlling which notes are hidden or read-only from AI. AI cannot read this document.\n"
         "- **About SiYuan Bridge**: This document — a human-readable introduction to the tool.\n\n"
@@ -179,12 +207,12 @@ ABOUT_TEMPLATES: dict[str, str] = {
         "Write notes in SiYuan as usual. When needed, ask AI to search your notes. "
         "When asking AI to edit, let it read the target document first and confirm the target position; a SiYuan workspace snapshot is created before writing. "
         "To hide or restrict content from AI, add rules in the Privacy Rules document tables. "
-        "Do not delete or hide this system notebook.\n\n"
+        "The system notebook is otherwise handled like a normal notebook; only the Privacy Rules document is hard-isolated from AI.\n\n"
         "For more details, read the project README, visit the project website, or contact the developer.\n"
     ),
 }
 
-ABOUT_TEMPLATE_VERSION_MARKER = "<!-- template_version: 4 -->"
+ABOUT_TEMPLATE_VERSION_MARKER = "<!-- template_version: 5 -->"
 
 
 @dataclass(frozen=True)

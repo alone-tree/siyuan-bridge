@@ -41,7 +41,7 @@ from .agent_notebook import (
     is_privacy_rules_document,
     is_system_notebook_name,
 )
-from .i18n import build_language_config
+from .i18n import get_doc_name
 from .telemetry import (
     _resolve_proxy,
     _with_telemetry,
@@ -61,6 +61,31 @@ DEFAULT_SNIPPETS_PER_DOC = 5
 MAX_REFERENCE_DETAILS_PER_BLOCK = 20
 POST_WRITE_SYNC_TIMEOUT = 5.0
 POST_WRITE_SYNC_INTERVAL = 0.25
+
+
+def workspace_index_age_days(updated: str, now: datetime | None = None) -> int | None:
+    value = str(updated or "").strip()
+    if len(value) < 8:
+        return None
+    fmt = "%Y%m%d%H%M%S" if len(value) >= 14 else "%Y%m%d"
+    try:
+        changed_at = datetime.strptime(value[:14] if len(value) >= 14 else value[:8], fmt)
+    except ValueError:
+        return None
+    current = now or datetime.now()
+    return max((current - changed_at).days, 0)
+
+
+def format_siyuan_updated(updated: str) -> str:
+    value = str(updated or "").strip()
+    if len(value) >= 14:
+        return (
+            f"{value[:4]}-{value[4:6]}-{value[6:8]} "
+            f"{value[8:10]}:{value[10:12]}"
+        )
+    if len(value) >= 8:
+        return f"{value[:4]}-{value[4:6]}-{value[6:8]}"
+    return "未知"
 
 # ---------------------------------------------------------------------------
 # Error codes for telemetry — category:detail two-level encoding
@@ -1288,6 +1313,50 @@ class McpServer:
             privacy_rules_doc_id=state.privacy_rules_doc_id,
         )
 
+    def _wait_for_system_documents(
+        self,
+        client: SiYuanClient,
+        state: AgentNotebookState,
+    ) -> None:
+        expected = {
+            state.ai_guide_doc_id: get_doc_name("ai_guide", state.language),
+            state.mcp_usage_guide_doc_id: get_doc_name("mcp_usage_guide", state.language),
+            state.workspace_index_guide_doc_id: get_doc_name(
+                "workspace_index_guide", state.language
+            ),
+            state.workspace_index_doc_id: get_doc_name("workspace_index", state.language),
+            state.about_doc_id: get_doc_name("about", state.language),
+            state.privacy_rules_doc_id: get_doc_name("privacy_rules", state.language),
+        }
+        expected = {
+            doc_id: title
+            for doc_id, title in expected.items()
+            if doc_id and title
+        }
+        deadline = time.monotonic() + POST_WRITE_SYNC_TIMEOUT
+        while time.monotonic() < deadline:
+            live_docs = {
+                str(doc.get("id") or ""): normalize_display_path(
+                    str(doc.get("hpath") or "")
+                ).strip("/")
+                for doc in load_live_docs(client)
+            }
+            if all(
+                live_docs.get(doc_id, "").casefold() == title.casefold()
+                for doc_id, title in expected.items()
+            ):
+                return
+            time.sleep(POST_WRITE_SYNC_INTERVAL)
+        missing = [
+            f"{title} ({doc_id})"
+            for doc_id, title in expected.items()
+            if live_docs.get(doc_id, "").casefold() != title.casefold()
+        ]
+        raise SiYuanApiError(
+            "系统笔记本文档路径尚未完成同步，请稍后重试："
+            + "、".join(missing)
+        )
+
     def _wait_for_hpath(self, client: SiYuanClient, doc_id: str, expected_hpath: str) -> PostWriteSyncStatus:
         expected = normalize_display_path(expected_hpath).casefold()
         deadline = time.monotonic() + POST_WRITE_SYNC_TIMEOUT
@@ -1345,6 +1414,7 @@ class McpServer:
 
         # Ensure system notebook and parse privacy rules
         state = ensure_agent_notebook(client, self.root, config_language=config.language or None)
+        self._wait_for_system_documents(client, state)
         nb_id = state.notebook_id
 
         # Cache privacy rules for other tools
@@ -1368,61 +1438,79 @@ class McpServer:
             privacy_rules_doc_id=state.privacy_rules_doc_id,
         )
 
-        lang_config = build_language_config(state.language)
         overview = build_notebook_overview(self.root)
+        overview = re.sub(r"^# [^\n]+\n+", "", overview).strip()
+        total_ignore = len(state.privacy_rules.ignore)
+        total_permissions = len(state.privacy_rules.permissions)
+        nb_rules = [
+            rule
+            for rule in state.privacy_rules.ignore + state.privacy_rules.permissions
+            if rule.get("scope") == "notebook"
+        ]
+        doc_rules = [
+            rule
+            for rule in state.privacy_rules.ignore + state.privacy_rules.permissions
+            if rule.get("scope") == "document"
+        ]
+        privacy_status = (
+            f"已正常加载（{len(nb_rules)} 条笔记本规则，{len(doc_rules)} 条文档规则）"
+            if total_ignore or total_permissions
+            else "已正常加载（无规则）"
+        )
         parts: list[str] = [
             "# 思源桥启动包",
             "",
-            f"思源连接：正常，版本 {version}",
-            f"已连接工作空间：**{profile.name}**",
-            f"系统笔记本：`{state.notebook_name}`（`{nb_id}`）",
+            (
+                f"思源版本：{version}｜当前工作空间：**{profile.name}**｜"
+                f"隐私规则：{privacy_status}"
+            ),
             "",
-            lang_config.startup_header,
+            "## MCP 使用指南",
+            "",
+            (
+                state.mcp_usage_guide_markdown.strip()
+                if state.mcp_usage_guide_markdown
+                else "（MCP 使用指南为空）"
+            ),
+            "",
+            "## 用户个性化要求",
+            "",
+            (
+                state.ai_guide_markdown.strip()
+                if state.ai_guide_markdown
+                else "（用户尚未填写个性化要求）"
+            ),
+            "",
+            "## 笔记本概览和统计",
             "",
             overview,
+            "",
+            "## 工作空间索引",
+            "",
+            f"最后更新时间：{format_siyuan_updated(state.workspace_index_updated)}",
         ]
 
-        # Privacy rules status (no specific rule details exposed)
-        total_ignore = len(state.privacy_rules.ignore)
-        total_permissions = len(state.privacy_rules.permissions)
-        if total_ignore > 0 or total_permissions > 0:
-            nb_ignore = [r for r in state.privacy_rules.ignore if r.get("scope") == "notebook"]
-            doc_ignore = [r for r in state.privacy_rules.ignore if r.get("scope") == "document"]
-            nb_perm = [r for r in state.privacy_rules.permissions if r.get("scope") == "notebook"]
-            doc_perm = [r for r in state.privacy_rules.permissions if r.get("scope") == "document"]
-            total_nb = len(nb_ignore) + len(nb_perm)
-            total_doc = len(doc_ignore) + len(doc_perm)
-            parts.append("")
-            parts.append(
-                f"隐私规则：已加载，{total_nb} 条笔记本规则，{total_doc} 条文档规则。"
-            )
-        else:
-            parts.append("")
-            parts.append("隐私规则：已加载，无规则。")
-
-        if state.workspace_index_markdown:
+        age_days = workspace_index_age_days(state.workspace_index_updated)
+        if state.workspace_index_is_placeholder:
             parts.extend([
                 "",
-                "## 工作空间索引（语义导航索引）",
-                "",
-                state.workspace_index_markdown.strip(),
+                "> 用户尚未创建工作空间索引。请询问用户是否需要创建；创建方法见系统笔记本中的《工作空间索引创建指南》。",
             ])
-        else:
+        elif age_days is not None and age_days > 30:
             parts.extend([
                 "",
-                "> 当前没有导航索引。你可以建议用户先快速扫一遍笔记本结构创建导航索引，之后每次新会话都能直接定位。",
+                (
+                    f"> 工作空间索引已经 {age_days} 天没有更新。请询问用户是否需要更新；"
+                    "更新方法见系统笔记本中的《工作空间索引创建指南》。"
+                ),
             ])
         parts.extend([
             "",
-            "## AI 使用指南（用户偏好与规则）",
-            "",
-            state.ai_guide_markdown.strip() if state.ai_guide_markdown else "（AI 使用指南为空——如需补充，请先读取系统笔记本中的 AI Guide，再经用户批准用 siyuan_edit 写入）",
-            "",
-        ])
-        # Mention About document but don't include full text
-        parts.extend([
-            "---",
-            f"**给人看的说明**：系统笔记本中还有一篇 `/关于思源桥`，是对工具核心思想的简要介绍。普通任务无需读取。需要时可用 `siyuan_read` 指定文档 ID 阅读。",
+            (
+                state.workspace_index_markdown.strip()
+                if state.workspace_index_markdown
+                else "（工作空间索引为空）"
+            ),
             "",
         ])
         return "\n".join(parts)
@@ -1744,7 +1832,12 @@ class McpServer:
             if not is_live_doc_visible(doc, compiled_ignore, compiled_allow):
                 continue
             # Hard-filter Privacy Rules document
-            if is_privacy_rules_document(str(doc.get("hpath", ""))):
+            if is_privacy_rules_document(
+                str(doc.get("hpath", "")),
+                root=self.root,
+                document_id=doc_id,
+                notebook_id=nb_id,
+            ):
                 continue
 
             if block_id:
@@ -1804,7 +1897,12 @@ class McpServer:
             if not is_live_doc_visible(doc, compiled_ignore, compiled_allow):
                 continue
             # Hard-filter Privacy Rules document
-            if is_privacy_rules_document(str(doc.get("hpath", ""))):
+            if is_privacy_rules_document(
+                str(doc.get("hpath", "")),
+                root=self.root,
+                document_id=doc_id,
+                notebook_id=nb_id,
+            ):
                 continue
 
             seen.add(doc_id)
@@ -1976,7 +2074,12 @@ class McpServer:
                     choices = "\n".join(f"- `{doc.get('id')}` {display_document_path(doc)}" for doc in exact_display_path)
                     raise tool_error(_ERR_AMBIGUOUS, f"文档路径存在歧义，请补充 document_id：\n{choices}")
                 doc = exact_display_path[0]
-                if is_privacy_rules_document(str(doc.get("hpath", ""))):
+                if is_privacy_rules_document(
+                    str(doc.get("hpath", "")),
+                    root=self.root,
+                    document_id=str(doc.get("id") or ""),
+                    notebook_id=str(doc.get("notebook_id") or ""),
+                ):
                     raise tool_error(_ERR_PRIVACY_RULES,
                         "Privacy Rules 文档不可通过 AI 访问。隐私规则由人类在思源中维护。"
                     )
@@ -1996,7 +2099,12 @@ class McpServer:
         if status != "ok":
             raise tool_error(_ERR_DOC_NOT_FOUND, "未找到匹配的可见文档。文档可能已被隐藏、尚未索引，或定位符有误。")
         doc = matches[0]
-        if is_privacy_rules_document(str(doc.get("hpath", ""))):
+        if is_privacy_rules_document(
+            str(doc.get("hpath", "")),
+            root=self.root,
+            document_id=str(doc.get("id") or ""),
+            notebook_id=str(doc.get("notebook_id") or ""),
+        ):
             raise tool_error(_ERR_PRIVACY_RULES,
                 "Privacy Rules 文档不可通过 AI 访问。隐私规则由人类在思源中维护。"
             )
@@ -2078,7 +2186,11 @@ class McpServer:
             raise tool_error(_ERR_NOT_READ_WRITE, "目标路径权限不是 read_write，不允许创建或覆盖文档。")
 
         # Prevent creating Privacy Rules document
-        if is_privacy_rules_document(target.internal_path.strip("/")):
+        if is_privacy_rules_document(
+            target.internal_path.strip("/"),
+            root=self.root,
+            notebook_id=target.notebook_id,
+        ):
             raise tool_error(_ERR_PRIVACY_RULES,
                 "Privacy Rules 文档不可通过 AI 创建。隐私规则由人类在思源中维护。"
             )

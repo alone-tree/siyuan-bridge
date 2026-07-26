@@ -19,15 +19,27 @@
 - MCP 配置：展示 Python 命令、Bridge 路径、MCP JSON 和 profiles。
 - 反馈：POST Worker `/api/feedback`。
 - 用户体验改进：读写 `bridge/telemetry.json` 中的 `telemetry`。
+- 系统指南：读取 `bridge/knowledge_base/system_state.json`，显示两篇托管指南是否被用户修改，并提供保留文档 ID 的重置按钮。
 
 ## 配置文件
 
 - `bridge/config.local.json`：profiles、Token、语言。Token 不写入 MCP JSON。
 - `bridge/telemetry.json`：匿名 ID、遥测开关、端点、代理。
+- `bridge/knowledge_base/system_state.json`：Python Bridge 生成的系统笔记本/文档 ID 和模板状态；前端只在用户确认重置指南后更新对应模板基线。
 
 首次启用插件时，前端从思源 `/api/system/getConf` 读取当前工作空间 Token，并在缺失配置时自动创建 `config.local.json`。
 
 工作空间绝对路径不写入配置文件。每次打开 MCP 配置页或点击“刷新 JSON”时，前端调用 `/api/system/getWorkspaces`，选择 `closed=false` 的当前工作空间，重新生成本机插件目录、Bridge 目录、`run_mcp.py` 绝对路径和 MCP JSON。这样插件整体同步到另一台电脑后，设置页仍会显示另一台电脑自己的路径。
+
+两篇托管指南的模板来自 `bridge/templates/system-docs/`，与 Python Bridge 使用同一份源文件和 manifest。重置流程：
+
+1. 用户确认。
+2. 实时调用 `lsNotebooks` 找到当前系统笔记本，从以该笔记本 ID 分区的 JSON 记录中取得文档 ID。
+3. 调用 `updateBlock` 覆盖正文，不删除或重建文档。
+4. 立即调用 `exportMdContent` 读回思源实际 Markdown。
+5. 重新计算实际正文 SHA-256，写回 `system_state.json`。
+
+当前工作空间没有对应 JSON 记录时禁止重置，提示用户先调用一次 `siyuan_start`；不得回退到另一个 profile 的最近 ID。
 
 ## 验证
 
@@ -50,3 +62,4 @@ python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE% --fre
 - MCP JSON 不包含 Token。
 - MCP JSON 中的 `run_mcp.py` 是当前设备、当前工作空间的绝对路径；切换电脑后重新打开配置页应自动变化。
 - Home Dialog 的通知、反馈、遥测开关不会阻塞 MCP 配置。
+- 系统指南状态能区分系统默认和用户已修改；重置后正文恢复且文档 ID 不变。

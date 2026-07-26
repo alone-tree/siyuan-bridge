@@ -99,13 +99,28 @@
 - `read_only` 可读、可 copy/export，但不可 create/edit/rename/move/delete。
 - `read_write` 仍要求 `confirmed=true` 才能写。
 - Privacy Rules 文档不能被 AI 读取、搜索、创建或编辑。
+- 系统笔记本本身和除 Privacy Rules 外的系统文档进入正常索引，可以按普通权限 list/find/read/write。
+- 其他笔记本中恰好名为 `隐私规则` / `Privacy Rules` 的普通文档不能被误挡。
 - 搜索 `sql` 模式也必须经过隐私过滤。
 - 写入后的自动 refresh 不得把 Privacy Rules 写入 AI 可见缓存。
 
-已知需要修补：
+系统笔记本不享受 Privacy Rules 特权；不要重新加入“系统笔记本不可隐藏”的特殊分支。
 
-- 系统笔记本不能被隐藏的承诺尚未由代码强制执行。
-- Privacy Rules 按 hpath 名称硬隔离可能误挡非系统同名文档。
+## 修改系统笔记本或启动包时必须验证
+
+涉及 `ensure_agent_notebook()`、系统模板、`system_state.json` 或 `siyuan_start` 时，必须验证：
+
+- 新安装会创建六篇固定文档。
+- `AI 使用指南` / `AI Guide` 按原文档 ID 更名为 `用户个性化要求` / `User Preferences`，不删除重建。
+- 旧正文由用户修改时完整保留；只有和已知历史默认模板完全一致时才替换成新空模板。
+- 新旧文档名同时存在时使用新名称，旧文档保留但忽略。
+- 本地 JSON 尚不存在或其中 ID 失效时，能按当前名称、历史名称恢复并重写 JSON。
+- 两篇托管指南只有在当前正文仍等于上次记录的实际正文时才自动升级；用户修改后不得覆盖。
+- 设置页重置指南必须保留文档 ID，并重写模板版本和导入后实际正文哈希。
+- About 用户修改后仍按原 ID 恢复开发者模板。
+- Workspace Index 缺失时只创建一句占位内容，已有真实索引绝不覆盖。
+- 29/30 天不提示过期，超过 30 天才在 MCP 返回中临时提示；不能写回思源文档或改变更新时间。
+- 启动包顺序固定为运行状态、MCP Usage Guide、User Preferences、笔记本概览、Workspace Index；不再返回语言偏好和 About 入口。
 
 ## 修改读取模型时必须验证
 
@@ -236,6 +251,7 @@ python scripts/sync_siyuan_plugin_bridge.py
 
 - `siyuan-plugin/bridge/source_code/mcp_server.py` 存在。
 - `siyuan-plugin/bridge/scripts/run_mcp.py` 存在。
+- `siyuan-plugin/bridge/templates/system-docs/manifest.json` 和四个指南 Markdown 模板存在。
 - `siyuan-plugin/bridge/config.local.json` 不会被同步脚本覆盖。
 
 ## 插件导入测试流程
@@ -364,8 +380,8 @@ python scripts/verify.py
 
 1. 旧文档仍含旧工具名和旧 exact text anchor 方案，AI 只读 devlog 开头会被误导。
 2. `mcp_server.py` 体积过大，局部修改容易漏同步 `tool_specs()`、Skill 或测试。
-3. Privacy Rules 文档硬隔离和系统笔记本保护存在实现差距。
-4. 写入后自动 refresh 必须保留系统文档排除参数，避免污染本地索引缓存。
+3. Privacy Rules 文档硬隔离必须始终使用系统笔记本/文档 ID，不能退回全局同名拦截。
+4. 写入后自动 refresh 必须保留 Privacy Rules 文档排除参数，避免污染本地索引缓存。
 5. `siyuan_operate(action=refresh)` 不清理 `ai_workspace` 是当前设计；旧文档中“refresh 会清理 workspace”的表述需要迁移时删除。
 6. `siyuan_doc_manage` rename/move 后路径索引可能延迟，当前通过短轮询和安全刷新处理。
 7. `updateBlock` 多块 Markdown 会截断。
@@ -465,7 +481,7 @@ python scripts/build_package.py
 
 输出：`dist/package.zip`。
 
-zip 包含：`plugin.json`、`icon.png`、`preview.png`、`index.js`、`index.css`、英文默认说明 `README.md`、中文说明 `README.zh-CN.md`、README 图片目录 `image/README/`、`bridge/`、`dist/`、`src/`。`bridge/` 由 sync 脚本生成，包含完整 Python 运行文件。
+zip 包含：`plugin.json`、`icon.png`、`preview.png`、`index.js`、`index.css`、英文默认说明 `README.md`、中文说明 `README.zh-CN.md`、README 图片目录 `image/README/`、`bridge/`、`dist/`、`src/`。`bridge/` 由 sync 脚本生成，包含完整 Python 运行文件和系统文档模板；`knowledge_base/`、`ai_workspace/`、`stats/`、`config.local.json`、`telemetry.json` 等运行时数据必须从发布包排除。
 
 根目录 `README.md` 是中文内容基准，根目录 `README.en-US.md` 是对应英文版。发布前将两者分别同步到 `siyuan-plugin/README.zh-CN.md` 和 `siyuan-plugin/README.md`。Package 内 README 的图片路径统一使用 `image/README/...`；构建脚本必须把仓库根目录同名图片目录映射到 Package 根目录，确保在线集市和安装后的本地详情页都能显示图片。
 

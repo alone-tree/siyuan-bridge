@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "templates": {
+    "mcp_usage_guide": {
+      "version": 1,
+      "files": {
+        "zh-CN": "mcp-usage-guide.zh-CN.md",
+        "en": "mcp-usage-guide.en.md"
+      },
+      "source_sha256": {
+        "zh-CN": "14ffa9d6256bfc807005a21217df1cce8e00036306079c47131f9e866a16bff9",
+        "en": "7a240423e3d4e68871bdcc6bd7fdd6943cbce405e00f378693667b3708b3e9f4"
+      },
+      "historical_normalized_sha256": {
+        "zh-CN": [],
+        "en": []
+      }
+    },
+    "workspace_index_guide": {
+      "version": 1,
+      "files": {
+        "zh-CN": "workspace-index-guide.zh-CN.md",
+        "en": "workspace-index-guide.en.md"
+      },
+      "source_sha256": {
+        "zh-CN": "6933e1805a2f4dc41ee1c66ff975f766783da3d93b8e453659a927c7e1cca5ad",
+        "en": "1690755faf278afdda2a52df7d5b3ec2a02841ea04ca748677824a3557675c36"
+      },
+      "historical_normalized_sha256": {
+        "zh-CN": [],
+        "en": []
+      }
+    }
+  }
+}

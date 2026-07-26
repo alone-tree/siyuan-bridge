@@ -216,6 +216,9 @@ class SiYuanClient:
             return {}
         if not isinstance(data, dict):
             return {}
+        notebook = data.get("notebook")
+        if isinstance(notebook, dict):
+            return notebook
         return data
 
     def create_doc_with_md(self, notebook: str, path: str, markdown: str) -> dict[str, Any]:

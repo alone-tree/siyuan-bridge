@@ -39,6 +39,14 @@ PACKAGE_EXTRA_DIRS = [
     (ROOT / "image" / "README", Path("image") / "README"),
 ]
 
+BRIDGE_RUNTIME_NAMES = {
+    "ai_workspace",
+    "knowledge_base",
+    "stats",
+    "config.local.json",
+    "telemetry.json",
+}
+
 
 def verify_required(paths: list[Path]) -> None:
     missing = [str(p.relative_to(ROOT)) for p in paths if not p.exists()]
@@ -66,6 +74,13 @@ def main() -> int:
         for dir_path in dirs:
             arcroot = dir_path.name + "/"
             for p in dir_path.rglob("*"):
+                relative_parts = p.relative_to(dir_path).parts
+                if (
+                    dir_path.name == "bridge"
+                    and relative_parts
+                    and relative_parts[0] in BRIDGE_RUNTIME_NAMES
+                ):
+                    continue
                 if p.is_file() and "__pycache__" not in p.parts:
                     arcname = str(p.relative_to(PLUGIN))
                     zf.write(p, arcname)

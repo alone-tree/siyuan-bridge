@@ -47,6 +47,7 @@ def verify_import(target: Path, fresh: bool) -> None:
         "src/index.js",
         "bridge/source_code/mcp_server.py",
         "bridge/scripts/run_mcp.py",
+        "bridge/templates/system-docs/manifest.json",
     ]
     for relative in required:
         path = target / relative

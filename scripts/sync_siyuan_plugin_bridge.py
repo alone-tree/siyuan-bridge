@@ -18,6 +18,10 @@ SOURCE_DIRS = [
         ROOT / "plugins" / "siyuan-bridge" / "skills",
         BRIDGE_ROOT / "skills",
     ),
+    (
+        ROOT / "templates",
+        BRIDGE_ROOT / "templates",
+    ),
 ]
 
 ROOT_FILES = [
@@ -40,6 +44,7 @@ def remove_generated_bridge_paths() -> None:
         BRIDGE_ROOT / "source_code",
         BRIDGE_ROOT / "scripts",
         BRIDGE_ROOT / "skills",
+        BRIDGE_ROOT / "templates",
     ):
         if path.exists():
             shutil.rmtree(path)

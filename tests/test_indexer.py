@@ -270,6 +270,77 @@ class IndexerTests(unittest.TestCase):
         # Privacy Rules doc should NOT be in the index
         self.assertNotIn("system-pr", docs)
 
+    def test_only_system_privacy_rules_is_hard_hidden(self):
+        class PrivacyNameClient(FakeClient):
+            def __init__(self):
+                super().__init__()
+                self._notebooks.append({"id": "system-nb", "name": "思源桥"})
+
+            def query_sql(self, stmt):
+                if "WHERE type = 'd'" in stmt:
+                    return [
+                        {
+                            "id": "normal-same-name",
+                            "box": "nb1",
+                            "hpath": "/Privacy Rules",
+                            "path": "/normal.sy",
+                            "content": "Privacy Rules",
+                            "created": "20260701000000",
+                            "updated": "20260701000000",
+                        },
+                        {
+                            "id": "system-pr",
+                            "box": "system-nb",
+                            "hpath": "/隐私规则",
+                            "path": "/system-pr.sy",
+                            "content": "隐私规则",
+                            "created": "20260701000000",
+                            "updated": "20260701000000",
+                        },
+                        {
+                            "id": "system-guide",
+                            "box": "system-nb",
+                            "hpath": "/MCP 使用指南",
+                            "path": "/system-guide.sy",
+                            "content": "MCP 使用指南",
+                            "created": "20260701000000",
+                            "updated": "20260701000000",
+                        },
+                    ]
+                if "GROUP BY root_id" in stmt:
+                    return [
+                        {"root_id": doc_id, "block_count": 1, "char_count": 10}
+                        for doc_id in ("normal-same-name", "system-pr", "system-guide")
+                    ]
+                if "ORDER BY root_id" in stmt:
+                    return [
+                        {"root_id": doc_id, "content": "content"}
+                        for doc_id in ("normal-same-name", "system-pr", "system-guide")
+                    ]
+                return []
+
+        root = Path.cwd() / ".test_tmp" / "privacy_exact_doc"
+        shutil.rmtree(root, ignore_errors=True)
+        root.mkdir(parents=True, exist_ok=True)
+        write_privacy_rules_cache(root, PrivacyRules(ignore=[], allow=[]))
+
+        refresh_index(
+            PrivacyNameClient(),
+            root,
+            system_notebook_id="system-nb",
+            privacy_rules_doc_id="system-pr",
+        )
+
+        indexed_ids = {
+            json.loads(line)["id"]
+            for line in (root / "knowledge_base/docs.jsonl").read_text(
+                encoding="utf-8"
+            ).splitlines()
+        }
+        self.assertIn("normal-same-name", indexed_ids)
+        self.assertIn("system-guide", indexed_ids)
+        self.assertNotIn("system-pr", indexed_ids)
+
 
 # ── Privacy Rules Markdown Parsing Tests ──────────────────────────────
 

@@ -119,6 +119,28 @@
   cursor: default;
 }
 
+.siyuan-bridge-home__guide-row {
+  align-items: center;
+  border-top: 1px solid var(--b3-border-color);
+  display: flex;
+  justify-content: space-between;
+  padding: 12px 0;
+}
+
+.siyuan-bridge-home__guide-row:first-child {
+  border-top: 0;
+}
+
+.siyuan-bridge-home__guide-row .siyuan-bridge-home__hint {
+  margin: 2px 0 0;
+}
+
+.siyuan-bridge-home__guide-name {
+  color: var(--b3-theme-on-surface);
+  font-size: 14px;
+  line-height: 22px;
+}
+
 .siyuan-bridge-home__field {
   display: flex;
   flex-direction: column;

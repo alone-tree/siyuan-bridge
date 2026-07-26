@@ -9,13 +9,14 @@ description: 创建和更新思源系统笔记本 思源桥 中的 Workspace Ind
 让 AI 助手无需扫描每份笔记本地图就能定位相关文档。
 索引优先使用文档路径（客观且完整），而非主题（模糊且不完整）。
 
-索引存放在思源系统笔记本中，而非本地文件。首次创建用 `siyuan_create`，
+索引存放在思源系统笔记本中，而非本地文件。系统会预先创建占位文档；
+首次创建用 `siyuan_create(if_exists="overwrite")` 保留文档 ID 并替换占位内容，
 后续更新用 `siyuan_edit`。
 
 ## 前置条件
 
 - 必须已注册 `siyuan-bridge` MCP 工具。如果不可用，告知用户先注册 MCP 服务器。
-- 先运行 `siyuan_start` —— 它确保系统笔记本 `思源桥` 存在，并返回当前笔记本概览。
+- 先运行 `siyuan_start` —— 它确保系统笔记本和《工作空间索引》占位文档存在，并返回当前笔记本概览。
 
 ## 工作流
 
@@ -64,7 +65,7 @@ description: 创建和更新思源系统笔记本 思源桥 中的 Workspace Ind
 
 将索引写入 `思源桥/工作空间索引`：
 
-- **首次创建**：使用 `siyuan_create`，优先传完整路径 `/思源桥/工作空间索引` 或 `/SiYuan Bridge/Workspace Index`，填入 Markdown 内容。仅在用户确认后设置 `confirmed=true`。只有系统笔记本名称重名时，才改用 `notebook_id` + 内部路径。
+- **首次创建**：使用 `siyuan_create(if_exists="overwrite")`，优先传完整路径 `/思源桥/工作空间索引` 或 `/SiYuan Bridge/Workspace Index`，替换系统占位内容并保留文档 ID。用户要求创建索引本身就是确认，可设置 `confirmed=true`。只有系统笔记本名称重名时，才改用 `notebook_id` + 内部路径。
 - **更新**：先用 `siyuan_read(include_block_ids=true)` 读取已有工作空间索引，取得目标块的 `start_index` 和 `start_id`，再用 `siyuan_edit` 的结构化编辑动作替换对应部分。
 
 遵循以下模板：
@@ -169,4 +170,4 @@ description: 创建和更新思源系统笔记本 思源桥 中的 Workspace Ind
 - 不要读取隐藏的文档或笔记本。只从可见的安全索引中工作。
 - 不要覆盖工作空间索引中的人工标注。围绕它们添加你的更新。
 - 用户的话是唯一的确认。"建索引"就是建，"更新索引"就是更新。无需额外确认步骤。
-- 构建索引时，不要将 `思源桥` / `SiYuan Bridge` 系统笔记本中的内容当作用户资料。它包含的是系统文档（AI 使用指南、工作空间索引、关于思源桥、隐私规则），而非用户知识。
+- 构建索引时，不要把 About、MCP 使用指南、工作空间索引创建指南和 Privacy Rules 当作用户知识资料。用户个性化要求是用户写给 AI 的规则，工作空间索引本身是导航，不参与内容摘要。

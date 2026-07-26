@@ -29,10 +29,11 @@ This is not a kitchen-sink MCP server. It focuses on making the most common tool
 
 ### Human in the Loop
 
-Privacy rules and AI guidance live directly inside SiYuan, so there are no separate configuration files to hunt down:
+Privacy rules, user preferences, and tool guides live directly inside SiYuan, so there are no separate configuration files to hunt down:
 
 - **Privacy Rules**: Edit the rules document in SiYuan, then ask the AI to refresh. The AI cannot read or modify the rules themselves. Note that **a closed notebook is not hidden from the AI**. SiYuan Bridge temporarily opens closed notebooks for search and reading, then restores their previous state. To block access, mark a notebook as hidden or read-only in Privacy Rules.
-- **AI Guide**: Store your preferences and instructions for the AI directly in SiYuan. Change them at any time and they take effect immediately.
+- **User Preferences**: Store your preferences and instructions for AI directly in SiYuan. The old AI Guide is renamed during upgrade while preserving its document ID and body.
+- **MCP Usage Guide and Workspace Index Guide**: Ordinary SiYuan documents that you may customize. Plugin settings can reset either guide to the latest default while preserving its document ID.
 - **Workspace Index**: Let the AI build a navigational index of your notebooks, then review, edit, and annotate it so the AI can find information more accurately.
 
 You remain in control.
@@ -41,9 +42,9 @@ Privacy Rules provide notebook- and document-level access control with read-writ
 
 ![Privacy Rules](image/README/1784633972321.png)
 
-The AI Guide stores your long-term preferences and instructions. Edit it directly in SiYuan and the changes take effect immediately.
+User Preferences stores your long-term preferences and instructions. Edit it directly in SiYuan and the changes take effect immediately.
 
-![AI Guide](image/README/1784634489547.png)
+![User Preferences](image/README/1784634489547.png)
 
 ### Stable and Hassle-Free
 
@@ -92,7 +93,7 @@ Confirm the Python and workspace settings on the MCP configuration page, then co
 
 ## FAQ
 
-- **Does it support multiple SiYuan workspaces?** Yes. Install the plugin in your primary workspace, then add tokens for other workspaces in the plugin settings. Privacy Rules and the AI Guide live inside each workspace and follow it automatically. Only one workspace can be active at a time. To switch: 1) open the target workspace, 2) close the other workspaces, 3) close the target workspace, and 4) open SiYuan again. This is necessary because the first workspace uses SiYuan's fixed port while later workspaces use random ports that are difficult to detect. Do not install and register the plugin separately in every workspace, or the AI will see duplicate MCP tools.
+- **Does it support multiple SiYuan workspaces?** Yes. Install the plugin in your primary workspace, then add tokens for other workspaces in the plugin settings. Privacy Rules, User Preferences, and the Workspace Index live inside each workspace and follow it automatically. Only one workspace can be active at a time. To switch: 1) open the target workspace, 2) close the other workspaces, 3) close the target workspace, and 4) open SiYuan again. This is necessary because the first workspace uses SiYuan's fixed port while later workspaces use random ports that are difficult to detect. Do not install and register the plugin separately in every workspace, or the AI will see duplicate MCP tools.
 - **Why does it say SiYuan is not running?** Open the SiYuan desktop app and confirm that the correct workspace is active. If SiYuan is already running, restart the AI agent; the problem may come from the agent or a network proxy. Claude Code is known to occasionally lose MCP tools when network conditions change, such as opening it with a VPN enabled and then disabling the VPN.
 - **Why can't the AI see the tools after setup?** Confirm that you copied the MCP JSON into the correct client using that platform's native format, then restart the client. MCP registration syntax differs slightly between AI agents. The plugin currently generates Claude Code format, but you can ask your AI agent to translate it into the required format.
 - **Why does the MCP path still point to my other computer?** The plugin itself can sync through SiYuan, but the launcher path in MCP JSON must be absolute and local to the current computer. Open the plugin's MCP settings separately on each computer; the page regenerates the path from the active local workspace before you copy it into that computer's AI client.

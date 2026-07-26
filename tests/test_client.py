@@ -369,6 +369,24 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(SiYuanApiError):
             client.get_child_blocks("parent1")
 
+    def test_create_notebook_unwraps_current_kernel_response(self):
+        def transport(req, timeout):
+            return FakeResponse({
+                "code": 0,
+                "data": {
+                    "notebook": {
+                        "id": "nb-1",
+                        "name": "思源桥",
+                    },
+                },
+            })
+
+        client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
+        self.assertEqual(
+            client.create_notebook("思源桥"),
+            {"id": "nb-1", "name": "思源桥"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

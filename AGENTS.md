@@ -27,7 +27,13 @@ AGENTS.md文件是入口导航，不替代架构文档和开发指南。它告�
 
 如果当前 Agent 环境提供 CodeGraph MCP 工具，分析代码结构、查找符号、追踪调用链、评估改动影响时必须优先使用 CodeGraph。调用subagent也需要明确告知优先使用codegraph。
 
-如果当前 Agent 环境没有暴露 `codegraph_*` 工具，先确认是否已安装并注册 CodeGraph MCP。使用codegraph能够极大提高探索代码库速度、节省token消耗。强烈推荐。
+CodeGraph 的退回顺序固定为：
+
+1. 优先使用当前 Agent 环境直接暴露的 `codegraph_*` 工具。
+2. 直接工具不可用、连接失败或未注册时，通过能力库入口加载当前设备对应的 CodeGraph MCP（家里电脑使用 `home-codegraph`）。
+3. 只有直接 CodeGraph 和能力库 CodeGraph 都无法提供有效结果时，才退回 `rg` 和源码读取。
+
+能力库 CodeGraph 调用前先读取 `D:\HermesSync\capability-library\capability-entry\SKILL.md`，不得凭印象猜测 MCP 名称或参数。使用 CodeGraph 能够显著加快代码结构探索并减少重复读取。
 
 
 ## 任务路由
@@ -71,13 +77,16 @@ knowledge_base/      运行时缓存，Git 忽略，每次 refresh 可能覆盖
   docs.jsonl         结构化文档元数据
   notebooks.json     可见笔记本索引
   privacy_rules.json Privacy Rules 解析缓存
+  system_state.json  系统笔记本/文档 ID 与模板状态的本地注册表
 
 思源笔记工作空间       用户启动的工作空间（用MCP看到的内容）
   思源桥/SiYuan Bridge   思源桥MCP系统笔记本，跟随思源工作空间切换
-    AI Guide            用户偏好和 AI 使用规则，确保存在但不覆盖
-    Workspace Index     AI 维护的语义导航索引，不自动创建
-    About SiYuan Bridge 给人看的说明，模板版本变化时覆盖
-    Privacy Rules       人类维护的隐私规则，AI 不可读
+    MCP Usage Guide     工具搭配和关键注意事项；用户可改、可重置
+    Workspace Index Guide  创建和更新导航索引的指南；用户可改、可重置
+    User Preferences    用户写给 AI 的个性化要求，确保存在但不覆盖
+    Workspace Index     AI 维护的语义导航索引，缺失时只创建占位内容
+    About SiYuan Bridge 给人看的说明，按开发者模板覆盖
+    Privacy Rules       人类维护的隐私规则，只有本文档对 AI 硬隔离
   其他笔记本
     其他文档
       其他子文档
@@ -96,7 +105,7 @@ docs/                架构、开发指南、前端、API、idea、devlog
 - 恢复要求：项目不提供 AI 自动回滚/checkout。写入后如需恢复，只能提示用户通过思源快照手动恢复；不要让 AI 调用高风险恢复接口。
 - 不自动启动思源：连接失败只提示用户手动打开思源，不鼓励AI查找程序路径。在开发时，务必保留错误返回信息中的相关说明，不要省略“让用户启动”等关键表述。
 - Privacy Rules 硬隔离：任何操作都需要在执行前经隐私规则过滤。源码写死隐藏Privacy Rules文档，AI 不可读取、搜索或编辑 Privacy Rules 文档。
-- 系统笔记本由机器维护：AI Guide 确保存在不覆盖；Workspace Index 不自动创建；About 按模板版本维护。
+- 系统笔记本六篇固定文档按各自生命周期维护；旧 AI Guide 按原 ID 更名为 User Preferences；身份和模板状态记录在本地 `system_state.json`。
 - 关闭笔记本透明打开/关闭：索引、搜索和写入前可临时打开关闭的笔记本，完成后必须恢复。
 - 工作区可能有用户改动：不要回滚、删除或重置非本任务改动。
 
