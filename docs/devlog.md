@@ -4,6 +4,14 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
+## 2026-07-28：v1.2.0 附件插入
+
+- `siyuan_edit` 新增 `insert_assets`，可在一个块锚点后按顺序插入多张图片、普通文件或本地文件夹链接；底层直接复用思源 `/api/asset/insertLocalAssets`。
+- 每项支持独立的可选 `name` 和 `title`；图片类型遵循思源官方扩展名清单，未知图片格式按普通文件处理，同批重名项目会在上传前拒绝。
+- 普通文件超过 20 MB 时默认暂停整批操作，只有用户明确同意并传入 `upload_large_files=true` 才继续。
+- 保留思源桥现有的引用式块锚点、隐私检查、写前快照和写后验证；失败时只补偿可明确识别的本批文档块，不自动删除可能被其他文档复用的附件。
+- 三层 MCP 行为验证全部通过，完整测试 299 passed，发布包构建成功。
+
 ## 2026-07-28：附件、图片与文件夹插入完成实现
 
 - 在 `siyuan_edit` 增加 `action="insert_assets"`，不新增独立工具、不修改 `siyuan_create`。创建含附件文档时使用 `create → read(include_block_ids=true) → edit(insert_assets)`。
