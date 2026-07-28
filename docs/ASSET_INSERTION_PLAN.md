@@ -12,7 +12,7 @@
 action="insert_assets"
 ```
 
-用户可在一次调用中把多个本地项目插入同一位置，也可以让每个项目插入不同位置。一次调用对用户表现为一个完整操作：只有资源处理、文档插入和最终验证全部成功，才报告成功。
+用户可在一次调用中把多个本地项目插入同一位置；需要插入多个位置时分多次调用。一次调用对用户表现为一个完整操作：只有资源处理、文档插入和最终验证全部成功，才报告成功。
 
 不修改 `siyuan_create`。新建含附件文档的推荐调用链固定为：
 
@@ -47,17 +47,14 @@ Bridge 不自行实现 Windows、macOS、Linux 路径转换规则，不自行拼
 
 图片与其他文件使用同一上传通道；展示 Markdown 可以根据思源返回结果或必要的媒体类型生成图片嵌入或普通附件链接，但不能为此拆分上传事务。
 
-### 2.4 一次调用支持多个位置
+### 2.4 一次调用只支持一个位置
 
-每个资产项可以独立携带编辑前引用阅读得到的双重锚点：
+调用级参数使用编辑前引用阅读得到的一组双重锚点：
 
 - `start_index`
 - `start_id`
-- `position`：`before` 或 `after`
 
-多个资产项可使用同一组锚点，表示在同一位置按调用顺序插入；也可分别使用不同锚点。
-
-锚点必须全部基于同一次写入前的 `siyuan_read(include_block_ids=true)` 结果。实现时先一次性校验所有锚点，再按不会导致后续定位漂移的顺序执行；不得边插入边用已变化的块序号重新解释后续资产项。
+本批次所有资产按 `assets` 数组顺序插在该锚点块之后，不增加 `before/after` 参数。需要插入多个位置时，由 AI 在每次写入后重新引用阅读，再分多次调用；不在一次调用中维护多组会漂移的块坐标。
 
 ### 2.5 大文件阈值为 20 MB
 
@@ -65,8 +62,28 @@ Bridge 不自行实现 Windows、macOS、Linux 路径转换规则，不自行拼
 - 文件夹只插入本地超链接，不统计目录大小、不递归扫描，因此不参与阈值判断。
 - 批次内任一普通文件超过 20 MB，整批暂停：不上传任何文件、不插入任何链接、不创建快照。
 - 返回 `requires_confirmation: true`，列出超限文件、实际大小和阈值。
-- 用户明确同意后，使用相同参数并增加 `confirm_large_files=true` 重试整个批次。
-- `confirmed=true` 表示同意修改思源；`confirm_large_files=true` 只表示额外同意处理超限文件，两个确认不能互相替代。
+- 用户明确要求上传大文件后，使用相同参数并增加 `upload_large_files=true` 重试整个批次。
+- `confirmed=true` 表示同意修改思源；`upload_large_files=true` 是是否允许上传超限文件的动作开关，默认 false，不称为第二个确认参数。
+
+### 2.6 图片识别与 Markdown 字段
+
+Bridge 直接复用思源前端的图片扩展名清单，按原始文件名后缀转小写判断：
+
+```text
+.apng .ico .cur .jpg .jpe .jpeg .jfif .pjp .pjpeg .png .gif
+.webp .bmp .svg .avif .tiff .tif
+```
+
+路径先判断是否为目录；目录始终按文件夹链接处理。普通文件后缀在清单中时生成图片 Markdown，其余格式作为普通附件链接，不使用 MIME 猜测或自行扩大格式范围。
+
+每项资产支持两个容易混淆但语义不同的可选字段：
+
+- `name`：正文主要显示名称。图片中是替代文本 `alt`；普通文件和文件夹中是链接锚文本。
+- `title`：Markdown 附加标题。图片中会在思源里显示为图片下方标题；普通文件和文件夹中不直接显示在正文，通常用于悬停提示。
+
+工具描述和 schema 必须明确说明这一区别，避免 AI 把图片下方标题误填到 `name`，或把正文锚文本误填到 `title`。未传 `name` 时与思源官方前端一致：图片使用原文件名去掉扩展名，普通文件使用完整文件名，文件夹使用目录名。未传 `title` 时不生成空 title。
+
+同一批次如存在相同基础文件名，整批预检报错并提示分开调用。思源 `succMap` 以基础文件名为键，重名时无法可靠建立输入项与返回路径的对应关系。
 
 ## 3. 计划中的 MCP 参数
 
@@ -76,23 +93,21 @@ Bridge 不自行实现 Windows、macOS、Linux 路径转换规则，不自行拼
 {
   "action": "insert_assets",
   "document": "/笔记本/父文档/目标文档",
+  "start_index": 12,
+  "start_id": "20260728120000-abcdefg",
   "assets": [
     {
       "local_path": "D:/materials/chart.png",
-      "title": "收入结构",
-      "start_index": 12,
-      "start_id": "20260728120000-abcdefg",
-      "position": "after"
+      "name": "收入结构",
+      "title": "2026 年收入结构图"
     },
     {
       "local_path": "D:/materials/source-files",
-      "title": "源文件目录",
-      "start_index": 30,
-      "start_id": "20260728120100-hijklmn",
-      "position": "before"
+      "name": "源文件目录",
+      "title": "仅当前电脑可以访问"
     }
   ],
-  "confirm_large_files": false,
+  "upload_large_files": false,
   "confirmed": true
 }
 ```
@@ -101,13 +116,13 @@ Bridge 不自行实现 Windows、macOS、Linux 路径转换规则，不自行拼
 
 | 字段 | 类型 | 必填 | 含义 |
 |---|---|---:|---|
+| `start_index` | integer | 是 | 写入前引用阅读中的块序号；本批次全部插在该块之后 |
+| `start_id` | string | 是 | 与 `start_index` 配对的块 ID |
 | `assets` | array | 是 | 本次要插入的本地文件/文件夹；至少一项 |
 | `assets[].local_path` | string | 是 | 交给思源处理的本地路径，不由 Bridge 改写为另一操作系统格式 |
-| `assets[].title` | string | 否 | 文档中显示的标题；缺省时使用思源返回结果或源路径名 |
-| `assets[].start_index` | integer | 是 | 写入前引用阅读中的块序号 |
-| `assets[].start_id` | string | 是 | 与序号配对的块 ID |
-| `assets[].position` | enum | 否 | `before` / `after`，建议默认 `after` |
-| `confirm_large_files` | boolean | 否 | 是否确认上传本批次中超过 20 MB 的普通文件，默认 false |
+| `assets[].name` | string | 否 | 图片 alt 或文件/文件夹锚文本；缺省时按思源官方文件名逻辑生成 |
+| `assets[].title` | string | 否 | Markdown 附加标题；图片中显示为下方标题，文件/文件夹通常用于悬停提示 |
+| `upload_large_files` | boolean | 否 | 是否允许上传本批次中超过 20 MB 的普通文件，默认 false |
 | `confirmed` | boolean | 是 | 是否确认写入思源，必须 true |
 
 当前决定不增加显式 `type=image/file/directory`：路径类型可在预检阶段判断，图片和普通文件又共用思源上传通道。若后续实测发现 MCP 进程看不到调用端本地路径，则该问题属于部署边界，需要重新设计，不能靠调用者声明类型解决。
@@ -122,10 +137,11 @@ Bridge 不自行实现 Windows、macOS、Linux 路径转换规则，不自行拼
 2. 解析目标可见文档；若按路径定位，校验思源 live hpath 未变化。
 3. 检查目标文档最终权限为 `read_write`，并经过 Privacy Rules 过滤。
 4. 重新读取目标文档展示块列表。
-5. 一次性校验每个资产项的 `start_index/start_id` 双重锚点及 position。
+5. 校验调用级 `start_index/start_id` 双重锚点。
 6. 检查每个 `local_path` 是否存在，并识别普通文件或目录；其他类型整批拒绝。
-7. 获取普通文件大小；任一超过 20 MB 且未提供 `confirm_large_files=true` 时，整批暂停并返回确认要求。
-8. 查明思源当前版本实际提供的原生资源 API、参数、返回值和回滚能力；在开始实施前必须完成这项源码/API 探针。
+7. 检查同批次基础文件名是否重名；重名则整批拒绝并提示拆分调用。
+8. 获取普通文件大小；任一超过 20 MB 且未提供 `upload_large_files=true` 时，整批暂停并返回要求。
+9. 使用已经实测确认的 `/api/asset/insertLocalAssets` 契约；思源版本变化时重新验证参数、返回值和回滚能力。
 
 阶段 A 任何失败均不得创建快照、上传资源或插入链接。
 
@@ -192,17 +208,31 @@ Local file path must point to a regular file
 
 它不能作为本项目文件夹行为的实现参考。
 
-### 5.2 尚未确认、下次必须先解决
+### 5.2 已确认的 HTTP 路由与真实探针
 
-官方 MCP 调用的是 Go 内部 `model.InsertLocalAssets`。尚未最终确认当前思源版本是否暴露等价 HTTP API（可能为 `/api/asset/insertLocalAssets` 或其他路由）、其参数和权限；不能仅凭函数名猜接口。
+思源 3.7.3 已确认暴露官方 MCP 所用模型函数的等价 HTTP 路由：
 
-下次开发的第一步应是：
+```text
+POST /api/asset/insertLocalAssets
+{
+  "id": "目标文档 ID",
+  "assetPaths": ["本地绝对路径"],
+  "isUpload": true
+}
+```
 
-1. 查当前思源源码的 `kernel/api/router.go`、`kernel/api/asset.go` 和 `kernel/model/asset.go`。
-2. 确认是否存在可从 Python Bridge 调用的统一 HTTP 路由。
-3. 对该路由做真实探针：同一调用分别传图片、普通文件和目录，记录原始请求、返回和文档/资源变化。
-4. 若统一路由存在，文件和目录全部走该路由。
-5. 若只有普通文件上传 API：普通文件走思源附件 API；目录处理必须继续查找思源是否有独立原生路径转换/插入 API。没有确认前不得自行编写 Windows/macOS 转换代码。
+返回 `data.succMap`。该接口需要鉴权、管理员角色且工作空间非只读。Bridge 直接调用该 HTTP API，不依赖或中转官方 MCP。
+
+2026-07-28 在主空间“测试思源桥专用 / 附件接口测试-20260728”完成真实探针：
+
+- 图片 `icon.png` 返回 `assets/icon-...png`；
+- 普通文件 `README.md` 返回 `assets/README-...md`；
+- 目录 `ai_workspace` 返回 `file://D:\...\ai_workspace`，不复制目录；
+- 重复上传同一图片返回原有资源路径，未重复复制；
+- `insertLocalAssets` 只处理资源并返回路径，不修改文档、不创建块，原有块 ID 保持不变；
+- 真正写入文档需另调用块插入 API，根据返回路径生成 Markdown。
+
+仍需在编码阶段验证失败补偿：上传成功但块插入失败时，能否只删除本批次新建且仍未被引用的资源；不能安全清理时必须报告残留，不能自动删除可能被其他文档复用的附件。
 
 ## 6. 返回结果建议
 
@@ -219,16 +249,16 @@ Local file path must point to a regular file
       "local_path": "...",
       "kind": "file",
       "resolved_path": "assets/...",
-      "start_id": "...",
-      "position": "after",
+      "name": "...",
+      "title": "...",
       "verified": true
     },
     {
       "local_path": "...",
       "kind": "directory",
       "resolved_path": "file://...",
-      "start_id": "...",
-      "position": "after",
+      "name": "...",
+      "title": "...",
       "verified": true
     }
   ],
@@ -246,7 +276,7 @@ Local file path must point to a regular file
   "large_files": [
     {"local_path": "...", "size_bytes": 26214400}
   ],
-  "message": "整批尚未写入。确认后以相同参数增加 confirm_large_files=true 重试。"
+  "message": "整批尚未写入。如需上传这些大文件，请以相同参数增加 upload_large_files=true 重试。"
 }
 ```
 
@@ -261,7 +291,7 @@ Local file path must point to a regular file
 - `source_code/client.py`：仅增加经实测确认的思源原生资源 API 封装。
 - `source_code/mcp_server.py`：`siyuan_edit` schema、参数校验、预检、事务协调、插入和验证。
 - `tests/test_client.py`：API 请求和返回解析测试。
-- `tests/test_mcp_server.py`：schema、权限、锚点、多项目、多位置、20 MB 确认、文件夹链接、整批失败和补偿测试。
+- `tests/test_mcp_server.py`：schema、权限、单组锚点、同位置多项目、name/title、官方图片清单、重名拒绝、20 MB 开关、文件夹链接、整批失败和补偿测试。
 - `docs/ARCHITECTURE.md`：功能定案并实现后，把真实工具契约并入 `siyuan_edit` 章节。
 - `docs/DEVELOPMENT_GUIDE.md`：补充附件写入必须验证的安全清单。
 - `docs/思源API.md`：记录经源码和探针确认的 API。
@@ -277,7 +307,7 @@ Local file path must point to a regular file
 
 - 单元测试全量通过。
 - 直接启动当前源码，通过 JSON-RPC 调用真实 `siyuan_edit(insert_assets)`。
-- 至少覆盖：单文件、图片、文件夹、同位置多个项目、多位置插入、超 20 MB 拒绝与确认重试、无效锚点整批不写、处理中途失败的补偿和最终读回验证。
+- 至少覆盖：单文件、官方图片扩展名与普通文件降级、文件夹、同位置多个项目、name/title 各种缺省组合、重名拒绝、超 20 MB 拒绝与开关重试、无效锚点整批不写、处理中途失败的补偿和最终读回验证。
 
 ### 第二层：能力库开发版 MCP
 
@@ -289,7 +319,7 @@ Local file path must point to a regular file
 ### 第三层：子代理调用
 
 - 子代理实际调用已确认指向开发版的 MCP；如果没有开发版内置工具，则让子代理通过能力库调用临时注册项。
-- 验证 AI 能只凭 tool schema 和 Skill 正确完成文件、图片、文件夹插入及大文件二次确认。
+- 验证 AI 能只凭 tool schema 和 Skill 正确区分 `name` 与 `title`，完成文件、图片、文件夹插入及大文件上传开关处理。
 - 禁止用用户版思源桥冒充开发版验收。
 
 ## 9. 本轮现场状态
@@ -301,4 +331,4 @@ Local file path must point to a regular file
 - 本地临时测试目录为 `ai_workspace/asset-upload-test/`，Git 忽略/不提交；换电脑后需要重新创建测试文件。
 - 调研中创建的测试文档位于测试用途笔记本，不能作为实现依赖。
 - 本轮之前完整测试状态为 287 passed；该数字只是附件功能开发前基线。
-- 当前核心未决问题只有一个：Python Bridge 可调用的思源原生“插入本地资源”HTTP API 的准确路由、参数、返回和回滚能力。下次从这里开始，不要先写路径转换或上传代码。
+- 已确认 Python Bridge 可直接调用 `/api/asset/insertLocalAssets`，不依赖官方 MCP。下一步实现从 client API 封装、预检和失败补偿边界开始。
