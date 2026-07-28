@@ -1703,9 +1703,13 @@ class McpServer:
         if not keyword:
             raise tool_error(_ERR_MISSING_PARAM, "keyword 参数是必填的")
 
-        mode = str(args.get("mode") or "keyword").strip().casefold()
+        mode = str(args.get("mode") or "query").strip().casefold()
         if mode not in ("keyword", "query", "regex", "sql"):
-            raise tool_error(_ERR_INVALID_ENUM, "mode 必须是 keyword、query、regex 或 sql 之一")
+            raise tool_error(_ERR_INVALID_ENUM, "mode 必须是 query、regex 或 sql 之一")
+        if mode == "keyword":
+            # Backward compatibility for old clients; keyword is no longer a
+            # distinct public mode and uses query semantics throughout.
+            mode = "query"
 
         scope = str(args.get("scope") or "headings").strip().casefold()
         if scope not in ("headings", "full"):
@@ -1742,7 +1746,7 @@ class McpServer:
         else:
             _profile, client = detect_active_profile(load_config(self.root))
             notebook_names.update(list_live_notebook_names(client))
-            method_map = {"keyword": 0, "query": 1, "regex": 3}
+            method_map = {"query": 1, "regex": 3}
             api_method = method_map[mode]
             with ensure_notebooks_open(client, notebooks):
                 data = search_content(
@@ -3318,12 +3322,12 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_find",
-            "description": "Search the SiYuan knowledge base through SiYuan search APIs, then apply privacy rules before returning results. Temporarily opens closed notebooks while searching and restores them afterwards. Supports 4 modes: keyword (space-separated keywords, AND logic, default), query (AND/OR/NOT/phrase/prefix*), regex, sql (direct SQL, requires admin). Scope: headings (document titles + headings, default) or full (all block text).",
+            "description": "Search the SiYuan knowledge base through SiYuan search APIs, then apply privacy rules before returning results. Temporarily opens closed notebooks while searching and restores them afterwards. Supports 3 modes: query (space-separated terms use AND logic by default; also supports explicit AND/OR/NOT, phrases, and prefix*), regex, and sql (direct SQL, requires admin). Scope: headings (document titles + headings, default) or full (all block text).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "keyword": {"type": "string", "description": "Search query. For keyword mode: space-separated terms (AND logic). For query mode: FTS5 syntax. For regex mode: Go RE2 regex. For sql mode: raw SQL statement."},
-                    "mode": {"type": "string", "enum": ["keyword", "query", "regex", "sql"], "default": "keyword", "description": "Search mode. Must be explicit."},
+                    "keyword": {"type": "string", "description": "Search query. For query mode: space-separated terms use AND logic by default; explicit AND/OR/NOT, quoted phrases, and prefix* are supported. For regex mode: Go RE2 regex. For sql mode: raw SQL statement."},
+                    "mode": {"type": "string", "enum": ["query", "regex", "sql"], "default": "query", "description": "Search mode. Defaults to query."},
                     "scope": {"type": "string", "enum": ["headings", "full"], "default": "headings", "description": "headings = document titles and outline headings only. full = all block content."},
                     "notebooks": {"description": "Notebook ID or list of IDs to scope the search. 'ALL' (default) searches all notebooks."},
                     "limit": {"type": "integer", "default": 20, "description": "Maximum document results."},

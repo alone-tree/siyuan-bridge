@@ -340,6 +340,12 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("siyuan_operate", names)
         self.assertNotIn("siyuan_refresh_index", names)
 
+    def test_find_tool_spec_exposes_query_as_default_without_keyword_mode(self):
+        spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_find")
+        mode = spec["inputSchema"]["properties"]["mode"]
+        self.assertEqual(mode["default"], "query")
+        self.assertEqual(mode["enum"], ["query", "regex", "sql"])
+
     def test_operate_sync_calls_default_siyuan_sync(self):
         client = FakeSearchClient([])
         server = mcp_server.McpServer(self.root)
@@ -488,13 +494,23 @@ class McpServerTests(unittest.TestCase):
                 "path": "/doc1.sy",
             }
         ])
-        output = self.run_find(client, {"keyword": "机器人", "mode": "keyword", "scope": "full", "notebooks": "nb1"})
+        output = self.run_find(client, {"keyword": "机器人", "scope": "full", "notebooks": "nb1"})
 
         self.assertIn("doc1", output)
         self.assertIn("正文里有机器人这个词", output)
         self.assertIn("实时搜索", output)
         self.assertEqual(client.seen_payloads[0]["paths"], ["nb1"])
         self.assertEqual(client.seen_payloads[0]["group_by"], 0)
+        self.assertEqual(client.seen_payloads[0]["method"], 1)
+
+    def test_find_documents_accepts_keyword_as_query_compatibility_alias(self):
+        client = FakeSearchClient([])
+        output = self.run_find(client, {"keyword": "MCP 测试", "mode": "keyword", "scope": "full"})
+
+        self.assertIn("未找到匹配的可见文档", output)
+        self.assertIn("（full，query）", output)
+        self.assertEqual(client.seen_payloads[0]["query"], "MCP 测试")
+        self.assertEqual(client.seen_payloads[0]["method"], 1)
 
     def test_find_documents_keeps_all_matching_blocks_per_document(self):
         client = FakeSearchClient([

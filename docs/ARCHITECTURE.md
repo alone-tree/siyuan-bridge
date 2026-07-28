@@ -533,7 +533,7 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 | 参数                     | 类型            | 默认         | 含义                                          |
 | ------------------------ | --------------- | ------------ | --------------------------------------------- |
 | `keyword`              | string          | 必填         | 搜索语句                                      |
-| `mode`                 | enum            | `keyword`  | `keyword` / `query` / `regex` / `sql` |
+| `mode`                 | enum            | `query`    | `query` / `regex` / `sql`；旧客户端传 `keyword` 时按 `query` 兼容处理 |
 | `scope`                | enum            | `headings` | `headings` / `full`                       |
 | `notebooks`            | string 或 array | `ALL`      | 限定笔记本 ID                                 |
 | `limit`                | integer         | 20           | 最多文档结果数                                |
@@ -543,10 +543,11 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 
 | mode        | 实现              | 用途                                                   |
 | ----------- | ----------------- | ------------------------------------------------------ |
-| `keyword` | 思源搜索 method 0 | 默认关键词搜索                                         |
-| `query`   | 思源搜索 method 1 | FTS5 查询语法                                          |
+| `query`   | 思源搜索 method 1 | 默认模式；空格分隔词默认 AND，也支持 AND/OR/NOT、短语和前缀 |
 | `regex`   | 思源搜索 method 3 | 正则搜索                                               |
 | `sql`     | `query_sql()`   | 高级诊断；当前代码会把 administrator/privilege 类错误解释为思源 SQL 权限不足 |
+
+`keyword` 不再出现在 MCP schema 中。后端暂时接受旧客户端传入的 `mode="keyword"`，并按 `query`（method 1）执行，避免旧 Skill 或旧会话中断；不再调用语义与多词 AND 契约不一致的 method 0。
 
 scope：
 
