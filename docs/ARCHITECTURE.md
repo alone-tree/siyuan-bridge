@@ -11,7 +11,7 @@
 flowchart LR
   User["用户"]
   Plugin["思源插件\n配置 / MCP JSON / 反馈 / 遥测开关"]
-  AI["AI 客户端\nClaude Code / Codex / Cursor"]
+  AI["AI 客户端\nHermes / Codex / Cursor"]
   Skill["Skill 指令\n启动流程 / 安全规则 / 工具心智"]
   MCP["Python MCP Bridge\nsource_code/mcp_server.py"]
   Client["SiYuanClient\nsource_code/client.py"]

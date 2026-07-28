@@ -240,6 +240,8 @@ JSON-RPC tools/list
 确认工具数量和名称符合预期
 ```
 
+涉及 MCP 工具行为时，还必须直接启动当前源码，通过 JSON-RPC `tools/call` 调用受影响工具，并检查真实返回内容是否符合预期。只确认进程启动、测试通过或 schema 正确，不等于行为验证。
+
 涉及发布或安装材料时运行：
 
 ```bash
@@ -297,60 +299,49 @@ python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE%
 
 首次安装/启用插件的真实用户流程必须额外验证：删除测试插件目录中的 `bridge/config.local.json`，整体导入仓库 `siyuan-plugin/` 后，由用户在思源 UI 启用插件。插件启用后应自动创建 `bridge/config.local.json`，写入当前工作空间名称和 Token；在用户没有点开设置页、没有点击”保存配置”的情况下，外部 MCP 客户端也应能正常启动并调用工具。
 
-涉及 MCP 工具面、Skill、安装配置或跨 Agent 行为时，按项目规则还应调用 Claude Code 做外部验证。外部验证不是只看代码，而是让另一个 Agent 在真实 MCP 客户端环境里调用工具。
+### 第一层：测试代码（单元测试 + 真实 MCP 探针）
 
-### 外部 Agent 验证
+这是 MCP 工具改动的默认验证方式，不依赖 AI，也不要求重启已有 AI 会话。测试端作为普通 MCP 客户端直接启动当前源码，每次运行都会加载最新代码：
 
-必须在当前项目目录运行：
+1. 向 stdio server 发送 `initialize`。
+2. 调用 `tools/list`，检查工具数量、description 和 schema。
+3. 调用受影响工具的 `tools/call`，使用能够区分正确与错误实现的真实输入。
+4. 不只检查“调用成功”，还要断言返回结果的模式、数量、关键内容、路径、块 ID 或错误码。
 
-```bat
-cd /d D:\Github\siyuan-bridge
-```
+例如搜索模式改动不能只检查 `mode.default == query`，还必须实际搜索包含空格的多词输入，确认返回模式为 query 且命中预期文档。此类验证能够发现单元测试中的 Fake Client 与思源真实 API 语义不一致。
 
-项目级 MCP 名称固定为 `siyuan-bridge-dev`，配置文件是根目录 `.mcp.json`，启动脚本指向：
+写入工具只能操作明确的临时测试文档，并在测试后清理。读取、搜索场景优先使用测试工作空间中的固定夹具；如果使用用户工作空间，只执行只读调用，不把随时变化的结果数量硬编码为长期断言。
 
-```text
-plugins/siyuan-bridge/scripts/run_mcp.py
-```
+需要把固定回归场景自动化时，增加轻量 MCP probe 脚本：脚本负责启动 server、发送 JSON-RPC、解析结果和执行语义断言。第一层必须验证代码逻辑和“当前源码 + 真实思源 API + MCP 协议 + 返回结果”。
 
-先确认 Claude Code 能连接项目 MCP：
+### 第二层：能力库开发版 MCP
 
-```bat
-claude mcp list
-claude mcp get siyuan-bridge-dev
-```
+把当前仓库源码临时注册为能力库中的开发版 MCP。每次修改后重新 `load`，再用 `use` 实际调用受影响工具并检查结果。能力库承担通用 MCP 客户端和进程加载职责，不依赖任何 AI 会话重载。
 
-外部验证应优先使用 Claude Code 的宽授权 / bypass 模式，避免工具调用被权限弹窗或 `allowedTools` 限制截断：
+开发版注册必须明确指向当前仓库源码和测试配置，名称中应包含 `dev` 或 `test`。验证结束后按能力库维护规则禁用或移除临时注册，避免与用户版混淆。
 
-```bat
-claude --permission-mode bypassPermissions --dangerously-skip-permissions --print "<验证任务>"
-```
+### 第三层：子代理调用验证
 
-原则：
+让子代理像正常用户一样实际调用受影响工具，并评价返回结果，而不是只复述 schema、阅读代码或引用主代理结论。
 
-- 不要默认加 `--allowedTools`，除非本次就是要测试受限工具集；权限应尽可能接近真实 Agent 可自由调用 MCP 的状态。
-- 验证 MCP 工具面时，至少让 Claude Code 新会话列出工具名称，并检查关键工具 description/schema 是否包含本次改动。
-- 验证工具行为时，必须让 Claude Code 实际调用 `siyuan-bridge-dev` 的 MCP 工具完成最小端到端流程，而不是只复述工具说明。
-- 写入类验证只能操作明确的临时测试文档；测试结束后清理本轮创建的测试文档。
-- 如果验证过程中调用 `siyuan_start`，注意它会清理 `ai_workspace/` 中除 README 外的内容，不要把由此产生的本地导出文件删除误判成代码改动。
+子代理的 MCP 路由顺序固定为：
 
-推荐命令模板：
+1. 优先使用当前环境直接暴露、且已确认指向当前开发版源码和测试配置的内置 MCP。
+2. 如果没有可用的开发版内置 MCP，读取能力库入口，通过能力库调用第二层临时注册的开发版 MCP。
+3. 禁止使用用户版、生产版或无法确认代码来源的思源桥 MCP 做开发验证；无法确认时应报告阻塞，不得猜测。
 
-```bat
-claude --permission-mode bypassPermissions --dangerously-skip-permissions --print "Use only MCP server siyuan-bridge-dev. Call siyuan_start, then ..."
-```
+写入类验证只能操作明确的临时测试文档；测试结束后清理。如果调用 `siyuan_start`，注意它会清理 `ai_workspace/` 中除 README 外的内容。
 
-不同修改范围的最低外部验证：
+不同修改范围的最低验证：
 
-| 修改范围 | Claude Code 外部验证 |
-|---|---|
-| 工具名称、schema、description | `tools/list` 可见 9 个工具；关键工具 description/schema 包含改动 |
-| `siyuan_create` | create 临时文档后立刻用返回路径 `siyuan_read` |
-| `siyuan_doc_manage` | 对临时文档依次验证 rename/move/copy/delete 后路径同步和索引刷新 |
-| 隐私/权限 | 用临时规则或测试文档验证 hidden/read_only/read_write 行为，不读取 Privacy Rules 正文 |
-| Skill/安装配置 | 让 Claude Code 按 Skill 指令调用 `siyuan_start` 并确认工具工作流可执行 |
-
-如果 `claude --print` 因登录、网络、API 错误或 MCP 客户端故障不可用，改用本地 JSON-RPC 探针调用 `initialize` 和 `tools/list`，至少确认 server 可启动、工具数量和名称正确。行为级验证缺失时，必须在最终说明中明确标注“未完成外部行为验证”。
+| 修改范围 | 第一层：测试代码 | 第二层：能力库开发版 | 第三层：子代理调用 |
+|---|---|---|---|
+| 工具名称、schema、description | 单元测试 + `initialize/tools/list` | `load` 后检查开发版工具面 | 实际选择并调用受影响工具 |
+| 单个读取/搜索工具行为 | `tools/call` 使用真实输入并断言结果 | `use` 调用同一真实场景 | 调用并评价结果内容 |
+| `siyuan_create` | create 临时文档后立刻 read | `use` 完成 create/read | 按正常用户路径创建并读回 |
+| `siyuan_doc_manage` | 验证 rename/move/copy/delete 后路径与索引 | `use` 调用受影响动作 | 完成对应多步骤流程 |
+| 隐私/权限 | 验证 hidden/read_only/read_write，不读取 Privacy Rules 正文 | 调用开发版检查拒绝或过滤结果 | 验证工具选择与错误理解 |
+| Skill/安装配置 | 检查配置、工具面和固定流程 | `load/use` 确认注册可用 | 按 Skill 实际执行完整流程 |
 
 当前已经验证过的基线：
 
@@ -371,7 +362,8 @@ python scripts/verify.py
 1. 单元测试。
 2. MCP JSON-RPC `initialize + tools/list`。
 3. 打包清单检查。
-4. 可选外部 Claude Code 验证。
+4. 能力库开发版 MCP 调用。
+5. 子代理实际调用验证。
 
 在该脚本落地前，不要声称已经有全自动验证；仍按上面的命令手动运行。
 
