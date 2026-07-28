@@ -4,16 +4,17 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
-## 2026-07-28：附件与文件夹插入方案完成设计，待实现
+## 2026-07-28：附件、图片与文件夹插入完成实现
 
-- 决定不新增独立附件工具，而是在 `siyuan_edit` 增加 `action="insert_assets"`；不修改 `siyuan_create`。创建含附件文档时使用 `create → read(include_block_ids=true) → edit(insert_assets)`。
+- 在 `siyuan_edit` 增加 `action="insert_assets"`，不新增独立工具、不修改 `siyuan_create`。创建含附件文档时使用 `create → read(include_block_ids=true) → edit(insert_assets)`。
 - 图片和普通文件不拆分，统一走思源附件通道；文件夹与思源官方 MCP 一致，只插入思源生成的本地 `file://` 超链接，不递归上传、不压缩、不负责跨设备同步。
-- 文件、图片和文件夹对外保持同一个 action。底层优先复用思源统一原生 API；若思源 API 自身分开才分开调用。Bridge 不自行处理 Windows/macOS 路径转换。
+- 底层直接复用思源 `/api/asset/insertLocalAssets`，不经过官方 MCP；Bridge 不自行处理 Windows/macOS 路径转换、资源目录、哈希去重或重名改写。
 - 一次调用只支持一个 `start_index/start_id` 位置，可按输入顺序插入多个项目；多位置分多次调用。所有路径、锚点、重名和文件大小先全量预检，再统一执行和验证。
 - 每项可选 `name`（图片 alt 或文件/文件夹锚文本）与 `title`（图片下方标题或链接悬停说明）；缺省名称遵循思源官方文件名逻辑。图片类型直接复用思源官方扩展名清单。
 - 普通文件大于 20 MB 时整批暂停，需 `upload_large_files=true` 重试；文件夹不上传，因此不递归统计大小。
-- 已通过思源 3.7.3 源码和真实探针确认 `/api/asset/insertLocalAssets`：图片与普通文件返回 `assets/...`，目录返回 `file://...`，接口只处理资源、不修改文档。Bridge 将直接调用 HTTP API，不依赖官方 MCP。
-- 完整参数草案、事务/补偿语义、实测事实、待确认点、改动范围和三层验证清单见 [`docs/ASSET_INSERTION_PLAN.md`](./ASSET_INSERTION_PLAN.md)。
+- 写入前仍创建思源快照；上传后若插入或验证失败，只删除本批精确匹配的文档块，不自动删除可能被其他文档复用的附件。
+- 三层行为验证均通过：当前源码 JSON-RPC 探针、能力库临时开发版 MCP、子代理实际调用都正确完成图片→文件→文件夹的顺序插入和读回验证，测试块已删除；临时 MCP 注册和唯一未引用测试附件也已清理。
+- 自动化验证：附件相关测试 187 passed，完整测试 299 passed；插件 Bridge 副本同步与 `dist/package.zip` 构建成功。完整工具契约、实测事实和安全边界见 [`docs/ASSET_INSERTION_PLAN.md`](./ASSET_INSERTION_PLAN.md)。
 
 ## 2026-07-28：开发验证统一为测试代码、能力库开发版和子代理三层
 

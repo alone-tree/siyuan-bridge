@@ -692,6 +692,8 @@ scope：
 | `end_id`      | string  | 范围操作可选            | 结束块 ID              |
 | `markdown`    | string  | 部分 action 必填        | 新内容                 |
 | `table_edit`  | object  | table_edit 必填         | 表格编辑对象           |
+| `assets`      | array   | insert_assets 必填      | 同一锚点后插入的本地文件/文件夹 |
+| `upload_large_files` | boolean | false | 是否允许上传超过 20 MB 的普通文件 |
 | `reference_policy` | enum | `reject` | 删除旧块时的引用策略：`reject` / `break` |
 | `confirmed`   | boolean | 必填                    | 必须为 true            |
 
@@ -706,6 +708,7 @@ scope：
 | `append`               | 追加到文档末尾                                   | 不需要 start_index/start_id |
 | `delete`               | 删除单块或连续块范围                             | 删除目标块                  |
 | `table_edit`           | 编辑普通 Markdown 表格块                         | 保留表格块 ID               |
+| `insert_assets`        | 通过思源原生资源 API 处理文件/文件夹，并在锚点后插入链接 | 锚点不变 |
 
 数据流：
 
@@ -716,11 +719,12 @@ scope：
 5. 校验 `start_index/start_id` 是否匹配当前文档。
 6. 范围操作校验 `end_index/end_id` 和连续范围。
 7. 根据 action 做类型和参数校验。
-8. 对 `delete` / `multi_block_replace` 计算会消失的目标块及其子孙块 ID，检查外部反链。
-9. 创建快照。
-10. 执行块操作。
-11. 重新读取展示块，返回原内容、新内容或上下文；`multi_block_replace` 的“新内容”会排除本轮已删除的旧块 ID，避免思源块树短暂滞后时误报旧块仍存在。
-12. 尝试 pushMsg。
+8. `insert_assets` 在快照前检查全部本地路径、类型、同批重名和 20 MB 阈值。
+9. 对 `delete` / `multi_block_replace` 计算会消失的目标块及其子孙块 ID，检查外部反链。
+10. 创建快照。
+11. 执行块操作；`insert_assets` 先调用 `/api/asset/insertLocalAssets`，再用返回路径生成 Markdown 插在锚点后。
+12. 重新读取展示块，返回原内容、新内容或上下文；`multi_block_replace` 的“新内容”会排除本轮已删除的旧块 ID，避免思源块树短暂滞后时误报旧块仍存在。
+13. 尝试 pushMsg。
 
 重要校验：
 
@@ -728,6 +732,11 @@ scope：
 - 如果 markdown 会生成多个块，必须用 `multi_block_replace`。
 - 复杂块类型拒绝 replace：attachment、database、superblock、html、iframe、video、audio、widget。
 - index/id 不匹配时拒绝写入，并要求重新引用阅读。
+- `insert_assets` 一次只接受一个锚点，可按数组顺序插入多个项目；多位置必须分次调用并重新引用阅读。
+- 图片扩展名直接使用思源前端清单；其他普通文件按附件链接处理，文件夹由思源返回 `file://` 链接且不递归上传。
+- `name` 是图片 alt 或链接正文；`title` 是图片下方标题或文件/文件夹悬停提示。空值按思源官方文件名规则生成且不输出空 title。
+- 同批基础文件名重名时整批拒绝；普通文件超过 20 MB 且 `upload_large_files=false` 时，在快照和上传前暂停整批。
+- 上传后的插入或验证失败时，只删除能明确识别为本批插入的文档块。附件可能经过哈希去重，无法证明是新建且无人共用时不自动删除，返回残留路径和快照恢复提示。
 
 块属性保留：
 

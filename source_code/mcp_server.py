@@ -61,6 +61,11 @@ DEFAULT_SNIPPETS_PER_DOC = 5
 MAX_REFERENCE_DETAILS_PER_BLOCK = 20
 POST_WRITE_SYNC_TIMEOUT = 5.0
 POST_WRITE_SYNC_INTERVAL = 0.25
+ASSET_LARGE_FILE_THRESHOLD_BYTES = 20 * 1024 * 1024
+SIYUAN_IMAGE_EXTENSIONS = frozenset({
+    ".apng", ".ico", ".cur", ".jpg", ".jpe", ".jpeg", ".jfif", ".pjp",
+    ".pjpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".avif", ".tiff", ".tif",
+})
 
 
 def workspace_index_age_days(updated: str, now: datetime | None = None) -> int | None:
@@ -126,6 +131,7 @@ _ERR_STALE_DOCUMENT_PATH = "conflict:stale_document_path"
 _ERR_STALE_CELL_VALUE    = "conflict:stale_cell_value"
 _ERR_MULTI_DOC_OVERWRITE = "conflict:multi_doc_overwrite"
 _ERR_REFERENCED_BLOCKS    = "conflict:referenced_blocks"
+_ERR_DUPLICATE_ASSET_NAME = "conflict:duplicate_asset_name"
 
 # api — 思源 API 层错误（从 SiYuanApiError 转换）
 _ERR_SNAPSHOT_KEY   = "api:snapshot_key"
@@ -133,6 +139,8 @@ _ERR_SNAPSHOT_FAILED = "api:snapshot_failed"
 _ERR_DUPLICATE_NO_ID = "api:duplicate_no_id"
 _ERR_SYNC_TIMEOUT = "api:sync_timeout"
 _ERR_SYNC_CONNECTION = "api:sync_connection"
+_ERR_ASSET_UPLOAD = "api:asset_upload"
+_ERR_ASSET_INSERT = "api:asset_insert"
 
 
 def tool_error(code: str, message: str) -> ValueError:
@@ -428,6 +436,128 @@ class CreateTarget:
 class PostWriteSyncStatus:
     ok: bool
     detail: str
+
+
+@dataclass(frozen=True)
+class AssetInsertionItem:
+    local_path: str
+    basename: str
+    kind: str
+    name: str
+    title: str
+    size_bytes: int | None
+
+
+def _single_line(value: Any) -> str:
+    return " ".join(str(value or "").splitlines()).strip()
+
+
+def _asset_default_name(path: Path, kind: str) -> str:
+    if kind == "image":
+        return path.stem
+    return path.name
+
+
+def _escape_markdown_label(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
+def _escape_markdown_title(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _markdown_destination(value: str) -> str:
+    if any(char.isspace() for char in value) or any(char in value for char in ("(", ")")):
+        return f"<{value.replace('<', '%3C').replace('>', '%3E')}>"
+    return value
+
+
+def render_asset_markdown(item: AssetInsertionItem, resolved_path: str) -> str:
+    label = _escape_markdown_label(item.name)
+    destination = _markdown_destination(resolved_path)
+    title = f' "{_escape_markdown_title(item.title)}"' if item.title else ""
+    prefix = "!" if item.kind == "image" else ""
+    return f"{prefix}[{label}]({destination}{title})"
+
+
+def preflight_asset_items(raw_assets: Any) -> list[AssetInsertionItem]:
+    if not isinstance(raw_assets, list) or not raw_assets:
+        raise tool_error(_ERR_WRONG_SHAPE, "action=insert_assets 需要非空 assets 数组。")
+
+    items: list[AssetInsertionItem] = []
+    basename_sources: dict[str, list[str]] = {}
+    for index, raw_item in enumerate(raw_assets, start=1):
+        if not isinstance(raw_item, dict):
+            raise tool_error(_ERR_INVALID_TYPE, f"assets[{index}] 必须是对象。")
+        for field in ("local_path", "name", "title"):
+            if raw_item.get(field) is not None and not isinstance(raw_item.get(field), str):
+                raise tool_error(_ERR_INVALID_TYPE, f"assets[{index}].{field} 必须是字符串。")
+        local_path = str(raw_item.get("local_path") or "").strip()
+        if not local_path:
+            raise tool_error(_ERR_MISSING_PARAM, f"assets[{index}].local_path 是必填的。")
+        path = Path(local_path)
+        if not path.is_absolute():
+            raise tool_error(
+                _ERR_INVALID_TYPE,
+                f"assets[{index}].local_path 必须是当前 MCP 所在电脑上的绝对路径：{local_path}",
+            )
+        if not path.exists():
+            raise tool_error(_ERR_MISSING_PARAM, f"本地路径不存在：{local_path}")
+        if path.is_dir():
+            kind = "directory"
+            size_bytes = None
+        elif path.is_file():
+            kind = "image" if path.suffix.casefold() in SIYUAN_IMAGE_EXTENSIONS else "file"
+            size_bytes = path.stat().st_size
+        else:
+            raise tool_error(_ERR_WRONG_TARGET, f"本地路径既不是普通文件也不是文件夹：{local_path}")
+
+        basename = path.name
+        if not basename:
+            raise tool_error(_ERR_WRONG_TARGET, f"无法从本地路径取得文件名或文件夹名：{local_path}")
+        name = _single_line(raw_item.get("name")) or _asset_default_name(path, kind)
+        title = _single_line(raw_item.get("title"))
+        item = AssetInsertionItem(
+            local_path=local_path,
+            basename=basename,
+            kind=kind,
+            name=name,
+            title=title,
+            size_bytes=size_bytes,
+        )
+        items.append(item)
+        basename_sources.setdefault(basename.casefold(), []).append(local_path)
+
+    duplicates = [sources for sources in basename_sources.values() if len(sources) > 1]
+    if duplicates:
+        lines = [
+            "同一批次存在重名文件或文件夹，思源返回的 succMap 无法可靠区分它们。",
+            "请把以下重名项目拆成不同调用：",
+        ]
+        for sources in duplicates:
+            lines.append("- " + "；".join(sources))
+        raise tool_error(_ERR_DUPLICATE_ASSET_NAME, "\n".join(lines))
+    return items
+
+
+def resolve_uploaded_asset_paths(
+    items: list[AssetInsertionItem],
+    succ_map: dict[str, str],
+) -> list[str]:
+    casefolded = {str(key).casefold(): str(value) for key, value in succ_map.items()}
+    resolved: list[str] = []
+    for item in items:
+        candidates = (item.basename, item.local_path)
+        value = next((succ_map[key] for key in candidates if key in succ_map), "")
+        if not value:
+            value = next((casefolded[key.casefold()] for key in candidates if key.casefold() in casefolded), "")
+        if not value:
+            raise tool_error(
+                _ERR_ASSET_UPLOAD,
+                f"思源未返回 `{item.basename}` 的资源路径。已返回键：{', '.join(sorted(succ_map)) or '(无)'}",
+            )
+        resolved.append(str(value))
+    return resolved
 
 
 def semantic_block_type(raw_type: str, subtype: str, markdown: str) -> str:
@@ -2563,11 +2693,12 @@ class McpServer:
             "append",
             "delete",
             "table_edit",
+            "insert_assets",
         }
         if action not in allowed_actions:
             raise tool_error(_ERR_INVALID_ENUM,
                 "action 只支持 single_block_replace、multi_block_replace、"
-                "insert_after、insert_before、append、delete、table_edit。"
+                "insert_after、insert_before、append、delete、table_edit、insert_assets。"
             )
 
         doc = self.resolve_visible_document(args)
@@ -2593,6 +2724,44 @@ class McpServer:
             raise tool_error(_ERR_MISSING_PARAM, f"action={action} 需要 markdown。")
         if action == "table_edit" and not isinstance(args.get("table_edit"), dict):
             raise tool_error(_ERR_MISSING_PARAM, "action=table_edit 需要 table_edit 对象。")
+
+        asset_items: list[AssetInsertionItem] = []
+        if action == "insert_assets":
+            if args.get("end_index") is not None or str(args.get("end_id") or "").strip():
+                raise tool_error(
+                    _ERR_WRONG_SHAPE,
+                    "action=insert_assets 一次只支持 start_index/start_id 这一处锚点，"
+                    "不要传 end_index/end_id。多个位置请分次调用并重新引用阅读。",
+                )
+            if args.get("upload_large_files") is not None and not isinstance(args.get("upload_large_files"), bool):
+                raise tool_error(_ERR_INVALID_TYPE, "upload_large_files 必须是 boolean。")
+            asset_items = preflight_asset_items(args.get("assets"))
+            large_files = [
+                {
+                    "local_path": item.local_path,
+                    "size_bytes": item.size_bytes,
+                }
+                for item in asset_items
+                if item.size_bytes is not None
+                and item.size_bytes > ASSET_LARGE_FILE_THRESHOLD_BYTES
+            ]
+            if large_files and not bool(args.get("upload_large_files")):
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "action": "insert_assets",
+                        "requires_confirmation": True,
+                        "threshold_bytes": ASSET_LARGE_FILE_THRESHOLD_BYTES,
+                        "large_files": large_files,
+                        "message": (
+                            "整批尚未写入，也未创建快照或上传资源。"
+                            "如需上传这些大文件，请在用户明确同意后以相同参数增加 "
+                            "upload_large_files=true 重试。"
+                        ),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
 
         if action in {"single_block_replace", "multi_block_replace"}:
             refused = [
@@ -2664,6 +2833,134 @@ class McpServer:
             reference_notice = self._protect_referenced_blocks(client, deleting_ids, args)
 
         self._create_snapshot_or_raise(client, "siyuan_edit", doc_title)
+
+        if action == "insert_assets":
+            resolved_paths: list[str] = []
+            rendered_markdowns: list[str] = []
+            insertion_attempted = False
+            try:
+                with ensure_notebooks_open(client, [notebook_id]):
+                    succ_map = client.insert_local_assets(
+                        doc_id,
+                        [item.local_path for item in asset_items],
+                        is_upload=True,
+                    )
+                    resolved_paths = resolve_uploaded_asset_paths(asset_items, succ_map)
+                    rendered_markdowns = [
+                        render_asset_markdown(item, resolved_path)
+                        for item, resolved_path in zip(asset_items, resolved_paths)
+                    ]
+                    asset_markdown = "\n\n".join(rendered_markdowns)
+                    insertion_attempted = True
+                    client.insert_block_after(target_blocks[-1].id, asset_markdown)
+                    new_display_blocks = build_display_blocks(client, doc_id, include_block_ids=True)
+
+                inserted = blocks_between_anchors(
+                    new_display_blocks,
+                    target_blocks[-1].id,
+                    next_anchor.id if next_anchor else None,
+                )
+                inserted_source = "\n".join(display_block_source(block) for block in inserted)
+                missing_paths = [
+                    resolved_path
+                    for resolved_path in resolved_paths
+                    if resolved_path not in inserted_source
+                ]
+                if missing_paths:
+                    raise tool_error(
+                        _ERR_ASSET_INSERT,
+                        "写入后的文档中未找到以下思源资源路径："
+                        + "；".join(missing_paths),
+                    )
+            except Exception as exc:
+                cleanup_detail = "尚未插入文档块，无需清理文档。"
+                if insertion_attempted and resolved_paths:
+                    try:
+                        with ensure_notebooks_open(client, [notebook_id]):
+                            current_blocks = build_display_blocks(client, doc_id, include_block_ids=True)
+                            candidates = blocks_between_anchors(
+                                current_blocks,
+                                target_blocks[-1].id,
+                                next_anchor.id if next_anchor else None,
+                            )
+                            rendered_markdown_set = {
+                                markdown.strip() for markdown in rendered_markdowns
+                            }
+                            inserted_candidates = [
+                                block
+                                for block in candidates
+                                if display_block_source(block).strip()
+                                in rendered_markdown_set
+                            ]
+                            for block in reversed(inserted_candidates):
+                                client.delete_block(block.id)
+                            after_cleanup = build_display_blocks(client, doc_id, include_block_ids=True)
+                        remaining_candidates = blocks_between_anchors(
+                            after_cleanup,
+                            target_blocks[-1].id,
+                            next_anchor.id if next_anchor else None,
+                        )
+                        remaining_markdown = {
+                            display_block_source(block).strip()
+                            for block in remaining_candidates
+                        }
+                        remaining_paths = [
+                            resolved_path
+                            for resolved_path, markdown in zip(resolved_paths, rendered_markdowns)
+                            if markdown.strip() in remaining_markdown
+                        ]
+                        cleanup_detail = (
+                            f"已删除 {len(inserted_candidates)} 个可明确识别为本批插入的文档块。"
+                            if not remaining_paths
+                            else "文档补偿未完全成功，仍可检测到：" + "；".join(remaining_paths)
+                        )
+                    except Exception as cleanup_exc:
+                        cleanup_detail = f"文档补偿失败：{cleanup_exc}"
+                residual_detail = (
+                    "思源资源目录中可能保留以下资源；为避免删除去重后被其他文档共用的附件，"
+                    "程序未自动删除：" + "；".join(resolved_paths)
+                    if resolved_paths
+                    else "思源接口可能已处理部分资源，但没有返回可安全识别的完整路径，程序未自动删除附件。"
+                )
+                raise tool_error(
+                    _ERR_ASSET_INSERT if insertion_attempted else _ERR_ASSET_UPLOAD,
+                    "附件插入未完成。\n"
+                    f"原始错误：{exc}\n"
+                    f"{cleanup_detail}\n"
+                    f"{residual_detail}\n"
+                    "如需恢复，请在思源中使用本次操作前创建的快照手动恢复。",
+                ) from exc
+
+            try:
+                client.push_msg(f"思源桥：已向「{doc_title}」插入 {len(asset_items)} 个附件")
+            except Exception:
+                pass
+            return json.dumps(
+                {
+                    "ok": True,
+                    "action": "insert_assets",
+                    "document": doc_title,
+                    "document_id": doc_id,
+                    "anchor": {
+                        "start_index": target_blocks[-1].index,
+                        "start_id": target_blocks[-1].id,
+                    },
+                    "inserted": [
+                        {
+                            "local_path": item.local_path,
+                            "kind": item.kind,
+                            "resolved_path": resolved_path,
+                            "name": item.name,
+                            "title": item.title,
+                            "verified": True,
+                        }
+                        for item, resolved_path in zip(asset_items, resolved_paths)
+                    ],
+                    "snapshot_created": True,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
 
         with ensure_notebooks_open(client, [notebook_id]):
             if action == "append":
@@ -3373,19 +3670,35 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_edit",
-            "description": "Edit a visible SiYuan document by document path plus reference-read block index and block ID. Requires confirmed=true and creates a SiYuan workspace snapshot before writing. Use siyuan_read(include_block_ids=true) first to get start_index/start_id. Actions: single_block_replace = one existing block -> one block, uses updateBlock, preserves the target block ID and block attrs, so existing block references stay valid. multi_block_replace = one or more existing blocks -> one or more new blocks, inserts new markdown then deletes old blocks, so old block IDs/attrs are not preserved. multi_block_replace and delete check backlinks for every disappearing block ID and refuse by default. insert_after/insert_before do not modify the anchor block. append adds to document end. table_edit edits one normal Markdown table block.",
+            "description": "Edit a visible SiYuan document by document path plus reference-read block index and block ID. Requires confirmed=true and creates a SiYuan workspace snapshot before writing. Use siyuan_read(include_block_ids=true) first to get start_index/start_id. Actions: single_block_replace = one existing block -> one block, uses updateBlock, preserves the target block ID and block attrs, so existing block references stay valid. multi_block_replace = one or more existing blocks -> one or more new blocks, inserts new markdown then deletes old blocks, so old block IDs/attrs are not preserved. multi_block_replace and delete check backlinks for every disappearing block ID and refuse by default. insert_after/insert_before do not modify the anchor block. append adds to document end. table_edit edits one normal Markdown table block. insert_assets uploads one or more local files/folders through SiYuan's native asset API and inserts their links after one anchor.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "document": {"type": "string", "description": "Document path including notebook name, e.g. /Notebook/Folder/Doc. If ambiguous, use document_id instead."},
                     "document_id": {"type": "string", "description": "Optional document id fallback when document path is ambiguous."},
-                    "action": {"type": "string", "enum": ["single_block_replace", "multi_block_replace", "insert_after", "insert_before", "append", "delete", "table_edit"], "description": "Choose single_block_replace only when replacing exactly one block with exactly one block and preserving its block ID matters. Choose multi_block_replace when replacing a range or when the new markdown may create multiple blocks; old block IDs and references will be invalidated."},
+                    "action": {"type": "string", "enum": ["single_block_replace", "multi_block_replace", "insert_after", "insert_before", "append", "delete", "table_edit", "insert_assets"], "description": "Choose single_block_replace only when replacing exactly one block with exactly one block and preserving its block ID matters. Choose multi_block_replace when replacing a range or when the new markdown may create multiple blocks; old block IDs and references will be invalidated. Choose insert_assets to insert local files/folders after one existing anchor."},
                     "start_index": {"type": "integer", "description": "Global display block index from reference reading. Required except append."},
                     "start_id": {"type": "string", "description": "Block ID from reference reading. Required except append."},
                     "end_index": {"type": "integer", "description": "Inclusive global display block index for multi_block_replace/delete range operations."},
                     "end_id": {"type": "string", "description": "Inclusive end block ID for multi_block_replace/delete range operations."},
                     "markdown": {"type": "string", "description": "Markdown to insert or replace with. For single_block_replace this must render as exactly one display block. For multi_block_replace it may render as one or more new blocks."},
                     "reference_policy": {"type": "string", "enum": ["reject", "break"], "default": "reject", "description": "For delete and multi_block_replace only. reject refuses when any disappearing block ID is referenced. Use break only after the user explicitly confirms that those reported references may be broken."},
+                    "assets": {
+                        "type": "array",
+                        "minItems": 1,
+                        "description": "Required for action=insert_assets. Every item is inserted after the same start_index/start_id anchor, in array order. Duplicate base filenames in one batch are rejected; split them into separate calls.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "local_path": {"type": "string", "description": "Absolute path on the computer running this MCP. Files are uploaded into SiYuan; folders become local file:// links and are not copied recursively."},
+                                "name": {"type": "string", "description": "Visible body name: image alt text, or file/folder link anchor text. This is not the image caption. If omitted or blank, images use the original filename without extension; files use the full filename; folders use the directory name."},
+                                "title": {"type": "string", "description": "Optional Markdown title. For images SiYuan displays it as the caption below the image; for files/folders it is usually only a hover tooltip. This is not the visible file link name. Omit or leave blank to generate no title."},
+                            },
+                            "required": ["local_path"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "upload_large_files": {"type": "boolean", "default": False, "description": "For action=insert_assets only. Allow ordinary files larger than 20 MB. Default false pauses the whole batch before snapshot/upload and asks for explicit user approval; folders are not size-scanned."},
                     "table_edit": {
                         "type": "object",
                         "description": "Required for action=table_edit on a normal Markdown table block. Use the table coordinate view from siyuan_read(include_block_ids=true): row=0 is header, row>=1 are data rows, column_index is 1-based.",

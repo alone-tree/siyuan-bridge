@@ -5,6 +5,7 @@ import shutil
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from source_code import mcp_server
 from source_code.client import SiYuanConnectionError, SiYuanTimeoutError
@@ -29,6 +30,7 @@ class FakeSearchClient:
         self._appended_blocks: list[tuple[str, str]] = []
         self._inserted_after: list[tuple[str, str]] = []
         self._inserted_before: list[tuple[str, str]] = []
+        self._inserted_assets: list[tuple[str, list[str], bool]] = []
         self._deleted_blocks: list[str] = []
         self._created_docs: list[tuple[str, str, str]] = []
         self._renamed_docs: list[tuple[str, str]] = []
@@ -166,6 +168,18 @@ class FakeSearchClient:
     def insert_block_before(self, next_id, markdown):
         self._inserted_before.append((next_id, markdown))
         self._insert_near(next_id, markdown, after=False)
+
+    def insert_local_assets(self, document_id, asset_paths, *, is_upload=True):
+        self._inserted_assets.append((document_id, list(asset_paths), is_upload))
+        result = {}
+        for raw_path in asset_paths:
+            path = Path(raw_path)
+            result[path.name] = (
+                f"file://{raw_path}"
+                if path.is_dir()
+                else f"assets/{path.name}"
+            )
+        return result
 
     def delete_block(self, block_id):
         self._deleted_blocks.append(block_id)
@@ -345,6 +359,34 @@ class McpServerTests(unittest.TestCase):
         mode = spec["inputSchema"]["properties"]["mode"]
         self.assertEqual(mode["default"], "query")
         self.assertEqual(mode["enum"], ["query", "regex", "sql"])
+
+    def test_edit_tool_spec_exposes_insert_assets_name_and_title_semantics(self):
+        spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_edit")
+        properties = spec["inputSchema"]["properties"]
+        self.assertIn("insert_assets", properties["action"]["enum"])
+        self.assertEqual(properties["upload_large_files"]["default"], False)
+        asset_properties = properties["assets"]["items"]["properties"]
+        self.assertIn("Visible body name", asset_properties["name"]["description"])
+        self.assertIn("caption below the image", asset_properties["title"]["description"])
+        self.assertEqual(properties["assets"]["items"]["required"], ["local_path"])
+
+    def test_render_asset_markdown_escapes_labels_titles_and_spaced_destinations(self):
+        item = mcp_server.AssetInsertionItem(
+            local_path=r"D:\files\a.png",
+            basename="a.png",
+            kind="image",
+            name=r"A [chart]\name",
+            title='Quarter "one"',
+            size_bytes=10,
+        )
+        rendered = mcp_server.render_asset_markdown(
+            item,
+            r"file://D:\folder with space\a.png",
+        )
+        self.assertEqual(
+            rendered,
+            '![A \\[chart\\]\\\\name](<file://D:\\folder with space\\a.png> "Quarter \\"one\\"")',
+        )
 
     def test_operate_sync_calls_default_siyuan_sync(self):
         client = FakeSearchClient([])
@@ -701,6 +743,8 @@ class McpServerWriteTests(unittest.TestCase):
             encoding="utf-8",
         )
         write_privacy_rules_cache(self.root, PrivacyRules(ignore=[], allow=[]))
+        self.asset_dir = self.root / "local-assets"
+        self.asset_dir.mkdir(parents=True, exist_ok=True)
         docs = [
             {
                 "id": "doc1",
@@ -1821,6 +1865,234 @@ class McpServerWriteTests(unittest.TestCase):
             self.assertEqual(client._inserted_after, [("block1", "Inserted after anchor.")])
             self.assertIn("insert_after", result)
             self.assertIn("block1", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_insert_assets_uploads_multiple_items_in_order(self):
+        image = self.asset_dir / "chart.TIFF"
+        file_path = self.asset_dir / "README.md"
+        folder = self.asset_dir / "source files"
+        image.write_bytes(b"image")
+        file_path.write_text("readme", encoding="utf-8")
+        folder.mkdir()
+        blocks = {
+            "doc1": [
+                {"id": "block1", "type": "p", "markdown": "Anchor text."},
+                {"id": "block2", "type": "p", "markdown": "Next text."},
+            ]
+        }
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            result = json.loads(server.siyuan_edit({
+                "document": "/Main/Projects/Doc One",
+                "action": "insert_assets",
+                "start_index": 1,
+                "start_id": "block1",
+                "assets": [
+                    {"local_path": str(image), "title": "季度图"},
+                    {"local_path": str(file_path), "name": "说明文件", "title": "悬停提示"},
+                    {"local_path": str(folder), "name": "源文件目录"},
+                ],
+                "confirmed": True,
+            }))
+
+            self.assertTrue(result["ok"])
+            self.assertEqual([item["kind"] for item in result["inserted"]], ["image", "file", "directory"])
+            self.assertEqual(result["inserted"][0]["name"], "chart")
+            self.assertEqual(client._inserted_assets[0][0], "doc1")
+            inserted_markdown = client._inserted_after[0][1]
+            self.assertLess(inserted_markdown.index("chart.TIFF"), inserted_markdown.index("README.md"))
+            self.assertLess(inserted_markdown.index("README.md"), inserted_markdown.index("source files"))
+            self.assertIn('![chart](assets/chart.TIFF "季度图")', inserted_markdown)
+            self.assertIn('[说明文件](assets/README.md "悬停提示")', inserted_markdown)
+            self.assertIn("[源文件目录](<file://", inserted_markdown)
+            self.assertEqual(len(client._snapshots), 1)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_insert_assets_blank_name_uses_official_defaults(self):
+        image = self.asset_dir / "photo.avif"
+        other = self.asset_dir / "photo.heic"
+        image.write_bytes(b"image")
+        other.write_bytes(b"other")
+        blocks = {"doc1": [{"id": "block1", "type": "p", "markdown": "Anchor."}]}
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            result = json.loads(server.siyuan_edit({
+                "document_id": "doc1",
+                "action": "insert_assets",
+                "start_index": 1,
+                "start_id": "block1",
+                "assets": [
+                    {"local_path": str(image), "name": "", "title": ""},
+                    {"local_path": str(other)},
+                ],
+                "confirmed": True,
+            }))
+            self.assertEqual(result["inserted"][0]["kind"], "image")
+            self.assertEqual(result["inserted"][0]["name"], "photo")
+            self.assertEqual(result["inserted"][1]["kind"], "file")
+            self.assertEqual(result["inserted"][1]["name"], "photo.heic")
+            markdown = client._inserted_after[0][1]
+            self.assertIn("![photo](assets/photo.avif)", markdown)
+            self.assertIn("[photo.heic](assets/photo.heic)", markdown)
+            self.assertNotIn('""', markdown)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_insert_assets_rejects_duplicate_basenames_before_snapshot(self):
+        first_dir = self.asset_dir / "a"
+        second_dir = self.asset_dir / "b"
+        first_dir.mkdir()
+        second_dir.mkdir()
+        first = first_dir / "Report.txt"
+        second = second_dir / "report.TXT"
+        first.write_text("a", encoding="utf-8")
+        second.write_text("b", encoding="utf-8")
+        blocks = {"doc1": [{"id": "block1", "type": "p", "markdown": "Anchor."}]}
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_edit({
+                    "document_id": "doc1",
+                    "action": "insert_assets",
+                    "start_index": 1,
+                    "start_id": "block1",
+                    "assets": [
+                        {"local_path": str(first)},
+                        {"local_path": str(second)},
+                    ],
+                    "confirmed": True,
+                })
+            self.assertIn("拆成不同调用", str(ctx.exception))
+            self.assertEqual(client._snapshots, [])
+            self.assertEqual(client._inserted_assets, [])
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_insert_assets_large_file_pauses_before_snapshot(self):
+        large = self.asset_dir / "large.bin"
+        large.write_bytes(b"12")
+        blocks = {"doc1": [{"id": "block1", "type": "p", "markdown": "Anchor."}]}
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            with mock.patch.object(mcp_server, "ASSET_LARGE_FILE_THRESHOLD_BYTES", 1):
+                result = json.loads(server.siyuan_edit({
+                    "document_id": "doc1",
+                    "action": "insert_assets",
+                    "start_index": 1,
+                    "start_id": "block1",
+                    "assets": [{"local_path": str(large)}],
+                    "confirmed": True,
+                }))
+            self.assertFalse(result["ok"])
+            self.assertTrue(result["requires_confirmation"])
+            self.assertEqual(result["large_files"][0]["size_bytes"], 2)
+            self.assertEqual(client._snapshots, [])
+            self.assertEqual(client._inserted_assets, [])
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_insert_assets_large_file_flag_allows_upload(self):
+        large = self.asset_dir / "large.bin"
+        large.write_bytes(b"12")
+        blocks = {"doc1": [{"id": "block1", "type": "p", "markdown": "Anchor."}]}
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            with mock.patch.object(mcp_server, "ASSET_LARGE_FILE_THRESHOLD_BYTES", 1):
+                result = json.loads(server.siyuan_edit({
+                    "document_id": "doc1",
+                    "action": "insert_assets",
+                    "start_index": 1,
+                    "start_id": "block1",
+                    "assets": [{"local_path": str(large)}],
+                    "upload_large_files": True,
+                    "confirmed": True,
+                }))
+            self.assertTrue(result["ok"])
+            self.assertEqual(len(client._inserted_assets), 1)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_insert_assets_stale_anchor_does_not_upload(self):
+        file_path = self.asset_dir / "file.txt"
+        file_path.write_text("x", encoding="utf-8")
+        blocks = {"doc1": [{"id": "block1", "type": "p", "markdown": "Anchor."}]}
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            with self.assertRaises(ValueError):
+                server.siyuan_edit({
+                    "document_id": "doc1",
+                    "action": "insert_assets",
+                    "start_index": 1,
+                    "start_id": "stale-id",
+                    "assets": [{"local_path": str(file_path)}],
+                    "confirmed": True,
+                })
+            self.assertEqual(client._snapshots, [])
+            self.assertEqual(client._inserted_assets, [])
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_insert_assets_rejects_range_anchor_before_snapshot(self):
+        file_path = self.asset_dir / "file.txt"
+        file_path.write_text("x", encoding="utf-8")
+        blocks = {
+            "doc1": [
+                {"id": "block1", "type": "p", "markdown": "Anchor."},
+                {"id": "block2", "type": "p", "markdown": "Second."},
+            ]
+        }
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_edit({
+                    "document_id": "doc1",
+                    "action": "insert_assets",
+                    "start_index": 1,
+                    "start_id": "block1",
+                    "end_index": 2,
+                    "end_id": "block2",
+                    "assets": [{"local_path": str(file_path)}],
+                    "confirmed": True,
+                })
+            self.assertIn("一次只支持", str(ctx.exception))
+            self.assertEqual(client._snapshots, [])
+            self.assertEqual(client._inserted_assets, [])
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_insert_assets_validation_failure_compensates_document_blocks(self):
+        file_path = self.asset_dir / "file.txt"
+        file_path.write_text("x", encoding="utf-8")
+        blocks = {"doc1": [{"id": "block1", "type": "p", "markdown": "Anchor."}]}
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        real_build = mcp_server.build_display_blocks
+        call_count = 0
+
+        def fail_one_readback(fake_client, root_id, *, include_block_ids=False):
+            nonlocal call_count
+            call_count += 1
+            result = real_build(fake_client, root_id, include_block_ids=include_block_ids)
+            if call_count == 2:
+                return [block for block in result if block.id == "block1"]
+            return result
+
+        try:
+            with mock.patch.object(mcp_server, "build_display_blocks", side_effect=fail_one_readback):
+                with self.assertRaises(ValueError) as ctx:
+                    server.siyuan_edit({
+                        "document_id": "doc1",
+                        "action": "insert_assets",
+                        "start_index": 1,
+                        "start_id": "block1",
+                        "assets": [{"local_path": str(file_path)}],
+                        "confirmed": True,
+                    })
+            self.assertIn("已删除 1 个", str(ctx.exception))
+            self.assertIn("程序未自动删除", str(ctx.exception))
+            self.assertEqual(len(client._deleted_blocks), 1)
+            self.assertEqual(client._blocks["doc1"][0]["id"], "block1")
         finally:
             mcp_server.detect_active_profile = original
 

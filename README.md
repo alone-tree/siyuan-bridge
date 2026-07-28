@@ -17,7 +17,7 @@
 | `siyuan_list`       | 列出笔记本和文档树                     | `ls`        |
 | `siyuan_find`       | 搜索知识库                             | `grep`      |
 | `siyuan_read`       | 分段阅读，含大纲导航和块 ID 引用       | `read`      |
-| `siyuan_edit`       | 文档编辑：支持单块和多块、表格坐标编辑 | `edit`      |
+| `siyuan_edit`       | 文档编辑：单块、多块、表格和本地附件   | `edit`      |
 | `siyuan_create`     | 创建或重写文档                         | `write`     |
 | `siyuan_doc_manage` | 改名、移动、删除、复制、导出           | 文件管理      |
 

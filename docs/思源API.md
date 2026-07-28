@@ -38,7 +38,7 @@
 | SQL | `/api/query/sql` | 结构化读取 blocks 表、诊断、定位 | 内部使用，不开放任意 SQL |
 | 反链 | `/api/query/sql` 查询 `refs` 并关联 `blocks` | 写前检查即将消失的文档/块 ID 是否仍被引用 | 仅由写入保护内部使用 |
 | 导出 | `/api/export/exportMdContent` 等 | 读取文档 Markdown、导出资源 | 已用于阅读；不作为写入主路径 |
-| 资源 | asset 上传、查询、OCR、清理类端点 | 图片、附件、资源管理 | 第一阶段不开放 |
+| 资源 | `/api/asset/insertLocalAssets` | 按目标文档处理本地文件/文件夹并返回资源路径 | 仅由 `siyuan_edit(action=insert_assets)` 内部使用 |
 | 仓库快照 | `/api/repo/createSnapshot`, `/api/repo/getRepoSnapshots` | 写入前备份；必要时帮助用户找到恢复点 | `createSnapshot` 内部强制使用；查询可后续做只读诊断 |
 | 仓库恢复 | `/api/repo/checkoutRepo` | 恢复整个工作空间到某个快照 | 不暴露给 AI |
 | 历史 | history rollback 类端点 | 文档/资源历史恢复 | 第一阶段不使用；只作为人工恢复参考 |
@@ -52,7 +52,7 @@
 
 | MCP 工具 | 用户语义 | 内部 API 组合 |
 |----------|----------|---------------|
-| `siyuan_edit` | 在已有可见文档中替换、追加、删除、插入文本，或编辑普通 Markdown 表格 | 隐私检查；引用阅读定位校验；delete/multi 写前查询 `refs`；`repo/createSnapshot`；`block/updateBlock` / `appendBlock` / `insertBlock` / `deleteBlock`；`notification/pushMsg` |
+| `siyuan_edit` | 在已有可见文档中替换、追加、删除、插入文本、编辑普通 Markdown 表格或插入本地附件 | 隐私检查；引用阅读定位校验；delete/multi 写前查询 `refs`；`repo/createSnapshot`；`asset/insertLocalAssets`；`block/updateBlock` / `appendBlock` / `insertBlock` / `deleteBlock`；`notification/pushMsg` |
 | `siyuan_create` | 通过完整可读路径创建、覆盖或新增同名文档 | 隐私和路径检查；overwrite 写前查询旧正文块反链；`repo/createSnapshot`；`filetree/createDocWithMd` 或 `block/deleteBlock` + `block/appendBlock`；`notification/pushMsg`；`filetree/getHPathByID` 等待路径同步 |
 | `siyuan_doc_manage` | 管理文档树：改名、移动、删除、复制、导出 | 权限检查；`copy/export` 允许只读源文档；`rename/move/delete` 需可写；`delete` 写前扫描子孙权限和整棵子树反链；`move` 写前检查源文档祖先链和目标父路径权限；写操作调用 `repo/createSnapshot`；内部使用 `renameDocByID` / `moveDocsByID` / `removeDocByID` / `duplicateDoc` / `exportMdContent`；写后用 `getHPathByID` 确认路径同步 |
 
@@ -64,9 +64,26 @@ action
 start_index
 start_id
 end_index/end_id（可选）
-markdown 或 table_edit
+markdown、table_edit 或 assets
 confirmed
 ```
+
+## 本地资源插入
+
+经思源 3.7.3 源码和真实探针确认，思源官方 MCP 的本地资源动作可直接通过 HTTP 调用：
+
+```text
+POST /api/asset/insertLocalAssets
+{
+  "id": "<目标文档 ID>",
+  "assetPaths": ["<本地绝对路径>"],
+  "isUpload": true
+}
+```
+
+返回 `data.succMap`，键为输入项目的基础名称，值为思源处理后的路径。普通文件进入目标文档资源目录并复用思源的文件名规范化、哈希去重逻辑；目录不递归复制，返回本机 `file://` 链接。该端点只处理资源，不修改文档，Bridge 必须再调用 `block/insertBlock` 写入 Markdown。
+
+Bridge 不经思源官方 MCP 中转。由于 `succMap` 以基础名称为键，同批基础文件名重名时必须在调用前拒绝。上传后的资源可能是已存在附件的去重结果；无法证明是本批新建且无人使用时，不得为补偿而自动删除。
 
 或：
 
@@ -179,7 +196,7 @@ POST /api/sync/getSyncInfo
 | 能力 | 可能方案 |
 |------|----------|
 | 块 ID 引用 | 已由 `siyuan_read(include_block_ids=true)` 返回块序号和块 ID 定位头；删除 ID 前由 `refs` 反链保护 |
-| 资源写入 | 在 `siyuan_create` 或专门的资产工具中封装上传和 Markdown 插入 |
+| 资源写入 | 已由 `siyuan_edit(action=insert_assets)` 封装本地资源处理、Markdown 插入和读回验证 |
 | 只读快照查询 | 增加诊断工具列出由本项目创建的最近快照 |
 | 自动回滚 | 等写入稳定后再评估块级操作日志，不直接使用 repo checkout |
 | AI 修改标记 | 用 `setBlockAttrs` 标记由 AI 创建或修改的块 |

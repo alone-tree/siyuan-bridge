@@ -17,7 +17,7 @@ The core tools follow the same mental model as AI coding tools while preserving 
 | `siyuan_list` | Lists notebooks and document trees | `ls` |
 | `siyuan_find` | Searches the knowledge base | `grep` |
 | `siyuan_read` | Reads in sections with outline navigation and block ID references | `read` |
-| `siyuan_edit` | Edits single or multiple blocks and table cells by coordinates | `edit` |
+| `siyuan_edit` | Edits blocks and tables, and inserts local assets | `edit` |
 | `siyuan_create` | Creates or rewrites documents | `write` |
 | `siyuan_doc_manage` | Renames, moves, deletes, copies, and exports documents | File manager |
 

@@ -108,6 +108,32 @@ class SiYuanClient:
         except error.URLError as exc:
             raise SiYuanConnectionError(str(exc.reason)) from exc
 
+    def insert_local_assets(
+        self,
+        document_id: str,
+        asset_paths: list[str],
+        *,
+        is_upload: bool = True,
+    ) -> dict[str, str]:
+        data = self._post(
+            "/api/asset/insertLocalAssets",
+            {
+                "id": document_id,
+                "assetPaths": asset_paths,
+                "isUpload": is_upload,
+            },
+        )
+        if not isinstance(data, dict):
+            raise SiYuanApiError("Unexpected insertLocalAssets response shape")
+        succ_map = data.get("succMap")
+        if not isinstance(succ_map, dict):
+            raise SiYuanApiError("Unexpected insertLocalAssets succMap response shape")
+        return {
+            str(source): str(resolved)
+            for source, resolved in succ_map.items()
+            if str(source) and str(resolved)
+        }
+
     def search_full_text(
         self,
         query: str,

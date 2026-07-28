@@ -270,6 +270,36 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(seen["url"], "http://127.0.0.1:6806/api/block/insertBlock")
         self.assertEqual(seen["body"], {"dataType": "markdown", "data": "inserted text", "previousID": "prev123"})
 
+    def test_insert_local_assets_payload_and_succ_map(self):
+        seen = {}
+
+        def transport(req, timeout):
+            seen["url"] = req.full_url
+            seen["body"] = json.loads(req.data.decode("utf-8"))
+            return FakeResponse({
+                "code": 0,
+                "data": {"succMap": {"chart.png": "assets/chart-abc.png"}},
+            })
+
+        client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
+        result = client.insert_local_assets("doc1", [r"D:\files\chart.png"])
+
+        self.assertEqual(seen["url"], "http://127.0.0.1:6806/api/asset/insertLocalAssets")
+        self.assertEqual(seen["body"], {
+            "id": "doc1",
+            "assetPaths": [r"D:\files\chart.png"],
+            "isUpload": True,
+        })
+        self.assertEqual(result, {"chart.png": "assets/chart-abc.png"})
+
+    def test_insert_local_assets_rejects_missing_succ_map(self):
+        def transport(req, timeout):
+            return FakeResponse({"code": 0, "data": {}})
+
+        client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
+        with self.assertRaises(SiYuanApiError):
+            client.insert_local_assets("doc1", [r"D:\files\chart.png"])
+
     def test_push_msg_payload(self):
         seen = {}
 
