@@ -4,6 +4,16 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
+## 2026-07-28：附件与文件夹插入方案完成设计，待实现
+
+- 决定不新增独立附件工具，而是在 `siyuan_edit` 增加 `action="insert_assets"`；不修改 `siyuan_create`。创建含附件文档时使用 `create → read(include_block_ids=true) → edit(insert_assets)`。
+- 图片和普通文件不拆分，统一走思源附件通道；文件夹与思源官方 MCP 一致，只插入思源生成的本地 `file://` 超链接，不递归上传、不压缩、不负责跨设备同步。
+- 文件、图片和文件夹对外保持同一个 action。底层优先复用思源统一原生 API；若思源 API 自身分开才分开调用。Bridge 不自行处理 Windows/macOS 路径转换。
+- 一次调用支持同一位置多个项目及多位置插入，每项使用写入前 `start_index/start_id` 双重锚点。所有路径、锚点和文件大小先全量预检，再统一执行和验证。
+- 普通文件大于 20 MB 时整批暂停，需 `confirm_large_files=true` 重试；文件夹不上传，因此不递归统计大小。
+- 尚未确认官方 MCP 内部 `model.InsertLocalAssets` 是否有可供 Python Bridge 调用的等价 HTTP 路由。下次必须先核对思源当前源码并用图片、普通文件、目录做真实 API 探针，不能猜接口或先写跨平台路径代码。
+- 完整参数草案、事务/补偿语义、实测事实、待确认点、改动范围和三层验证清单见 [`docs/ASSET_INSERTION_PLAN.md`](./ASSET_INSERTION_PLAN.md)。
+
 ## 2026-07-28：开发验证统一为测试代码、能力库开发版和子代理三层
 
 - 取消另开独立 AI/Hermes 会话做外部验证的方案，不依赖 `/reload-mcp`，也不建设 Codex 与 Hermes 的消息桥。
