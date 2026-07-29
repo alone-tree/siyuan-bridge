@@ -1011,6 +1011,15 @@ function applyCurrentWorkspaceDefaults(config, context) {
   if (!normalized.profiles[0].token && context.currentToken) {
     normalized.profiles[0].token = context.currentToken;
   }
+  if (
+    context.currentToken
+    && !normalized.profiles.some((profile) => profile.token === context.currentToken)
+  ) {
+    normalized.profiles.push({
+      name: context.currentWorkspaceName || `工作空间 ${normalized.profiles.length + 1}`,
+      token: context.currentToken,
+    });
+  }
   return normalized;
 }
 
@@ -1020,9 +1029,9 @@ async function ensureDefaultBridgeConfig() {
     return;
   }
   const existing = await readBridgeConfig();
-  const existingFirstToken = existing.config?.profiles?.[0]?.token || "";
+  const previous = normalizeConfig(existing.config || DEFAULT_CONFIG);
   const config = applyCurrentWorkspaceDefaults(existing.config || DEFAULT_CONFIG, context);
-  if (!existing.exists || !existingFirstToken) {
+  if (!existing.exists || JSON.stringify(config) !== JSON.stringify(previous)) {
     await saveBridgeConfig(config);
   }
 }
@@ -1156,7 +1165,7 @@ function bindSettings(root, config, context) {
     if (action === "refresh-json") {
       await refreshDetectedPaths(container, state);
       refreshJson();
-      showMessage("已按当前电脑刷新 MCP 路径");
+      showMessage("已按当前电脑刷新 MCP 路径和 Token");
     }
     if (action === "copy-json") {
       refreshJson();
@@ -1201,6 +1210,9 @@ async function refreshDetectedPaths(container, state) {
       input.value = state.context[key] || "";
     }
   }
+  state.config = applyCurrentWorkspaceDefaults(state.config, state.context);
+  container.querySelector("[data-profiles]").innerHTML = renderProfiles(state.config.profiles);
+  await saveBridgeConfig(state.config);
 }
 
 async function saveBridgeConfig(config) {

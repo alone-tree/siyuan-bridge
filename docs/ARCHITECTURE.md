@@ -52,7 +52,7 @@ flowchart LR
 
 | 场景 | 主调用链 |
 |---|---|
-| 首次使用 | 思源插件读取当前工作空间 Token → 写入 `bridge/config.local.json` → 用户复制 MCP JSON 到 AI 客户端 |
+| 首次使用 | 思源插件读取当前设备 Token → 合并写入 `bridge/config.local.json` 的 profiles → 用户复制 MCP JSON 到 AI 客户端 |
 | 会话启动 | AI 调 `siyuan_start` → 探测 profile → 确保系统笔记本 → 解析 Privacy Rules → 刷新安全索引 → 返回启动包 |
 | 搜索 | `siyuan_find` → 临时打开目标笔记本 → 思源搜索/SQL → 隐私过滤 → 按文档聚合结果 |
 | 阅读 | `siyuan_read` → 解析可见文档 → 路径 live 校验 → `getChildBlocks` → 块窗口 + 大纲 → 提取附件到 `ai_workspace/` |
@@ -153,7 +153,7 @@ siyuan-plugin/
 
 MCP JSON 只包含 Python 命令、`run_mcp.py` 绝对路径和 `PYTHONUTF8=1`。Token 只保存在 `bridge/config.local.json` 中，并继续使用现有 `profiles` 配置模型。绝对路径属于当前设备运行状态，不写入插件配置；插件每次打开 MCP 配置页或点击“刷新 JSON”时，都会通过 `/api/system/getWorkspaces` 重新识别当前打开的本机工作空间并生成路径。
 
-插件启动和设置页通过思源本地 `/api/system/getConf` 获取当前工作空间 Token，通过 `/api/system/getWorkspaces` 获取当前设备实际打开的工作空间路径。首次启用插件时，如果 `bridge/config.local.json` 不存在，或默认 profile 没有 Token，插件会自动写入当前工作空间名称和 Token，让外部 MCP 客户端不需要先手动打开设置页并保存。Token 在设置页中允许明文显示，方便用户确认工作空间；但不得写入 MCP JSON。若用户已有非空本地 profile Token，插件不自动覆盖。用户手动新增、改名或修改 Token 后，仍通过设置页“保存配置”更新 `bridge/config.local.json`。多台电脑同步同一插件时，profiles 等插件配置可以同步，但 MCP 绝对路径必须在每台电脑上按当前工作空间重新生成。
+插件启动和设置页通过思源本地 `/api/system/getConf` 获取当前设备 Token，通过 `/api/system/getWorkspaces` 获取当前设备实际打开的工作空间路径。插件每次启动时，如果当前 Token 尚未存在于 `bridge/config.local.json` 的 profiles 中，就以当前工作空间名称追加一个 profile；已有 profile 不覆盖、不删除、不重排。设置页点击“刷新 JSON”时同样合并当前 Token 并保存配置。这样同一插件目录跨设备同步时，各设备 Token 会逐步汇总到 profiles，MCP JSON 仍不包含 Token。Token 在设置页中允许明文显示，方便用户确认工作空间；用户也可以手动新增、改名或修改 profile。MCP 绝对路径仍必须在每台电脑上按当前工作空间重新生成。
 
 插件前端的实现细节、CommonJS/ESM 加载坑、测试导入流程和 UI 数据流见 `docs/FRONTEND.md`。架构文档只记录它与 Python Bridge、配置文件和 Worker 后端的关系。
 
@@ -179,13 +179,15 @@ MCP JSON 只包含 Python 命令、`run_mcp.py` 绝对路径和 `PYTHONUTF8=1`�
 }
 ```
 
-思源默认监听 `http://127.0.0.1:6806` 和 `http://localhost:6806`。`detect_active_profile()` 会用各 profile token 调用 `list_notebooks()` 探测当前在线工作空间。思源一次只有一个工作空间稳定暴露在默认端口；多工作空间场景下，系统笔记本和隐私规则存放在思源内，天然随当前工作空间切换。
+思源默认监听 `http://127.0.0.1:6806` 和 `http://localhost:6806`。只有 `siyuan_start` 会调用 `detect_active_profile()`，用各 profile token 调用 `list_notebooks()` 探测当前在线工作空间。探测成功后，profile 和 `SiYuanClient` 缓存在当前 `McpServer` 实例中；普通工具复用该连接，不再扫描 profiles。思源一次只有一个工作空间稳定暴露在默认端口；多工作空间场景下，系统笔记本和隐私规则存放在思源内，天然随当前工作空间切换。
 
-连接失败的行为要求：
+连接状态的行为要求：
 
-- MCP 工具调用前探测思源 API。
-- 不尝试查找或启动思源进程。
-- 错误提示必须包含“请提示用户手动打开思源笔记后重试。”
+- 当前 MCP 进程中，只有成功完整返回的 `siyuan_start` 才算完成初始化；MCP 协议 `initialize` 不算。
+- 未成功 start 时，除 feedback 外的普通工具直接提示 AI 先调用 `siyuan_start`，不自行探测 Token。
+- 再次调用 `siyuan_start` 会先清空旧连接，重新探测并覆盖当前 profile。
+- 普通连接失败或 401/403 鉴权失败会清空缓存，提示重新调用 `siyuan_start`；普通业务错误不清空。
+- MCP 进程退出后实例缓存自然失效。不按时间设置过期，也不尝试查找或启动思源进程。
 
 ## 系统笔记本
 
@@ -443,6 +445,7 @@ siyuan_bridge_feedback
 6. 调用 `refresh_index()`，并传入系统笔记本 ID 和 Privacy Rules 文档 ID。
 7. 读取本地 notebook overview。
 8. 组装启动包。
+9. 完整启动成功后，将当前 profile 和 Client 缓存在本 MCP 进程中。
 
 返回内容按固定顺序：
 
@@ -457,6 +460,9 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 设计约束：
 
 - 必须先于普通读写使用。
+- 未 start 的普通工具不得自动探测 profile；应直接提示先调用 `siyuan_start`。
+- start 中途失败不得保留旧连接或半初始化连接。
+- 缓存连接只属于当前 `McpServer` 实例；连接或鉴权失效后清空并要求重新 start。
 - 不返回语言偏好、系统笔记本 ID 或 About 入口。
 - 不应把 About 和 Workspace Index Guide 全文塞进启动包。
 - 系统笔记本初始化失败时启动失败，不能返回不完整启动包。

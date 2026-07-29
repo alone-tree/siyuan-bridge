@@ -325,6 +325,8 @@ python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE%
 
 首次安装/启用插件的真实用户流程必须额外验证：删除测试插件目录中的 `bridge/config.local.json`，整体导入仓库 `siyuan-plugin/` 后，由用户在思源 UI 启用插件。插件启用后应自动创建 `bridge/config.local.json`，写入当前工作空间名称和 Token；在用户没有点开设置页、没有点击”保存配置”的情况下，外部 MCP 客户端也应能正常启动并调用工具。
 
+跨设备 Token 合并改动还必须验证：准备一个已有其他设备 Token 的 `config.local.json`，启用插件后当前设备 Token 会追加到 profiles，原有 profile 的名称、Token 和顺序保持不变；重复启用不产生重复项；点击“刷新 JSON”也会合并并保存当前 Token。MCP 会话连接改动必须验证：未调用 `siyuan_start` 时普通工具明确要求先 start；一次成功 start 后多个工具不重复探测 profiles；连接或 401/403 鉴权失效后缓存被清空并要求重新 start。
+
 ### 第一层：测试代码（单元测试 + 真实 MCP 探针）
 
 这是 MCP 工具改动的默认验证方式，不依赖 AI，也不要求重启已有 AI 会话。测试端作为普通 MCP 客户端直接启动当前源码，每次运行都会加载最新代码：

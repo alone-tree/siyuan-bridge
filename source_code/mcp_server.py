@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from .cli import load_live_docs
 from .client import SiYuanApiError, SiYuanClient, SiYuanConnectionError, SiYuanTimeoutError
-from .config import detect_active_profile, load_config
+from .config import Profile, detect_active_profile, load_config
 from .ignore import (
     PrivacyRules,
     compile_rules,
@@ -1401,6 +1401,19 @@ def _extract_tool_action(tool_name: str, args: dict[str, Any]) -> str | None:
 class McpServer:
     def __init__(self, root: Path):
         self.root = root.resolve()
+        self._active_profile: Profile | None = None
+        self._active_client: SiYuanClient | None = None
+
+    def _clear_active_connection(self) -> None:
+        self._active_profile = None
+        self._active_client = None
+
+    def _require_active_client(self) -> SiYuanClient:
+        if self._active_client is None:
+            raise SiYuanConnectionError(
+                "思源桥尚未初始化。请先调用 siyuan_start，检测当前工作空间并建立连接。"
+            )
+        return self._active_client
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any] | None:
         method = request.get("method")
@@ -1443,6 +1456,23 @@ class McpServer:
         }
         if name not in tools:
             return make_error(request_id, -32602, f"Unknown tool: {name}")
+        if (
+            name not in {"siyuan_start", "siyuan_bridge_feedback"}
+            and self._active_client is None
+        ):
+            return make_result(
+                request_id,
+                {
+                    "content": [{
+                        "type": "text",
+                        "text": (
+                            "思源桥尚未初始化。请先调用 siyuan_start，"
+                            "检测当前工作空间并建立连接。"
+                        ),
+                    }],
+                    "isError": True,
+                },
+            )
         try:
             action = _extract_tool_action(name, args)
 
@@ -1455,18 +1485,39 @@ class McpServer:
             else:
                 text = _with_telemetry(
                     self.root, name, action,
-                    lambda: (detect_active_profile(load_config(self.root)), tools[name](args))[1],
+                    lambda: tools[name](args),
                 )
             return make_result(request_id, {"content": [{"type": "text", "text": text}]})
         except SiYuanConnectionError as exc:
             reason = str(exc).strip()
             if not reason:
                 reason = "无法连接到思源笔记"
+            self._clear_active_connection()
+            if name != "siyuan_start":
+                message = (
+                    f"当前思源连接已失效：{reason}\n\n"
+                    "请重新调用 siyuan_start，重新检测当前工作空间并建立连接。"
+                )
+            else:
+                message = f"思源桥启动失败：{reason}"
             return make_result(
                 request_id,
-                {"content": [{"type": "text", "text": f"思源未启动或 API 不可达：{reason}\n\n请提示用户手动打开思源笔记后重试。\n请先手动启动思源笔记，确认当前工作空间已打开且 API Token 配置正确，然后重试。"}], "isError": True},
+                {"content": [{"type": "text", "text": message}], "isError": True},
             )
-        except (SiYuanApiError, ValueError, FileNotFoundError) as exc:
+        except SiYuanApiError as exc:
+            if exc.status in (401, 403) or exc.code in (401, 403):
+                self._clear_active_connection()
+                message = (
+                    f"当前思源连接的 API Token 已失效：{exc}\n\n"
+                    "请重新调用 siyuan_start，重新检测当前工作空间并建立连接。"
+                )
+            else:
+                message = f"工具执行失败：{exc}"
+            return make_result(
+                request_id,
+                {"content": [{"type": "text", "text": message}], "isError": True},
+            )
+        except (ValueError, FileNotFoundError) as exc:
             return make_result(
                 request_id,
                 {"content": [{"type": "text", "text": f"工具执行失败：{exc}"}], "isError": True},
@@ -1573,6 +1624,7 @@ class McpServer:
         return PostWriteSyncStatus(False, f"删除操作尚未从路径接口确认；当前仍可见：{last_seen}")
 
     def siyuan_start(self, _args: dict[str, Any]) -> str:
+        self._clear_active_connection()
         config = load_config(self.root)
         profile, client = detect_active_profile(config)
         version = client.version()
@@ -1683,11 +1735,14 @@ class McpServer:
             ),
             "",
         ])
-        return "\n".join(parts)
+        result = "\n".join(parts)
+        self._active_profile = profile
+        self._active_client = client
+        return result
 
     def _refresh_safe_index(self) -> str:
         config = load_config(self.root)
-        _profile, client = detect_active_profile(config)
+        client = self._require_active_client()
 
         state = ensure_agent_notebook(client, self.root, config_language=config.language or None)
         write_privacy_rules_cache(self.root, state.privacy_rules)
@@ -1716,8 +1771,7 @@ class McpServer:
             return self._check_references(args)
 
         timeout_seconds = clamp_int(args.get("timeout_seconds"), 10, 5, 120)
-        config = load_config(self.root)
-        _profile, client = detect_active_profile(config)
+        client = self._require_active_client()
         try:
             client.perform_sync(timeout=float(timeout_seconds))
         except SiYuanTimeoutError as exc:
@@ -1744,7 +1798,7 @@ class McpServer:
 
     def _check_references(self, args: dict[str, Any]) -> str:
         limit = parse_reference_limit(args.get("limit"))
-        _profile, client = detect_active_profile(load_config(self.root))
+        client = self._require_active_client()
         target_doc = self._resolve_reference_document(args, client)
         target_doc_id = str(target_doc.get("id") or "")
 
@@ -2107,7 +2161,7 @@ class McpServer:
         notebook_names = self.load_notebook_names()
 
         if mode == "sql":
-            _profile, client = detect_active_profile(load_config(self.root))
+            client = self._require_active_client()
             notebook_names.update(list_live_notebook_names(client))
             try:
                 with ensure_notebooks_open(client, notebooks):
@@ -2118,7 +2172,7 @@ class McpServer:
                 raise
             enriched = self._enrich_sql_results(rows, indexed_docs, notebook_names, privacy, notebooks)
         else:
-            _profile, client = detect_active_profile(load_config(self.root))
+            client = self._require_active_client()
             notebook_names.update(list_live_notebook_names(client))
             method_map = {"query": 1, "regex": 3}
             api_method = method_map[mode]
@@ -2325,7 +2379,7 @@ class McpServer:
 
     def siyuan_read(self, args: dict[str, Any]) -> str:
         doc = self.resolve_visible_document(args)
-        _profile, client = detect_active_profile(load_config(self.root))
+        client = self._require_active_client()
         include_block_ids = bool(args.get("include_block_ids"))
         return self._read_document_block_window(doc, client, include_block_ids, args)
 
@@ -2470,7 +2524,7 @@ class McpServer:
         if status in ("missing", "no_index"):
             privacy = load_privacy_rules(self.root)
             if privacy.allow:
-                _profile, client = detect_active_profile(load_config(self.root))
+                client = self._require_active_client()
                 with ensure_notebooks_open(client):
                     live_docs = filter_documents(load_live_docs(client), privacy)
                 status, matches = resolve_document(live_docs, locator)
@@ -2494,7 +2548,7 @@ class McpServer:
         doc_id = str(doc.get("id") or "").strip()
         if not doc_id:
             raise tool_error(_ERR_DOC_NOT_FOUND, "未找到匹配的可见文档。文档可能已被隐藏、尚未索引，或定位符有误。")
-        _profile, client = detect_active_profile(load_config(self.root))
+        client = self._require_active_client()
         try:
             live_hpath = normalize_display_path(client.get_hpath_by_id(doc_id))
         except Exception as exc:
@@ -2523,7 +2577,7 @@ class McpServer:
         )
 
     def export_document_markdown(self, document_id: str) -> str:
-        _profile, client = detect_active_profile(load_config(self.root))
+        client = self._require_active_client()
         return client.export_markdown(document_id)
 
     def siyuan_create(self, args: dict[str, Any]) -> str:
@@ -2547,7 +2601,7 @@ class McpServer:
         docs = filter_documents(load_docs(self.root), load_privacy_rules(self.root))
         target = resolve_create_target(args, notebooks, docs, title)
         privacy = load_privacy_rules(self.root)
-        _profile, client = detect_active_profile(load_config(self.root))
+        client = self._require_active_client()
         all_docs = load_live_docs(client)
         target.existing_docs = _existing_docs_at_path(
             filter_documents(all_docs, privacy),
@@ -2954,7 +3008,7 @@ class McpServer:
         if permission != "read_write":
             raise tool_error(_ERR_NOT_READ_WRITE, f"当前文档权限为 {permission}，不允许编辑。")
 
-        _profile, client = detect_active_profile(load_config(self.root))
+        client = self._require_active_client()
 
         with ensure_notebooks_open(client, [notebook_id]):
             display_blocks = build_display_blocks(client, doc_id, include_block_ids=True)
@@ -3370,7 +3424,7 @@ class McpServer:
                     "目标笔记本名称受隐私规则限制，不允许创建。",
                 )
 
-            _profile, client = detect_active_profile(load_config(self.root))
+            client = self._require_active_client()
             existing = [
                 notebook
                 for notebook in client.list_notebooks()
@@ -3456,7 +3510,7 @@ class McpServer:
         if action in write_actions | {"copy"} and not bool(args.get("confirmed")):
             raise tool_error(_ERR_NOT_CONFIRMED, f"action={action} 需要 confirmed=true。")
 
-        _profile, client = detect_active_profile(load_config(self.root))
+        client = self._require_active_client()
 
         if action == "export":
             with ensure_notebooks_open(client, [notebook_id]):

@@ -8,7 +8,7 @@ from typing import Any
 from unittest import mock
 
 from source_code import mcp_server
-from source_code.client import SiYuanConnectionError, SiYuanTimeoutError
+from source_code.client import SiYuanApiError, SiYuanConnectionError, SiYuanTimeoutError
 from source_code.config import Profile
 from source_code.ignore import PrivacyRules, write_privacy_rules_cache
 
@@ -338,17 +338,9 @@ class McpServerTests(unittest.TestCase):
         )
     def run_operate(self, client: FakeSearchClient, args: dict[str, Any]) -> str:
         server = mcp_server.McpServer(self.root)
-        original = mcp_server.detect_active_profile
-        profile = Profile(name="test", token="test")
-
-        def fake_detect(_config):
-            return profile, client
-
-        mcp_server.detect_active_profile = fake_detect
-        try:
-            return server.siyuan_operate(args)
-        finally:
-            mcp_server.detect_active_profile = original
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = client
+        return server.siyuan_operate(args)
 
     def test_list_without_args_lists_notebooks(self):
         server = mcp_server.McpServer(self.root)
@@ -363,24 +355,95 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("# 可见笔记本", result)
         self.assertIn("| Main | `nb1` | read_write |", result)
 
-    def test_tool_call_detects_siyuan_before_local_list(self):
+    def test_tool_call_requires_start_before_local_list(self):
         server = mcp_server.McpServer(self.root)
-        original = mcp_server.detect_active_profile
-
-        def fake_detect(_config):
-            raise SiYuanConnectionError("connection refused")
-
-        mcp_server.detect_active_profile = fake_detect
-        try:
-            response = server.call_tool(1, "siyuan_list", {})
-        finally:
-            mcp_server.detect_active_profile = original
+        response = server.call_tool(1, "siyuan_list", {})
 
         self.assertTrue(response["result"]["isError"])
         text = response["result"]["content"][0]["text"]
-        self.assertIn("思源未启动或 API 不可达", text)
-        self.assertIn("请提示用户手动打开思源笔记后重试", text)
-        self.assertIn("请先手动启动思源笔记", text)
+        self.assertIn("思源桥尚未初始化", text)
+        self.assertIn("请先调用 siyuan_start", text)
+
+    def test_tool_call_reuses_started_client_without_profile_detection(self):
+        server = mcp_server.McpServer(self.root)
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = FakeSearchClient([])
+
+        with mock.patch.object(
+            mcp_server,
+            "detect_active_profile",
+            side_effect=AssertionError("不应重新探测 profile"),
+        ):
+            response = server.call_tool(1, "siyuan_list", {})
+
+        self.assertFalse(response["result"].get("isError", False))
+        self.assertIn("# 可见笔记本", response["result"]["content"][0]["text"])
+
+    def test_failed_start_clears_previous_connection_and_preserves_reason(self):
+        server = mcp_server.McpServer(self.root)
+        server._active_profile = Profile(name="old", token="old")
+        server._active_client = FakeSearchClient([])
+
+        with mock.patch.object(
+            mcp_server,
+            "detect_active_profile",
+            side_effect=SiYuanConnectionError("API 可达，但所有 Token 都不可用"),
+        ):
+            response = server.call_tool(1, "siyuan_start", {})
+
+        self.assertTrue(response["result"]["isError"])
+        text = response["result"]["content"][0]["text"]
+        self.assertIn("思源桥启动失败", text)
+        self.assertIn("所有 Token 都不可用", text)
+        self.assertIsNone(server._active_profile)
+        self.assertIsNone(server._active_client)
+
+    def test_successful_start_caches_profile_and_client_after_initialization(self):
+        server = mcp_server.McpServer(self.root)
+        profile = Profile(name="current", token="token")
+        client = mock.Mock()
+        client.version.return_value = "3.3.0"
+        state = mock.Mock(
+            notebook_id="system-nb",
+            privacy_rules_doc_id="privacy-doc",
+            privacy_rules=PrivacyRules(ignore=[], allow=[]),
+            mcp_usage_guide_markdown="Guide",
+            ai_guide_markdown="Preferences",
+            workspace_index_updated="",
+            workspace_index_is_placeholder=True,
+            workspace_index_markdown="",
+        )
+
+        with (
+            mock.patch.object(mcp_server, "detect_active_profile", return_value=(profile, client)),
+            mock.patch.object(mcp_server, "ensure_agent_notebook", return_value=state),
+            mock.patch.object(mcp_server, "refresh_index"),
+            mock.patch.object(mcp_server, "build_notebook_overview", return_value="# 概览\n\n内容"),
+            mock.patch.object(server, "_wait_for_system_documents"),
+        ):
+            result = server.siyuan_start({})
+
+        self.assertIn("# 思源桥启动包", result)
+        self.assertIs(server._active_profile, profile)
+        self.assertIs(server._active_client, client)
+
+    def test_auth_error_invalidates_started_connection(self):
+        server = mcp_server.McpServer(self.root)
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = FakeSearchClient([])
+
+        def fail_auth(_args):
+            raise SiYuanApiError("Unauthorized", status=401)
+
+        server.siyuan_find = fail_auth
+        response = server.call_tool(1, "siyuan_find", {"query": "test"})
+
+        self.assertTrue(response["result"]["isError"])
+        text = response["result"]["content"][0]["text"]
+        self.assertIn("API Token 已失效", text)
+        self.assertIn("重新调用 siyuan_start", text)
+        self.assertIsNone(server._active_profile)
+        self.assertIsNone(server._active_client)
 
     def test_tool_specs_expose_operate_not_refresh_index(self):
         specs = mcp_server.tool_specs()
@@ -438,17 +501,9 @@ class McpServerTests(unittest.TestCase):
     def test_operate_sync_calls_default_siyuan_sync(self):
         client = FakeSearchClient([])
         server = mcp_server.McpServer(self.root)
-        original = mcp_server.detect_active_profile
-
-        profile = Profile(name="test", token="test")
-        def fake_detect(_config):
-            return profile, client
-
-        mcp_server.detect_active_profile = fake_detect
-        try:
-            result = server.siyuan_operate({"action": "sync"})
-        finally:
-            mcp_server.detect_active_profile = original
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = client
+        result = server.siyuan_operate({"action": "sync"})
 
         self.assertTrue(client._sync_performed)
         self.assertEqual(client._sync_timeout, 10.0)
@@ -458,17 +513,9 @@ class McpServerTests(unittest.TestCase):
     def test_operate_sync_accepts_custom_timeout(self):
         client = FakeSearchClient([])
         server = mcp_server.McpServer(self.root)
-        original = mcp_server.detect_active_profile
-
-        profile = Profile(name="test", token="test")
-        def fake_detect(_config):
-            return profile, client
-
-        mcp_server.detect_active_profile = fake_detect
-        try:
-            server.siyuan_operate({"action": "sync", "timeout_seconds": 30})
-        finally:
-            mcp_server.detect_active_profile = original
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = client
+        server.siyuan_operate({"action": "sync", "timeout_seconds": 30})
 
         self.assertEqual(client._sync_timeout, 30.0)
 
@@ -479,18 +526,10 @@ class McpServerTests(unittest.TestCase):
 
         client = TimeoutSyncClient([])
         server = mcp_server.McpServer(self.root)
-        original = mcp_server.detect_active_profile
-
-        profile = Profile(name="test", token="test")
-        def fake_detect(_config):
-            return profile, client
-
-        mcp_server.detect_active_profile = fake_detect
-        try:
-            with self.assertRaises(ValueError) as ctx:
-                server.siyuan_operate({"action": "sync"})
-        finally:
-            mcp_server.detect_active_profile = original
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = client
+        with self.assertRaises(ValueError) as ctx:
+            server.siyuan_operate({"action": "sync"})
 
         self.assertEqual(getattr(ctx.exception, "error_code", None), "api:sync_timeout")
         self.assertIn("同步超过 10 秒", str(ctx.exception))
@@ -502,18 +541,10 @@ class McpServerTests(unittest.TestCase):
 
         client = BrokenSyncClient([])
         server = mcp_server.McpServer(self.root)
-        original = mcp_server.detect_active_profile
-
-        profile = Profile(name="test", token="test")
-        def fake_detect(_config):
-            return profile, client
-
-        mcp_server.detect_active_profile = fake_detect
-        try:
-            with self.assertRaises(ValueError) as ctx:
-                server.siyuan_operate({"action": "sync"})
-        finally:
-            mcp_server.detect_active_profile = original
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = client
+        with self.assertRaises(ValueError) as ctx:
+            server.siyuan_operate({"action": "sync"})
 
         self.assertEqual(getattr(ctx.exception, "error_code", None), "api:sync_connection")
         self.assertIn("同步连接失败", str(ctx.exception))
@@ -919,17 +950,9 @@ class McpServerTests(unittest.TestCase):
 
     def run_find(self, client: FakeSearchClient, args: dict[str, Any]) -> str:
         server = mcp_server.McpServer(self.root)
-        original = mcp_server.detect_active_profile
-
-        profile = Profile(name="test", token="test")
-        def fake_detect(_config):
-            return profile, client
-
-        mcp_server.detect_active_profile = fake_detect
-        try:
-            return server.siyuan_find(args)
-        finally:
-            mcp_server.detect_active_profile = original
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = client
+        return server.siyuan_find(args)
 
 
 class McpServerWriteTests(unittest.TestCase):
@@ -1009,11 +1032,8 @@ class McpServerWriteTests(unittest.TestCase):
         server = mcp_server.McpServer(self.root)
         original = mcp_server.detect_active_profile
 
-        profile = Profile(name="test", token="test")
-        def fake_detect(_config):
-            return profile, client
-
-        mcp_server.detect_active_profile = fake_detect
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = client
         return server, client, original
 
     def test_create_document_refuses_unconfirmed(self):
@@ -3415,17 +3435,9 @@ class McpServerReadBlockWindowTests(unittest.TestCase):
     def _read(self, args: dict[str, Any], blocks_for_doc=None, doc_md=None):
         client = self._make_client(blocks_for_doc, doc_md=doc_md)
         server = mcp_server.McpServer(self.root)
-        original = mcp_server.detect_active_profile
-
-        profile = Profile(name="test", token="test")
-        def fake_detect(_config):
-            return profile, client
-
-        mcp_server.detect_active_profile = fake_detect
-        try:
-            return server.siyuan_read(args)
-        finally:
-            mcp_server.detect_active_profile = original
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = client
+        return server.siyuan_read(args)
 
     def test_default_block_window_mode(self):
         blocks = {
@@ -3658,21 +3670,13 @@ class McpServerReadBlockIdTests(unittest.TestCase):
         }
         client = self._make_client(blocks_for_doc=blocks)
         server = mcp_server.McpServer(self.root)
-        original = mcp_server.detect_active_profile
-
-        profile = Profile(name="test", token="test")
-        def fake_detect(_config):
-            return profile, client
-
-        mcp_server.detect_active_profile = fake_detect
-        try:
-            result = server.siyuan_read({"document_id": "doc1"})
-            self.assertNotIn("<!-- siyuan:block", result)
-            self.assertIn("普通阅读", result)
-            self.assertIn("## Section One", result)
-            self.assertIn("Body paragraph here.", result)
-        finally:
-            mcp_server.detect_active_profile = original
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = client
+        result = server.siyuan_read({"document_id": "doc1"})
+        self.assertNotIn("<!-- siyuan:block", result)
+        self.assertIn("普通阅读", result)
+        self.assertIn("## Section One", result)
+        self.assertIn("Body paragraph here.", result)
 
     def test_include_block_ids_builds_reference_view(self):
         blocks = {
@@ -3683,22 +3687,14 @@ class McpServerReadBlockIdTests(unittest.TestCase):
         }
         client = self._make_client(blocks_for_doc=blocks)
         server = mcp_server.McpServer(self.root)
-        original = mcp_server.detect_active_profile
-
-        profile = Profile(name="test", token="test")
-        def fake_detect(_config):
-            return profile, client
-
-        mcp_server.detect_active_profile = fake_detect
-        try:
-            result = server.siyuan_read({"document_id": "doc1", "include_block_ids": True})
-            self.assertIn("[1] id=block-h1 type=heading", result)
-            self.assertIn("## Section One", result)
-            self.assertIn("[2] id=block-p1 type=paragraph", result)
-            self.assertIn("Body paragraph here.", result)
-            self.assertIn("引用阅读", result)
-        finally:
-            mcp_server.detect_active_profile = original
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = client
+        result = server.siyuan_read({"document_id": "doc1", "include_block_ids": True})
+        self.assertIn("[1] id=block-h1 type=heading", result)
+        self.assertIn("## Section One", result)
+        self.assertIn("[2] id=block-p1 type=paragraph", result)
+        self.assertIn("Body paragraph here.", result)
+        self.assertIn("引用阅读", result)
 
     def test_include_block_ids_preserves_outline(self):
         blocks = {
@@ -3710,20 +3706,12 @@ class McpServerReadBlockIdTests(unittest.TestCase):
         }
         client = self._make_client(blocks_for_doc=blocks)
         server = mcp_server.McpServer(self.root)
-        original = mcp_server.detect_active_profile
-
-        profile = Profile(name="test", token="test")
-        def fake_detect(_config):
-            return profile, client
-
-        mcp_server.detect_active_profile = fake_detect
-        try:
-            result = server.siyuan_read({"document_id": "doc1", "include_block_ids": True})
-            self.assertIn("[1] id=block-h1 type=heading", result)
-            self.assertIn("大纲", result)
-            self.assertIn("Section One", result)
-        finally:
-            mcp_server.detect_active_profile = original
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = client
+        result = server.siyuan_read({"document_id": "doc1", "include_block_ids": True})
+        self.assertIn("[1] id=block-h1 type=heading", result)
+        self.assertIn("大纲", result)
+        self.assertIn("Section One", result)
 
 
 if __name__ == "__main__":

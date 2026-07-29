@@ -4,6 +4,14 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
+## 2026-07-29：v1.5.0 跨设备 Token 合并与 start 会话连接
+
+- 插件启动时读取当前设备 Token；若 profiles 中不存在该 Token，则追加新 profile，不覆盖、不删除、不重排已有配置。设置页“刷新 JSON”同样合并并保存当前 Token，MCP JSON 仍不包含 Token。
+- `siyuan_start` 成为当前 MCP 进程唯一的 profile 探测入口。完整启动成功后缓存 profile 和 Client，后续工具直接复用，不再重复扫描所有 profiles。
+- 未 start 的普通工具直接要求 AI 先调用 `siyuan_start`；连接失败或 401/403 鉴权失败会清空缓存并要求重新 start。MCP 协议 `initialize` 不算 start。
+- 根目录中英文 README 是唯一维护源，构建时自动同步到插件集市 README，并校验所有本地图片引用存在。
+- 验证：完整测试 312 passed；当前源码 MCP、能力库保活开发版 MCP 和子代理实际调用三层均通过“start 前拒绝、start 后同进程复用连接”的行为验证。
+
 ## 2026-07-29：v1.4.0 显式创建笔记本
 
 - `siyuan_doc_manage` 新增 `action="create_notebook"`，要求 `notebook_name` 和 `confirmed=true`；写入前创建工作空间快照，成功后刷新安全索引。
