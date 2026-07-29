@@ -209,6 +209,9 @@
 
 涉及 `siyuan_doc_manage` 的改动，必须验证：
 
+- create_notebook 需要 `notebook_name`、`confirmed=true` 和写前快照；同名笔记本必须在写入前拒绝，成功后刷新安全索引。
+- create_notebook 不要求 `document` / `document_id`，不同时创建文档；delete 仍只删除文档子树，不得扩展为删除笔记本。
+- `siyuan_create` 定位不到目标笔记本时，必须在快照和写入前拒绝，并明确提示先调用 create_notebook。
 - rename/move/delete 需要 `read_write` 和 `confirmed=true`。
 - 使用路径定位源文档时，必须先校验 live hpath；路径已变化时拒绝操作，且不得创建快照。
 - copy 源文档可以是 `read_only`，但目标路径必须 `read_write`。
@@ -238,6 +241,7 @@
 | `siyuan_read` | 否 | 否 | 否 | hidden 不可读 |
 | `siyuan_create` | 是 | 是 | 是 | 目标路径 read_write |
 | `siyuan_edit` | 是 | 是 | 是 | 文档 read_write |
+| `siyuan_doc_manage:create_notebook` | 是 | 是 | 是 | 新笔记本名称 read_write |
 | `siyuan_doc_manage:rename` | 是 | 是 | 是 | 文档 read_write |
 | `siyuan_doc_manage:move` | 是 | 是 | 是 | 文档 read_write |
 | `siyuan_doc_manage:delete` | 是 | 是 | 是 | 文档 read_write |

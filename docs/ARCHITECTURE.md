@@ -650,6 +650,7 @@ scope：
 路径语义：
 
 - 首选 `path=/Notebook/Folder/Doc`。
+- 路径第一段对应的笔记本必须已经存在；不存在时拒绝写入并提示先调用 `siyuan_doc_manage(action="create_notebook", notebook_name="...", confirmed=true)`，不会隐式创建笔记本。
 - 如果路径第一段匹配多个同名笔记本，必须提供 `notebook_id`。
 - 如果提供 `notebook_id`，`path` 可以是笔记本内路径 `/Folder/Doc`。
 - 如果不传 `path`，必须传 `notebook_id`，默认在笔记本根目录创建 `/<title>`。
@@ -820,7 +821,7 @@ scope：
 
 ## `siyuan_doc_manage`
 
-用途：管理文档树，不处理正文内部编辑。
+用途：显式创建笔记本，或管理文档树；不处理正文内部编辑。
 
 参数：
 
@@ -828,17 +829,19 @@ scope：
 | ----------------- | ------- | ---------------- | ---------------------------------------------------------- |
 | `document`      | string  | 可选             | 源文档完整路径                                             |
 | `document_id`   | string  | 可选             | 源文档 ID fallback                                         |
-| `action`        | enum    | 必填             | `rename` / `move` / `delete` / `copy` / `export` |
+| `action`        | enum    | 必填             | `create_notebook` / `rename` / `move` / `delete` / `copy` / `export` |
+| `notebook_name` | string  | create_notebook 必填 | 新笔记本名称                                            |
 | `new_title`     | string  | rename 必填      | 新标题                                                     |
 | `target_parent` | string  | move 必填        | 目标笔记本或父文档路径                                     |
 | `target_path`   | string  | copy 必填        | 复制目标完整路径                                           |
 | `reference_policy` | enum | `reject` | delete 的引用策略：`reject` / `break` |
-| `confirmed`     | boolean | 部分 action 必填 | rename/move/delete/copy 需要                               |
+| `confirmed`     | boolean | 部分 action 必填 | create_notebook/rename/move/delete/copy 需要               |
 
 权限：
 
 | action     | 源文档权限                      | 目标权限       | 快照 | 写思源 |
 | ---------- | ------------------------------- | -------------- | ---- | ------ |
+| `create_notebook` | -                         | 新名称须为 `read_write` | 是 | 是 |
 | `rename` | `read_write`                  | -              | 是   | 是     |
 | `move`   | 源文档和祖先链 `read_write`   | 目标父路径 `read_write` | 是   | 是     |
 | `delete` | 源子树全部 `read_write`       | -              | 是   | 是     |
@@ -847,25 +850,28 @@ scope：
 
 数据流：
 
-1. 解析可见源文档。
-2. 如果 `document` 是路径，先校验当前 live hpath，路径已变化时停止并要求 refresh 后用新路径重试。
-3. 计算源文档权限。
-4. 根据 action 校验 confirmed 和参数；delete 写入前从思源 live SQL 拉取源文档子树并逐篇检查权限，再检查整棵子树中所有将消失的文档/块 ID 的外部反链；move 写入前检查源文档祖先链和目标父路径权限。
-5. `export` 直接导出 Markdown 到 `ai_workspace/exports/`，不创建快照。
-6. 其他 action 先创建快照。
-7. 调用对应思源 API：
+1. `create_notebook` 在文档定位前单独处理：校验名称、确认状态和隐私权限，读取 live 笔记本列表拒绝同名项，创建快照后调用 `createNotebook`，再刷新安全索引；该 action 不同时创建文档。
+2. 其他 action 解析可见源文档。
+3. 如果 `document` 是路径，先校验当前 live hpath，路径已变化时停止并要求 refresh 后用新路径重试。
+4. 计算源文档权限。
+5. 根据 action 校验 confirmed 和参数；delete 写入前从思源 live SQL 拉取源文档子树并逐篇检查权限，再检查整棵子树中所有将消失的文档/块 ID 的外部反链；move 写入前检查源文档祖先链和目标父路径权限。
+6. `export` 直接导出 Markdown 到 `ai_workspace/exports/`，不创建快照。
+7. 其他 action 先创建快照。
+8. 调用对应思源 API：
+   - `createNotebook`
    - `renameDocByID`
    - `moveDocsByID`
    - `removeDocByID`
    - `duplicateDoc` + `renameDocByID` + `moveDocsByID`
    - `exportMdContent`
-8. 尝试 pushMsg。
-9. 除 export 外，用文档 ID 短轮询确认路径变化：rename/move/copy 等目标 hpath 可见，delete 等源 ID 不再可见。
-10. 除 export 外，带系统笔记本 ID 和 Privacy Rules 文档 ID 安全刷新索引。
+9. 尝试 pushMsg。
+10. 文档写入 action 用文档 ID 短轮询确认路径变化：rename/move/copy 等目标 hpath 可见，delete 等源 ID 不再可见。
+11. 除 export 外，带系统笔记本 ID 和 Privacy Rules 文档 ID 安全刷新索引。
 
 当前实现特点：
 
 - rename/move/copy/delete 后会等待思源路径接口同步，再刷新本地索引。正常情况下返回的新路径可以直接用于后续 `siyuan_read` / `siyuan_list` / `siyuan_doc_manage`。
+- create_notebook 只创建笔记本，不创建首篇文档；当前不提供删除整个笔记本的 action，`delete` 始终表示删除文档子树。
 - 如果等待超时，工具仍返回写入结果和同步状态；连续操作时可临时使用 `document_id` 继续，或显式调用 `siyuan_operate(action=refresh)`。
 - copy 复制单篇源文档本身，不复制子文档；目标必须使用完整 `target_path`，目标路径已存在时拒绝覆盖。
 - move 按思源行为移动整棵子树，但不要求子孙全部 `read_write`；显式文档权限会随文档 ID 保留。为避免文档脱离只读/隐藏祖先后权限提升，源文档到笔记本根之间的祖先路径必须都是 `read_write`。

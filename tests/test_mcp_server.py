@@ -33,6 +33,7 @@ class FakeSearchClient:
         self._inserted_assets: list[tuple[str, list[str], bool]] = []
         self._deleted_blocks: list[str] = []
         self._created_docs: list[tuple[str, str, str]] = []
+        self._created_notebooks: list[dict[str, Any]] = []
         self._renamed_docs: list[tuple[str, str]] = []
         self._removed_docs: list[str] = []
         self._moved_docs: list[tuple[list[str], str]] = []
@@ -46,10 +47,12 @@ class FakeSearchClient:
         return "3.0.0"
 
     def list_notebooks(self):
-        return [{"id": "nb1", "name": "Main", "closed": self.closed}]
+        return [{"id": "nb1", "name": "Main", "closed": self.closed}, *self._created_notebooks]
 
     def create_notebook(self, name):
-        return {"id": f"nb-{name}", "name": name}
+        notebook = {"id": f"nb-{name}", "name": name, "closed": False}
+        self._created_notebooks.append(notebook)
+        return notebook
 
     def open_notebook(self, notebook_id):
         self.opened.append(notebook_id)
@@ -392,6 +395,11 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(properties["limit"]["default"], 10)
         self.assertEqual(properties["limit"]["anyOf"][0]["minimum"], 1)
         self.assertEqual(properties["limit"]["anyOf"][1]["enum"], ["none"])
+
+        doc_manage = next(tool for tool in specs if tool["name"] == "siyuan_doc_manage")
+        doc_manage_properties = doc_manage["inputSchema"]["properties"]
+        self.assertIn("create_notebook", doc_manage_properties["action"]["enum"])
+        self.assertIn("notebook_name", doc_manage_properties)
 
     def test_find_tool_spec_exposes_query_as_default_without_keyword_mode(self):
         spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_find")
@@ -1033,6 +1041,24 @@ class McpServerWriteTests(unittest.TestCase):
                     "confirmed": True,
                 })
             self.assertIn("不可见", str(ctx.exception))
+            self.assertIn("create_notebook", str(ctx.exception))
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_create_document_missing_path_notebook_suggests_create_notebook(self):
+        server, client, original = self._server_and_client()
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_create({
+                    "title": "New Doc",
+                    "path": "/Missing Notebook/New Doc",
+                    "markdown": "# Hello",
+                    "confirmed": True,
+                })
+            self.assertIn('action="create_notebook"', str(ctx.exception))
+            self.assertIn('notebook_name="Missing Notebook"', str(ctx.exception))
+            self.assertFalse(client._snapshots)
+            self.assertFalse(client._created_docs)
         finally:
             mcp_server.detect_active_profile = original
 
@@ -1312,6 +1338,58 @@ class McpServerWriteTests(unittest.TestCase):
             })
             self.assertEqual(client._moved_docs, [(["doc1"], "nb1")])
             self.assertIn("已移动到", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_doc_manage_create_notebook(self):
+        server, client, original = self._server_and_client()
+        try:
+            result = server.siyuan_doc_manage({
+                "action": "create_notebook",
+                "notebook_name": "Research",
+                "confirmed": True,
+            })
+            self.assertEqual(
+                client._created_notebooks,
+                [{"id": "nb-Research", "name": "Research", "closed": False}],
+            )
+            self.assertEqual(len(client._snapshots), 1)
+            self.assertIn("tool=siyuan_doc_manage", client._snapshots[0]["memo"])
+            self.assertIn("target=/Research", client._snapshots[0]["memo"])
+            self.assertIn("# 笔记本已创建", result)
+            self.assertIn("`nb-Research`", result)
+            self.assertIn("/Research/<文档标题>", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_doc_manage_create_notebook_requires_confirmed(self):
+        server, client, original = self._server_and_client()
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_doc_manage({
+                    "action": "create_notebook",
+                    "notebook_name": "Research",
+                    "confirmed": False,
+                })
+            self.assertIn("confirmed", str(ctx.exception))
+            self.assertFalse(client._created_notebooks)
+            self.assertFalse(client._snapshots)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_doc_manage_create_notebook_rejects_duplicate_name(self):
+        server, client, original = self._server_and_client()
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_doc_manage({
+                    "action": "create_notebook",
+                    "notebook_name": "main",
+                    "confirmed": True,
+                })
+            self.assertEqual(getattr(ctx.exception, "error_code", None), "conflict:already_exists")
+            self.assertIn("同名笔记本已存在", str(ctx.exception))
+            self.assertFalse(client._created_notebooks)
+            self.assertFalse(client._snapshots)
         finally:
             mcp_server.detect_active_profile = original
 

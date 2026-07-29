@@ -17,11 +17,13 @@ The core tools follow the same mental model as AI coding tools while preserving 
 | `siyuan_list` | Lists notebooks and document trees | `ls` |
 | `siyuan_find` | Searches the knowledge base | `grep` |
 | `siyuan_read` | Reads in sections with outline navigation and block ID references | `read` |
-| `siyuan_edit` | Edits single or multiple blocks and table cells by coordinates | `edit` |
+| `siyuan_edit` | Edits blocks and tables, and inserts local assets | `edit` |
 | `siyuan_create` | Creates or rewrites documents | `write` |
-| `siyuan_doc_manage` | Renames, moves, deletes, copies, and exports documents | File manager |
+| `siyuan_doc_manage` | Creates notebooks; renames, moves, deletes, copies, and exports documents | File manager |
 
 Each tool wraps the underlying operations needed to make precise changes with fewer opportunities for error. Working with notes feels as natural as editing documents or code while still respecting SiYuan's block model.
+
+To create a notebook, use `siyuan_doc_manage(action="create_notebook", notebook_name="New Notebook", confirmed=true)`, then create a document with `siyuan_create(path="/New Notebook/New Document", ...)`. A missing notebook is never created implicitly.
 
 `siyuan_operate(action="sync")` works like clicking SiYuan's sync button. It waits up to 10 seconds by default; slower syncs can set `timeout_seconds` up to 120 seconds.
 
@@ -101,7 +103,7 @@ Confirm the Python and workspace settings on the MCP configuration page, then co
 - **Why did content disappear, conflict, or crash after an edit?** This can happen when the same workspace is open on two computers with automatic cloud sync enabled. Switch to manual sync so SiYuan syncs only at startup and shutdown. You can also ask the AI to trigger a manual sync after each edit.
 - **Why wasn't a snapshot created before an edit?** Automatic cloud sync can create snapshots itself, causing the pre-edit snapshot check to report “no changes” and skip the snapshot. Switch to manual sync so SiYuan syncs only at startup and shutdown.
 - **Will snapshots keep accumulating?** SiYuan automatically keeps two snapshots per day and removes them after 180 days, but cleanup runs only when cloud sync is enabled. For a local workspace without cloud sync, periodically use Settings → Data Repository → Purge. Automated snapshot cleanup is planned.
-- **What can `siyuan_doc_manage` do?** It mirrors SiYuan's document-management behavior. Rename, copy, and export affect one document. Move and delete affect the entire document subtree, including all child documents.
+- **What can `siyuan_doc_manage` do?** It can explicitly create a notebook and manage document trees. Rename, copy, and export affect one document. Move and delete affect the entire document subtree, including all child documents. Deleting an entire notebook is not currently exposed.
 
 ## Community and Feedback
 

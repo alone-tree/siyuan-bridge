@@ -38,11 +38,12 @@ description: Use when the user wants to read, search, or write their private SiY
 - `siyuan_list` —— 无参数或 `path="/"` 时列出可见笔记本；其他路径列出直接子文档及有效权限。`read_write` 可写，`read_only` 只能读取、复制或导出；隐私规则文档和隐藏内容不会出现在列表中。
 - `siyuan_create`、`siyuan_edit` —— 写入工具。始终 `confirmed=true`。写入前自动创建思源工作空间快照。默认不写入，除非用户明确要求。
 - `siyuan_create` 优先传完整可读路径 `path=/Notebook/Folder/Doc`；只有笔记本名称重名或使用内部路径时才补充 `notebook_id`。目标已存在时默认 `if_exists=reject`，可显式用 `overwrite` 清空块后重写并保留文档 ID，或用 `create_new` 新增同名文档。
+- 如果 `siyuan_create` 提示目标笔记本不存在，先取得用户明确同意，再调用 `siyuan_doc_manage(action="create_notebook", notebook_name="<笔记本名称>", confirmed=true)`；创建成功后重试文档写入。不得根据文档路径隐式创建笔记本。
 - `siyuan_create` 成功后会等待思源路径同步并自动刷新安全索引；正常情况下可直接使用返回路径继续读取或管理。
 - 编辑已有文档前，先用 `siyuan_read(include_block_ids=true)` 进行引用阅读，并把返回的块序号和块 ID 作为 `siyuan_edit` 定位参数。
 - 不必为了块 ID 本身改变编辑方案；只有被其他块引用的 ID 消失时才会影响用户。
 - `delete`、`multi_block_replace`、`siyuan_create(if_exists=overwrite)` 和整棵文档树删除都会检查即将消失的 ID 是否存在外部块引用、可识别嵌入块或 `siyuan://` 块链接，默认 `reference_policy=reject`。若返回引用冲突，按错误结果附带的语义判断说明重新规划编辑；只有用户明确允许破坏本次报告的引用后，才能用相同参数加 `reference_policy=break` 重试。不得自行使用 `break`。
-- `siyuan_doc_manage` —— 管理文档树。`rename/move/delete/copy` 需要用户明确要求和 `confirmed=true`；`rename/move/delete` 还需要可写权限。`delete` 会删除整棵子树，子孙文档也必须全部可写；`move` 保留子树权限，但如果源文档来自只读/隐藏祖先路径则拒绝移动。`copy` 必须传完整 `target_path`，只复制源文档本身，不复制子文档。`export` 只导出可读文档到 `ai_workspace/exports/`。
+- `siyuan_doc_manage` —— 显式创建笔记本或管理文档树。`create_notebook` 需要 `notebook_name`、用户明确要求和 `confirmed=true`，写前创建快照，同名笔记本存在时拒绝重复创建；它不同时创建文档。`rename/move/delete/copy` 也需要用户明确要求和 `confirmed=true`；`rename/move/delete` 还需要可写权限。`delete` 只删除文档子树，不删除整个笔记本；子孙文档也必须全部可写。`move` 保留子树权限，但如果源文档来自只读/隐藏祖先路径则拒绝移动。`copy` 必须传完整 `target_path`，只复制源文档本身，不复制子文档。`export` 只导出可读文档到 `ai_workspace/exports/`。
 - `siyuan_doc_manage` 的 rename/move/copy/delete 成功后会等待路径同步并自动刷新安全索引；如果返回提示路径同步超时，临时改用 `document_id` 或显式调用 `siyuan_operate(action="refresh")`。
 - 编辑普通 Markdown 表格时，使用引用阅读返回的网格坐标：`row=0` 是表头，`row>=1` 是数据行，`column_index` 从 1 开始。表格不是数据库，不要把表头、字段或多维表语义混在一起。
 - 插入本地图片、文件或文件夹时使用 `siyuan_edit(action="insert_assets")`：一次调用只用一个锚点，但可在该位置按顺序插入多个项目。`name` 是图片 alt 或正文链接名；`title` 才是图片下方标题（文件/文件夹通常仅悬停显示）。超过 20 MB 的普通文件只有在用户明确同意后才传 `upload_large_files=true`。

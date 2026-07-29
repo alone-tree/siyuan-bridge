@@ -878,7 +878,12 @@ def resolve_create_target(
             )
         nb = _notebook_by_id(notebooks, notebook_id_arg)
         if nb is None:
-            raise tool_error(_ERR_NB_NOT_FOUND, f"笔记本 {notebook_id_arg} 不可见，可能已被隐私规则隐藏。")
+            raise tool_error(
+                _ERR_NB_NOT_FOUND,
+                f"笔记本 {notebook_id_arg} 不可见或不存在，可能已被隐私规则隐藏。"
+                "如果需要新建笔记本，请先调用 "
+                '`siyuan_doc_manage(action="create_notebook", notebook_name="<笔记本名称>", confirmed=true)`。',
+            )
         internal_path = f"/{title}"
     else:
         parts = path.strip("/").split("/", 1)
@@ -906,11 +911,19 @@ def resolve_create_target(
             if not notebook_id_arg:
                 raise tool_error(_ERR_NB_NOT_FOUND,
                     "path 应使用完整可读路径 /Notebook/Folder/Doc。"
-                    "未匹配到路径第一段对应的可见笔记本；如需使用笔记本内路径，请同时提供 notebook_id。"
+                    "未匹配到路径第一段对应的可见笔记本。"
+                    "如果该笔记本尚未创建，请先调用 "
+                    f'`siyuan_doc_manage(action="create_notebook", notebook_name="{first}", confirmed=true)`；'
+                    "如需使用已有笔记本的内部路径，请同时提供 notebook_id。"
                 )
             nb = _notebook_by_id(notebooks, notebook_id_arg)
             if nb is None:
-                raise tool_error(_ERR_NB_NOT_FOUND, f"笔记本 {notebook_id_arg} 不可见，可能已被隐私规则隐藏。")
+                raise tool_error(
+                    _ERR_NB_NOT_FOUND,
+                    f"笔记本 {notebook_id_arg} 不可见或不存在，可能已被隐私规则隐藏。"
+                    "如果需要新建笔记本，请先调用 "
+                    '`siyuan_doc_manage(action="create_notebook", notebook_name="<笔记本名称>", confirmed=true)`。',
+                )
             internal_path = path
 
     notebook_id = str(nb.get("id", ""))
@@ -3336,9 +3349,94 @@ class McpServer:
 
     def siyuan_doc_manage(self, args: dict[str, Any]) -> str:
         action = str(args.get("action") or "").strip().casefold()
-        allowed_actions = {"rename", "move", "delete", "copy", "export"}
+        allowed_actions = {"create_notebook", "rename", "move", "delete", "copy", "export"}
         if action not in allowed_actions:
-            raise tool_error(_ERR_INVALID_ENUM, "action 只支持 rename、move、delete、copy、export。")
+            raise tool_error(_ERR_INVALID_ENUM, "action 只支持 create_notebook、rename、move、delete、copy、export。")
+
+        if action == "create_notebook":
+            notebook_name = str(args.get("notebook_name") or "").strip()
+            if not notebook_name:
+                raise tool_error(_ERR_MISSING_PARAM, "action=create_notebook 需要 notebook_name。")
+            if not bool(args.get("confirmed")):
+                raise tool_error(_ERR_NOT_CONFIRMED, "action=create_notebook 需要 confirmed=true。")
+
+            docs = load_docs(self.root)
+            privacy = load_privacy_rules(self.root)
+            prospective_notebook = {"id": "", "name": notebook_name}
+            permission = document_permission(notebook_permission_probe(prospective_notebook), privacy, docs)
+            if permission != "read_write":
+                raise tool_error(
+                    _ERR_NOT_READ_WRITE,
+                    "目标笔记本名称受隐私规则限制，不允许创建。",
+                )
+
+            _profile, client = detect_active_profile(load_config(self.root))
+            existing = [
+                notebook
+                for notebook in client.list_notebooks()
+                if str(notebook.get("name") or "").strip().casefold() == notebook_name.casefold()
+            ]
+            if existing:
+                visible = [
+                    notebook
+                    for notebook in existing
+                    if document_permission(notebook_permission_probe(notebook), privacy, docs) != "hidden"
+                ]
+                if visible:
+                    choices = "\n".join(
+                        f"- `{notebook.get('id', '')}` {notebook.get('name', '')}"
+                        for notebook in visible
+                    )
+                    raise tool_error(
+                        _ERR_ALREADY_EXISTS,
+                        "同名笔记本已存在，拒绝重复创建。请直接使用已有笔记本。\n" + choices,
+                    )
+                raise tool_error(
+                    _ERR_ALREADY_EXISTS,
+                    "同名笔记本已存在或不可用，拒绝重复创建。",
+                )
+
+            snapshot_status = self._create_snapshot_or_raise(
+                client,
+                "siyuan_doc_manage",
+                f"/{notebook_name}",
+            )
+            result = client.create_notebook(notebook_name)
+            notebook_id = str(result.get("id") or "")
+            if not notebook_id:
+                created = [
+                    notebook
+                    for notebook in client.list_notebooks()
+                    if str(notebook.get("name") or "").strip().casefold() == notebook_name.casefold()
+                ]
+                if len(created) == 1:
+                    notebook_id = str(created[0].get("id") or "")
+            if not notebook_id:
+                raise tool_error(_ERR_NB_NOT_FOUND, "思源未返回新笔记本 ID，无法确认创建结果。")
+
+            try:
+                client.push_msg(f"思源桥：已创建笔记本「{notebook_name}」")
+            except Exception:
+                pass
+
+            refresh_ok = False
+            try:
+                self._refresh_index_with_system_context(client)
+                refresh_ok = True
+            except Exception:
+                pass
+
+            return "\n".join([
+                "# 笔记本已创建",
+                "",
+                f"笔记本：/{notebook_name}",
+                f"notebook_id：`{notebook_id}`",
+                f"快照：{snapshot_status}",
+                "索引：已自动刷新"
+                if refresh_ok
+                else '索引：自动刷新失败，请手动运行 `siyuan_operate(action="refresh")`',
+                f'现在可以使用 `siyuan_create(path="/{notebook_name}/<文档标题>", ...)` 创建文档。',
+            ])
 
         doc = self.resolve_visible_document(args)
         doc_id = str(doc.get("id", ""))
@@ -3965,18 +4063,19 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_doc_manage",
-            "description": "Manage visible SiYuan documents at the document-tree level, not document body editing. Actions: rename, move, delete, copy, export. copy/export are allowed for readable documents. rename/move/delete require read_write permission, confirmed=true, and create a SiYuan workspace snapshot before writing. delete affects the whole subtree, is rejected if any descendant is not read_write, and checks backlinks for every document/block ID that would disappear. move preserves the moved subtree but is rejected if the source document inherits restrictions from any non-read_write ancestor or if the target parent is not read_write. copy uses SiYuan duplicateDoc for the source document only, requires target_path and confirmed=true, then renames/moves the duplicate. After rename/move/delete/copy, waits for SiYuan path sync and refreshes the safe index. export writes Markdown to ai_workspace/exports and does not modify SiYuan.",
+            "description": "Manage SiYuan notebooks and visible documents at the document-tree level, not document body editing. Actions: create_notebook, rename, move, delete, copy, export. create_notebook requires notebook_name and confirmed=true, creates a workspace snapshot, rejects duplicate names, and refreshes the safe index. It does not create a document automatically. copy/export are allowed for readable documents. rename/move/delete require read_write permission, confirmed=true, and create a SiYuan workspace snapshot before writing. delete removes a document subtree, not a notebook; it is rejected if any descendant is not read_write and checks backlinks for every document/block ID that would disappear. move preserves the moved subtree but is rejected if the source document inherits restrictions from any non-read_write ancestor or if the target parent is not read_write. copy uses SiYuan duplicateDoc for the source document only, requires target_path and confirmed=true, then renames/moves the duplicate. After writes, refreshes the safe index. export writes Markdown to ai_workspace/exports and does not modify SiYuan.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "document": {"type": "string", "description": "Document path including notebook name, e.g. /Notebook/Folder/Doc. Preferred."},
                     "document_id": {"type": "string", "description": "Document id fallback when path is ambiguous or unavailable."},
-                    "action": {"type": "string", "enum": ["rename", "move", "delete", "copy", "export"], "description": "Document management action."},
+                    "action": {"type": "string", "enum": ["create_notebook", "rename", "move", "delete", "copy", "export"], "description": "Notebook/document management action. create_notebook is the only notebook-level action; delete removes documents only."},
+                    "notebook_name": {"type": "string", "description": "Required for action=create_notebook. Exact name of the new notebook."},
                     "new_title": {"type": "string", "description": "Required for action=rename."},
                     "target_parent": {"type": "string", "description": "Required for action=move. Visible target notebook or parent document path, e.g. /Notebook or /Notebook/Folder."},
                     "target_path": {"type": "string", "description": "Required for action=copy. Full readable target path /Notebook/Folder/New Doc. The target path must not already exist and must be read_write."},
                     "reference_policy": {"type": "string", "enum": ["reject", "break"], "default": "reject", "description": "For action=delete only. reject refuses when any disappearing document/block ID is referenced. Use break only after the user explicitly confirms that those reported references may be broken."},
-                    "confirmed": {"type": "boolean", "description": "Required for rename/move/delete/copy. Not required for export."},
+                    "confirmed": {"type": "boolean", "description": "Required for create_notebook/rename/move/delete/copy. Not required for export."},
                 },
                 "required": ["action"],
                 "additionalProperties": False,
