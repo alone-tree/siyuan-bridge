@@ -346,7 +346,7 @@ class ClientTests(unittest.TestCase):
             client.list_document_blocks("doc1")
 
     def test_list_block_references_queries_refs_and_source_blocks(self):
-        seen = {}
+        seen = []
         fake_refs = [{
             "def_block_id": "target1",
             "block_id": "source1",
@@ -358,17 +358,66 @@ class ClientTests(unittest.TestCase):
         }]
 
         def transport(req, timeout):
-            seen["body"] = json.loads(req.data.decode("utf-8"))
-            return FakeResponse({"code": 0, "data": fake_refs})
+            body = json.loads(req.data.decode("utf-8"))
+            seen.append(body)
+            data = fake_refs if "FROM refs" in body["stmt"] else []
+            return FakeResponse({"code": 0, "data": data})
 
         client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
         rows = client.list_block_references(["target1", "target2", "target1"])
 
-        stmt = seen["body"]["stmt"]
-        self.assertIn("FROM refs r LEFT JOIN blocks b", stmt)
-        self.assertIn("'target1'", stmt)
-        self.assertIn("'target2'", stmt)
+        self.assertEqual(len(seen), 2)
+        ref_stmt = seen[0]["stmt"]
+        link_stmt = seen[1]["stmt"]
+        self.assertIn("FROM refs r LEFT JOIN blocks b", ref_stmt)
+        self.assertIn("'target1'", ref_stmt)
+        self.assertIn("'target2'", ref_stmt)
+        self.assertIn("FROM spans s LEFT JOIN blocks b", link_stmt)
+        self.assertIn("siyuan://blocks/target1", link_stmt)
         self.assertEqual(rows, fake_refs)
+
+    def test_list_block_references_adds_links_and_deduplicates_same_source_target(self):
+        def transport(req, timeout):
+            stmt = json.loads(req.data.decode("utf-8"))["stmt"]
+            if "FROM refs" in stmt:
+                data = [{
+                    "def_block_id": "target1",
+                    "block_id": "source1",
+                    "root_id": "doc2",
+                    "type": "textmark",
+                    "content": "Reference",
+                    "markdown": "((target1)) and [link](siyuan://blocks/target1)",
+                    "block_type": "p",
+                }]
+            else:
+                data = [
+                    {
+                        "block_id": "source1",
+                        "root_id": "doc2",
+                        "span_markdown": "[link](siyuan://blocks/target1)",
+                        "content": "Reference",
+                        "markdown": "((target1)) and [link](siyuan://blocks/target1)",
+                        "block_type": "p",
+                    },
+                    {
+                        "block_id": "source2",
+                        "root_id": "doc2",
+                        "span_markdown": "[other](siyuan://blocks/target2)",
+                        "content": "Other link",
+                        "markdown": "[other](siyuan://blocks/target2)",
+                        "block_type": "p",
+                    },
+                ]
+            return FakeResponse({"code": 0, "data": data})
+
+        client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
+        rows = client.list_block_references(["target1", "target2"])
+
+        self.assertEqual(
+            [(row["def_block_id"], row["block_id"]) for row in rows],
+            [("target1", "source1"), ("target2", "source2")],
+        )
+        self.assertEqual(rows[1]["type"], "block-link")
 
     def test_get_child_blocks_posts_parent_id(self):
         seen = {}

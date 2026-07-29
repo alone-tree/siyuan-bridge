@@ -61,16 +61,21 @@ class FakeSearchClient:
 
     def query_sql(self, _stmt):
         stmt = str(_stmt).casefold() if _stmt else ""
-        if "from blocks" in stmt and "root_id" in stmt:
-            # Extract root_id from WHERE clause for filtering
+        if "from blocks" in stmt and "where id" in stmt:
             import re
-            m = re.search(r"root_id\s*=\s*'([^']+)'", stmt)
-            if m:
-                doc_id = m.group(1)
-                return self._blocks.get(doc_id, [])
-            for blocks in self._blocks.values():
-                if isinstance(blocks, list):
-                    return blocks
+            match = re.search(r"where\s+id\s*=\s*'([^']+)'", stmt)
+            if match:
+                block_id = match.group(1)
+                for root_id, blocks in self._blocks.items():
+                    if not isinstance(blocks, list):
+                        continue
+                    for block in blocks:
+                        if str(block.get("id", "")).casefold() == block_id:
+                            return [{
+                                "id": block.get("id", ""),
+                                "root_id": block.get("root_id", root_id),
+                                "type": block.get("type", ""),
+                            }]
             return []
         if "from blocks" in stmt and ("type='d'" in stmt or "type = 'd'" in stmt):
             return [
@@ -85,6 +90,17 @@ class FakeSearchClient:
                 }
                 for doc_id, hpath in self._hpaths.items()
             ]
+        if "from blocks" in stmt and "root_id" in stmt:
+            # Extract root_id from WHERE clause for filtering
+            import re
+            m = re.search(r"root_id\s*=\s*'([^']+)'", stmt)
+            if m:
+                doc_id = m.group(1)
+                return self._blocks.get(doc_id, [])
+            for blocks in self._blocks.values():
+                if isinstance(blocks, list):
+                    return blocks
+            return []
         return [{"exists": 1}]
 
     def search_full_text(self, **payload):
@@ -317,6 +333,20 @@ class McpServerTests(unittest.TestCase):
             "".join(json.dumps(doc, ensure_ascii=False) + "\n" for doc in docs),
             encoding="utf-8",
         )
+    def run_operate(self, client: FakeSearchClient, args: dict[str, Any]) -> str:
+        server = mcp_server.McpServer(self.root)
+        original = mcp_server.detect_active_profile
+        profile = Profile(name="test", token="test")
+
+        def fake_detect(_config):
+            return profile, client
+
+        mcp_server.detect_active_profile = fake_detect
+        try:
+            return server.siyuan_operate(args)
+        finally:
+            mcp_server.detect_active_profile = original
+
     def test_list_without_args_lists_notebooks(self):
         server = mcp_server.McpServer(self.root)
         result = server.siyuan_list({})
@@ -350,9 +380,18 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("请先手动启动思源笔记", text)
 
     def test_tool_specs_expose_operate_not_refresh_index(self):
-        names = [tool["name"] for tool in mcp_server.tool_specs()]
+        specs = mcp_server.tool_specs()
+        names = [tool["name"] for tool in specs]
         self.assertIn("siyuan_operate", names)
         self.assertNotIn("siyuan_refresh_index", names)
+        operate = next(tool for tool in specs if tool["name"] == "siyuan_operate")
+        properties = operate["inputSchema"]["properties"]
+        self.assertIn("check_references", properties["action"]["enum"])
+        self.assertIn("document", properties)
+        self.assertIn("document_id", properties)
+        self.assertEqual(properties["limit"]["default"], 10)
+        self.assertEqual(properties["limit"]["anyOf"][0]["minimum"], 1)
+        self.assertEqual(properties["limit"]["anyOf"][1]["enum"], ["none"])
 
     def test_find_tool_spec_exposes_query_as_default_without_keyword_mode(self):
         spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_find")
@@ -475,6 +514,159 @@ class McpServerTests(unittest.TestCase):
         server = mcp_server.McpServer(self.root)
         with self.assertRaises(ValueError):
             server.siyuan_operate({"action": "bad"})
+
+    def test_operate_check_references_groups_sources_and_summarizes_children(self):
+        client = FakeSearchClient([])
+        client._blocks["doc1"] = [{
+            "id": "target-block",
+            "root_id": "doc1",
+            "parent_id": "doc1",
+            "type": "p",
+            "markdown": "Target",
+            "content": "Target",
+            "sort": 1,
+        }]
+        client._blocks["doc3"] = [{
+            "id": "child-block",
+            "root_id": "doc3",
+            "parent_id": "doc3",
+            "type": "i",
+            "markdown": "Nested child target",
+            "content": "Nested child target",
+            "sort": 1,
+        }]
+        long_markdown = "A" * 2100
+        client._refs = [
+            {
+                "def_block_id": "doc1",
+                "block_id": "source-block-1",
+                "root_id": "doc2",
+                "type": "textmark",
+                "content": long_markdown,
+                "markdown": long_markdown,
+            },
+            {
+                "def_block_id": "target-block",
+                "block_id": "source-block-1",
+                "root_id": "doc2",
+                "type": "block-link",
+                "content": long_markdown,
+                "markdown": long_markdown,
+            },
+            {
+                "def_block_id": "target-block",
+                "block_id": "source-block-2",
+                "root_id": "doc2",
+                "type": "textmark",
+                "content": "Second source block",
+                "markdown": "Second source block",
+            },
+            {
+                "def_block_id": "child-block",
+                "block_id": "source-block-3",
+                "root_id": "doc2",
+                "type": "textmark",
+                "content": "Child reference",
+                "markdown": "Child reference",
+            },
+        ]
+
+        result = self.run_operate(
+            client,
+            {"action": "check_references", "document": "/Main/Projects/Doc One"},
+        )
+
+        self.assertIn("本文档总共被引用 3 次。", result)
+        self.assertIn("其所有子文档（不含本文档）总共被引用 1 次", result)
+        self.assertIn("/Main/Projects/Doc One/Child（`doc3`）被引用 1 次", result)
+        self.assertIn("/Main/Projects/Hidden（`doc2`）引用了 3 次", result)
+        self.assertIn("引用1（本块包含 2 次引用）：", result)
+        self.assertIn("引用2：", result)
+        self.assertIn("内容超过 2000 字符，已截断", result)
+
+    def test_operate_check_references_aggregates_hidden_sources_and_targets(self):
+        write_privacy_rules_cache(
+            self.root,
+            PrivacyRules(
+                ignore=[
+                    {"scope": "document", "id": "doc2"},
+                    {"scope": "document", "id": "doc3"},
+                ],
+                allow=[],
+            ),
+        )
+        client = FakeSearchClient([])
+        client._refs = [
+            {
+                "def_block_id": "doc1",
+                "block_id": "hidden-source-1",
+                "root_id": "doc2",
+                "type": "textmark",
+                "content": "Hidden source content",
+                "markdown": "Hidden source content",
+            },
+            {
+                "def_block_id": "doc3",
+                "block_id": "hidden-source-2",
+                "root_id": "doc2",
+                "type": "block-link",
+                "content": "Hidden child target content",
+                "markdown": "Hidden child target content",
+            },
+        ]
+
+        result = self.run_operate(
+            client,
+            {"action": "check_references", "document_id": "doc1"},
+        )
+
+        self.assertIn("本文档总共被引用 1 次。", result)
+        self.assertIn("其所有子文档（不含本文档）总共被引用 1 次", result)
+        self.assertIn("无可展示的子文档。", result)
+        self.assertIn("隐藏文档中引用了 1 次。", result)
+        self.assertNotIn("/Main/Projects/Hidden", result)
+        self.assertNotIn("/Main/Projects/Doc One/Child", result)
+        self.assertNotIn("Hidden source content", result)
+
+    def test_operate_check_references_reports_zero_without_error(self):
+        result = self.run_operate(
+            FakeSearchClient([]),
+            {"action": "check_references", "document_id": "doc2"},
+        )
+
+        self.assertIn("本文档总共被引用 0 次。", result)
+        self.assertNotIn("## 引用来源", result)
+
+    def test_operate_check_references_validates_limit_and_target_type(self):
+        client = FakeSearchClient([])
+        with self.assertRaises(ValueError) as limit_error:
+            self.run_operate(
+                client,
+                {"action": "check_references", "document_id": "doc1", "limit": 0},
+            )
+        self.assertEqual(getattr(limit_error.exception, "error_code", None), "validation:out_of_range")
+
+        with self.assertRaises(ValueError) as notebook_error:
+            self.run_operate(
+                client,
+                {"action": "check_references", "document": "/Main"},
+            )
+        self.assertEqual(getattr(notebook_error.exception, "error_code", None), "validation:wrong_target_type")
+
+        block_id = "20260729120000-abcdefg"
+        client._blocks["doc1"] = [{
+            "id": block_id,
+            "root_id": "doc1",
+            "type": "p",
+            "markdown": "Body block",
+        }]
+        with self.assertRaises(ValueError) as block_error:
+            self.run_operate(
+                client,
+                {"action": "check_references", "document_id": block_id},
+            )
+        self.assertEqual(getattr(block_error.exception, "error_code", None), "validation:wrong_target_type")
+        self.assertIn("指向文档内块", str(block_error.exception))
 
     def test_list_path_returns_direct_children_with_full_paths(self):
         server = mcp_server.McpServer(self.root)
@@ -1503,9 +1695,9 @@ class McpServerWriteTests(unittest.TestCase):
             "def_block_id": "child-block",
             "block_id": "external-ref-block",
             "root_id": "refdoc",
-            "type": "textmark",
-            "content": "External reference to child document content.",
-            "markdown": "External ((child-block)).",
+            "type": "block-link",
+            "content": "External link to child document content.",
+            "markdown": "External [child](siyuan://blocks/child-block).",
             "block_type": "p",
         }]
         try:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Callable
 from urllib import error, parse, request
@@ -177,20 +178,59 @@ class SiYuanClient:
         return data
 
     def list_block_references(self, block_ids: list[str]) -> list[dict[str, Any]]:
-        """Return reference rows whose definition block is in *block_ids*."""
+        """Return normalized refs and siyuan:// block links targeting *block_ids*."""
         normalized = list(dict.fromkeys(str(block_id).strip() for block_id in block_ids if str(block_id).strip()))
+        if not normalized:
+            return []
+
+        target_ids = set(normalized)
         rows: list[dict[str, Any]] = []
         for start in range(0, len(normalized), 200):
             chunk = normalized[start:start + 200]
             quoted = ", ".join("'" + block_id.replace("'", "''") + "'" for block_id in chunk)
-            stmt = (
+            ref_stmt = (
                 "SELECT r.def_block_id, r.block_id, r.root_id, r.type, "
                 "b.content, b.markdown, b.type AS block_type "
                 "FROM refs r LEFT JOIN blocks b ON b.id = r.block_id "
                 f"WHERE r.def_block_id IN ({quoted})"
             )
-            rows.extend(self.query_sql(stmt))
-        return rows
+            rows.extend(self.query_sql(ref_stmt))
+
+            link_conditions = " OR ".join(
+                "instr(s.markdown, 'siyuan://blocks/"
+                + block_id.replace("'", "''")
+                + "') > 0"
+                for block_id in chunk
+            )
+            link_stmt = (
+                "SELECT s.block_id, s.root_id, s.markdown AS span_markdown, "
+                "b.content, b.markdown, b.type AS block_type "
+                "FROM spans s LEFT JOIN blocks b ON b.id = s.block_id "
+                f"WHERE {link_conditions}"
+            )
+            for row in self.query_sql(link_stmt):
+                span_markdown = str(row.get("span_markdown") or "")
+                for match in re.finditer(r"siyuan://blocks/([0-9A-Za-z-]+)", span_markdown, re.IGNORECASE):
+                    target_id = match.group(1)
+                    if target_id not in target_ids:
+                        continue
+                    rows.append({
+                        "def_block_id": target_id,
+                        "block_id": str(row.get("block_id") or ""),
+                        "root_id": str(row.get("root_id") or ""),
+                        "type": "block-link",
+                        "content": row.get("content"),
+                        "markdown": row.get("markdown"),
+                        "block_type": row.get("block_type"),
+                    })
+
+        deduplicated: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in rows:
+            target_id = str(row.get("def_block_id") or "")
+            source_block_id = str(row.get("block_id") or "")
+            if target_id in target_ids and source_block_id:
+                deduplicated.setdefault((target_id, source_block_id), row)
+        return list(deduplicated.values())
 
     def get_child_blocks(self, block_id: str) -> list[dict[str, Any]]:
         data = self._post("/api/block/getChildBlocks", {"id": block_id})

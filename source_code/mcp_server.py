@@ -59,6 +59,9 @@ from . import __version__
 SERVER_NAME = "siyuan-bridge"
 DEFAULT_SNIPPETS_PER_DOC = 5
 MAX_REFERENCE_DETAILS_PER_BLOCK = 20
+DEFAULT_REFERENCE_DOCUMENT_LIMIT = 10
+MAX_REFERENCE_BLOCKS_PER_DOCUMENT = 3
+MAX_REFERENCE_BLOCK_CHARACTERS = 2000
 POST_WRITE_SYNC_TIMEOUT = 5.0
 POST_WRITE_SYNC_INTERVAL = 0.25
 ASSET_LARGE_FILE_THRESHOLD_BYTES = 20 * 1024 * 1024
@@ -991,6 +994,30 @@ def reference_excerpt(row: dict[str, Any], limit: int = 180) -> str:
     return text
 
 
+def reference_block_markdown(row: dict[str, Any]) -> str:
+    text = str(row.get("markdown") or row.get("content") or "").strip()
+    if not text:
+        return "（引用块内容为空或无法读取）"
+    if len(text) > MAX_REFERENCE_BLOCK_CHARACTERS:
+        return (
+            text[:MAX_REFERENCE_BLOCK_CHARACTERS].rstrip()
+            + "\n\n（内容超过 2000 字符，已截断；更多内容请查看原文档。）"
+        )
+    return text
+
+
+def parse_reference_limit(value: Any) -> int | None:
+    if value is None:
+        return DEFAULT_REFERENCE_DOCUMENT_LIMIT
+    if isinstance(value, str) and value.strip().casefold() == "none":
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise tool_error(_ERR_INVALID_TYPE, 'limit 必须是大于等于 1 的整数或字符串 "none"。')
+    if value < 1:
+        raise tool_error(_ERR_OUT_OF_RANGE, 'limit 最小为 1；使用 "none" 可查看全部结果。')
+    return value
+
+
 def parent_display_path(document_path: str) -> str:
     parts = normalize_display_path(document_path).strip("/").split("/")
     if len(parts) <= 1:
@@ -1667,11 +1694,13 @@ class McpServer:
         )
 
     def siyuan_operate(self, args: dict[str, Any]) -> str:
-        action = str(args.get("action") or "").strip()
-        if action not in {"refresh", "sync"}:
-            raise tool_error(_ERR_INVALID_ENUM, "action 必须是 refresh 或 sync。")
+        action = str(args.get("action") or "").strip().casefold()
+        if action not in {"refresh", "sync", "check_references"}:
+            raise tool_error(_ERR_INVALID_ENUM, "action 必须是 refresh、sync 或 check_references。")
         if action == "refresh":
             return self._refresh_safe_index()
+        if action == "check_references":
+            return self._check_references(args)
 
         timeout_seconds = clamp_int(args.get("timeout_seconds"), 10, 5, 120)
         config = load_config(self.root)
@@ -1699,6 +1728,208 @@ class McpServer:
         if synced:
             lines.append(f"同步时间：{synced}")
         return "\n".join(lines)
+
+    def _check_references(self, args: dict[str, Any]) -> str:
+        limit = parse_reference_limit(args.get("limit"))
+        _profile, client = detect_active_profile(load_config(self.root))
+        target_doc = self._resolve_reference_document(args, client)
+        target_doc_id = str(target_doc.get("id") or "")
+
+        with ensure_notebooks_open(client):
+            live_docs = load_live_docs(client)
+            docs_by_id = {
+                str(doc.get("id") or ""): doc
+                for doc in live_docs
+                if str(doc.get("id") or "")
+            }
+            live_target = docs_by_id.get(target_doc_id, target_doc)
+            subtree = document_subtree(live_target, live_docs)
+            if not any(str(doc.get("id") or "") == target_doc_id for doc in subtree):
+                subtree.insert(0, live_target)
+
+            target_owner: dict[str, str] = {}
+            for subtree_doc in subtree:
+                subtree_doc_id = str(subtree_doc.get("id") or "")
+                if not subtree_doc_id:
+                    continue
+                target_owner[subtree_doc_id] = subtree_doc_id
+                for block in client.list_document_blocks(subtree_doc_id):
+                    block_id = str(block.get("id") or "")
+                    if block_id:
+                        target_owner[block_id] = subtree_doc_id
+            references = client.list_block_references(sorted(target_owner))
+
+        references_by_doc: dict[str, list[dict[str, Any]]] = {
+            str(doc.get("id") or ""): []
+            for doc in subtree
+            if str(doc.get("id") or "")
+        }
+        for row in references:
+            owner_id = target_owner.get(str(row.get("def_block_id") or ""))
+            if owner_id:
+                references_by_doc.setdefault(owner_id, []).append(row)
+
+        privacy = load_privacy_rules(self.root)
+        current_references = references_by_doc.get(target_doc_id, [])
+        child_docs = [
+            doc for doc in subtree
+            if str(doc.get("id") or "") != target_doc_id
+        ]
+        child_reference_total = sum(
+            len(references_by_doc.get(str(doc.get("id") or ""), []))
+            for doc in child_docs
+        )
+
+        lines = [
+            "# 文档引用检测",
+            "",
+            f"文档：{display_document_path(live_target)}（`{target_doc_id}`）",
+            f"本文档总共被引用 {len(current_references)} 次。",
+        ]
+
+        if child_docs:
+            lines.extend([
+                "",
+                f"其所有子文档（不含本文档）总共被引用 {child_reference_total} 次，"
+                "子文档的被引用情况如下（不包括被隐藏的文档）：",
+            ])
+            visible_referenced_children = [
+                (
+                    doc,
+                    len(references_by_doc.get(str(doc.get("id") or ""), [])),
+                )
+                for doc in child_docs
+                if document_permission(doc, privacy, live_docs) != "hidden"
+                and references_by_doc.get(str(doc.get("id") or ""))
+            ]
+            visible_referenced_children.sort(
+                key=lambda item: (
+                    -item[1],
+                    display_document_path(item[0]).casefold(),
+                    display_document_path(item[0]),
+                    str(item[0].get("id") or ""),
+                )
+            )
+            shown_children = (
+                visible_referenced_children
+                if limit is None
+                else visible_referenced_children[:limit]
+            )
+            if shown_children:
+                for child_doc, count in shown_children:
+                    lines.append(
+                        f"- {display_document_path(child_doc)}"
+                        f"（`{child_doc.get('id', '')}`）被引用 {count} 次"
+                    )
+            else:
+                lines.append("无可展示的子文档。")
+            remaining_children = len(visible_referenced_children) - len(shown_children)
+            if remaining_children > 0:
+                lines.append(
+                    f"另有 {remaining_children} 篇可见子文档未展示，"
+                    '请使用 limit="none" 查看全部引用。'
+                )
+
+        source_permission_cache: dict[str, str] = {}
+
+        def source_permission(root_id: str) -> str:
+            if root_id not in source_permission_cache:
+                source_doc = docs_by_id.get(root_id)
+                source_permission_cache[root_id] = (
+                    document_permission(source_doc, privacy, live_docs)
+                    if source_doc is not None
+                    else "hidden"
+                )
+            return source_permission_cache[root_id]
+
+        visible_groups: dict[str, list[dict[str, Any]]] = {}
+        hidden_reference_count = 0
+        for row in current_references:
+            root_id = str(row.get("root_id") or "")
+            if source_permission(root_id) == "hidden":
+                hidden_reference_count += 1
+            else:
+                visible_groups.setdefault(root_id, []).append(row)
+
+        ordered_groups = sorted(
+            visible_groups.items(),
+            key=lambda item: (
+                -len(item[1]),
+                display_document_path(docs_by_id[item[0]]).casefold(),
+                display_document_path(docs_by_id[item[0]]),
+                item[0],
+            ),
+        )
+        shown_groups = ordered_groups if limit is None else ordered_groups[:limit]
+        if shown_groups:
+            lines.extend(["", "## 引用来源"])
+            for source_doc_id, source_rows in shown_groups:
+                source_doc = docs_by_id[source_doc_id]
+                lines.extend([
+                    "",
+                    f"### {display_document_path(source_doc)}"
+                    f"（`{source_doc_id}`）引用了 {len(source_rows)} 次",
+                ])
+                rows_by_block: dict[str, list[dict[str, Any]]] = {}
+                for row in source_rows:
+                    source_block_id = str(row.get("block_id") or "")
+                    rows_by_block.setdefault(source_block_id, []).append(row)
+                shown_blocks = list(rows_by_block.items())[:MAX_REFERENCE_BLOCKS_PER_DOCUMENT]
+                for index, (_source_block_id, block_rows) in enumerate(shown_blocks, start=1):
+                    label = f"引用{index}"
+                    if len(block_rows) > 1:
+                        label += f"（本块包含 {len(block_rows)} 次引用）"
+                    lines.extend(["", f"{label}：", reference_block_markdown(block_rows[0])])
+                remaining_blocks = len(rows_by_block) - len(shown_blocks)
+                if remaining_blocks > 0:
+                    lines.extend([
+                        "",
+                        f"另有 {remaining_blocks} 个引用块未展示，更多引用请查看原文档。",
+                    ])
+
+        if hidden_reference_count:
+            lines.extend(["", f"隐藏文档中引用了 {hidden_reference_count} 次。"])
+
+        remaining_groups = len(ordered_groups) - len(shown_groups)
+        if remaining_groups > 0:
+            lines.extend([
+                "",
+                f"另有 {remaining_groups} 篇可见来源文档未展示，"
+                '请使用 limit="none" 查看全部引用。',
+            ])
+        return "\n".join(lines)
+
+    def _resolve_reference_document(self, args: dict[str, Any], client: Any) -> dict[str, Any]:
+        locator = str(args.get("document") or args.get("document_id") or "").strip()
+        if not locator:
+            raise tool_error(_ERR_MISSING_PARAM, "action=check_references 需要 document 或 document_id。")
+        if locator == "/":
+            raise tool_error(_ERR_WRONG_TARGET, "action=check_references 只接受文档，不能使用 /。")
+
+        locator_key = locator.strip("/").casefold()
+        for notebook in client.list_notebooks():
+            notebook_id = str(notebook.get("id") or "")
+            notebook_name = str(notebook.get("name") or "")
+            if locator == notebook_id or (notebook_name and locator_key == notebook_name.casefold()):
+                raise tool_error(
+                    _ERR_WRONG_TARGET,
+                    "action=check_references 只接受文档，输入不能是笔记本名称或笔记本 ID。",
+                )
+
+        try:
+            return self.resolve_visible_document(args)
+        except ValueError as exc:
+            if args.get("document_id") or re.fullmatch(r"\d{14}-[0-9a-z]{7}", locator):
+                escaped = locator.replace("'", "''")
+                rows = client.query_sql(
+                    f"SELECT id, root_id, type FROM blocks WHERE id = '{escaped}' LIMIT 1"
+                )
+                if rows and str(rows[0].get("type") or "") not in {"d", "NodeDocument"}:
+                    raise tool_error(
+                        _ERR_WRONG_TARGET,
+                        "document_id 指向文档内块，不是文档 ID。请提供其根文档 ID 或文档路径。",
+                    ) from exc
+            raise
 
     def siyuan_list(self, args: dict[str, Any]) -> str:
         path = normalize_display_path(str(args.get("path") or "").strip())
@@ -2514,7 +2745,7 @@ class McpServer:
         if policy == "break":
             return (
                 f"用户已明确允许破坏引用；"
-                f"本次删除 {len(referenced_target_ids)} 个被引用块 ID，影响 {len(external_refs)} 处引用。"
+                f"本次删除 {len(referenced_target_ids)} 个被引用块 ID，影响 {len(external_refs)} 处引用关系。"
             )
 
         privacy = load_privacy_rules(self.root)
@@ -2532,7 +2763,7 @@ class McpServer:
             return permission_cache[root_id]
 
         lines = [
-            "操作已拒绝：本次操作会破坏现有块引用。",
+            "操作已拒绝：本次操作会破坏现有引用关系。",
             "",
             f"即将删除 {len(deleting_ids)} 个块 ID，其中 "
             f"{len(referenced_target_ids)} 个仍被 {len(external_refs)} 处引用。",
@@ -3591,12 +3822,22 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_operate",
-            "description": "Run maintenance operations. action=refresh refreshes the safe local SiYuan index without cleaning ai_workspace. action=sync triggers SiYuan's built-in default sync, equivalent to clicking the sync button in SiYuan, then returns the current sync status.",
+            "description": "Run read-only or maintenance operations. action=refresh refreshes the safe local SiYuan index without cleaning ai_workspace. action=sync triggers SiYuan's built-in default sync. action=check_references checks standard block references, recognized embed-block references, and siyuan:// block links targeting one visible document and its blocks; the target document is detailed while descendant documents are summarized.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["refresh", "sync"], "description": "refresh = update the local safe index. sync = trigger SiYuan built-in default sync."},
+                    "action": {"type": "string", "enum": ["refresh", "sync", "check_references"], "description": "refresh = update the local safe index. sync = trigger SiYuan built-in default sync. check_references = read-only reference detection for one document."},
                     "timeout_seconds": {"type": "integer", "default": 10, "description": "For action=sync only. How long to wait for SiYuan built-in sync to return, 5-120 seconds. Does not change SiYuan sync behavior."},
+                    "document": {"type": "string", "description": "For action=check_references. Preferred document path including notebook name. Existing unique-title and unique-partial locator compatibility is preserved."},
+                    "document_id": {"type": "string", "description": "For action=check_references. Document ID fallback when the path is ambiguous or unavailable. A body block ID is rejected."},
+                    "limit": {
+                        "anyOf": [
+                            {"type": "integer", "minimum": 1},
+                            {"type": "string", "enum": ["none"]},
+                        ],
+                        "default": 10,
+                        "description": "For action=check_references. Maximum visible source documents and visible referenced descendant documents to display. No integer maximum; use \"none\" for all. Totals are never limited.",
+                    },
                 },
                 "required": ["action"],
                 "additionalProperties": False,

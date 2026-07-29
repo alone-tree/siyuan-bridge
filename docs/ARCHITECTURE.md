@@ -463,14 +463,17 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 
 ## `siyuan_operate`
 
-用途：执行维护操作。当前支持刷新安全索引和触发思源内置默认同步。
+用途：执行只读查询和维护操作。当前支持刷新安全索引、触发思源内置默认同步和主动检查文档引用。
 
 参数：
 
 | 参数     | 类型   | 默认 | 含义                         |
 | -------- | ------ | ---- | ---------------------------- |
-| `action` | string | 必填 | `refresh` / `sync` |
+| `action` | string | 必填 | `refresh` / `sync` / `check_references` |
 | `timeout_seconds` | integer | 10 | 仅 `action=sync` 使用，等待思源内置同步返回的秒数，范围 5-120 |
+| `document` | string | 空 | 仅 `action=check_references` 使用；优先传包含笔记本名称的文档路径 |
+| `document_id` | string | 空 | 仅 `action=check_references` 使用；路径歧义或不可用时的文档 ID 兜底 |
+| `limit` | integer / `"none"` | 10 | 仅 `action=check_references` 使用；分别限制可见来源文档和可见被引用子文档的展示数量；整数最小 1、无最大值 |
 
 `action=refresh` 数据流：
 
@@ -489,9 +492,22 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 
 如果 `performSync` 超过等待时间未返回，工具返回 `api:sync_timeout` 错误，提示用户稍后检查同步状态、手动延长 `timeout_seconds` 或检查网络/同步服务。如果同步调用已经开始但网络连接失败，工具返回 `api:sync_connection`。连接探测阶段失败仍按普通思源未启动/API 不可达处理。
 
+`action=check_references` 数据流：
+
+1. 复用 `siyuan_read` / `siyuan_edit` / `siyuan_doc_manage` 的现有文档定位器；公开用法优先完整路径，歧义时改用 `document_id`。空值、`/`、笔记本名称、笔记本 ID 和正文块 ID 均拒绝。
+2. 打开相关关闭笔记本并读取 live 文档树。当前文档的检测集合包含文档块 ID 和 `blocks.root_id=<document_id>` 的全部真实正文块 ID，因此覆盖列表子项等不一定单独出现在引用阅读视图中的块。
+3. 递归收集所有子文档及其真实正文块 ID。当前目标文档返回完整详情；子文档只返回每篇可见文档的引用次数汇总。
+4. 底层 `list_block_references()` 合并两路只读关系：`refs` 表中的标准块引用与可识别嵌入块，以及 `spans.markdown` 中的 `siyuan://blocks/<ID>` 块链接/Markdown 块链接。
+5. 所有关系统一按 `(目标 ID, 来源块 ID)` 去重。同一来源块多次引用同一目标只计 1 次；同一来源块分别引用文档及其内部块则分别计数。
+6. 当前文档的结果按来源文档汇总，按引用次数降序、完整路径升序排列。每篇最多展示 3 个唯一来源块；同一来源块包含多个目标关系时只展示一次并标注关系数；原始来源块 Markdown 最多保留前 2000 字符。
+7. 当前文档总数和子文档总数均不受 `limit` 影响。隐藏来源计入总数但只在末尾汇总引用次数；不返回隐藏来源的文档数、路径、ID 或内容。
+8. 子文档总数包含隐藏子文档，但子文档明细经过隐私过滤，不展示隐藏子文档的数量、路径、ID 或单篇次数。无子文档时省略该段；有子文档但引用为 0 时仍显示汇总。
+9. `limit` 分别作用于可见来源文档和被引用的可见子文档；`limit="none"` 展示全部。该 action 只读，不要求 `confirmed`，不创建快照。
+
 当前实现差距：
 
 - 当前设计已明确：只有 `siyuan_start` 会清理 `ai_workspace`，`siyuan_operate(action=refresh)` 不清理。refresh 可能发生在 AI 工作途中，中途清理 workspace 会误删附件、导出文件或临时工作材料。旧 devlog 和旧说明文档中仍可能保留相反历史表述，迁移时需要剔除，避免继续暗示 refresh 会清理 workspace。
+- 文档定位器在同时传入 `document` 与 `document_id` 时静默优先 `document`，不会校验二者是否指向同一文档。`check_references` 为保持工具一致性暂时复用该行为；后续应统一增加冲突校验。
 
 ## `siyuan_list`
 
@@ -750,7 +766,7 @@ scope：
 - 未被引用的块 ID 是否保留不影响用户；只有反链冲突出现后，才需要判断是否应保留对应 ID。
 - 冲突结果附带语义判断说明：修改后仍是同一个事实、观点、任务或条目时，重新规划为保留该 ID 的单块更新；原语义已撤销、合并或替代，保留 ID 反而会误导现有引用时，才请求用户允许破坏引用。
 - 多块冲突按每个被引用 ID 分别判断；只要其中仍有应保留的块，就不能直接对整个范围使用 `break`。
-- 所有会让 ID 消失的现有入口都检查 `refs` 反链：`siyuan_edit` 的 delete/multi、`siyuan_create(if_exists=overwrite)`、`siyuan_doc_manage(action=delete)`。
+- 所有会让 ID 消失的现有入口都调用统一引用关系查询：`siyuan_edit` 的 delete/multi、`siyuan_create(if_exists=overwrite)`、`siyuan_doc_manage(action=delete)`。查询同时覆盖标准块引用、可识别嵌入块和 `siyuan://` 块链接。
 - 默认 `reference_policy=reject`。可见引用返回文档路径、引用源块 ID 和内容；隐藏或未知来源只返回引用次数和受保护文档数。
 - 同一删除集合内部的引用不阻止操作。只有用户看过冲突报告并明确允许破坏引用后，AI 才能用相同参数加 `reference_policy=break` 重试。
 - 不自动判断内容语义，也不自动重写其他文档中的引用。
@@ -936,6 +952,7 @@ API 设计原则：
 2. `cli.py start` 仍读取旧 `knowledge_base/guide.md/index.md/START_HERE.md`，和系统笔记本方案不一致。
 3. `mcp_server.py` 文件过大，后续维护风险高。需要拆分为模块。
 4. 测试也需要模块化拆分，并需要系统性的覆盖。
+5. 通用文档定位器同时收到 `document` 与 `document_id` 时静默优先前者；应统一增加二者一致性校验，而不是由单个 action 各自处理。
 
 ## 历史踩坑与结论
 
