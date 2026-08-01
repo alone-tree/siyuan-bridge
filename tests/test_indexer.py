@@ -258,7 +258,7 @@ class IndexerTests(unittest.TestCase):
         # Add a Privacy Rules document in Main notebook
         client._system_docs["/Privacy Rules"] = "# Privacy Rules\n\n| Hide | ... |"
 
-        result = refresh_index(client, root, system_notebook_id="nb1", privacy_rules_doc_id="system-pr")
+        result = refresh_index(client, root, system_notebook_id="nb1", privacy_rules_doc_ids={"system-pr"})
 
         docs = {
             doc["id"]: doc
@@ -328,7 +328,7 @@ class IndexerTests(unittest.TestCase):
             PrivacyNameClient(),
             root,
             system_notebook_id="system-nb",
-            privacy_rules_doc_id="system-pr",
+            privacy_rules_doc_ids={"system-pr"},
         )
 
         indexed_ids = {

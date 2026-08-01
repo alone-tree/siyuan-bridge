@@ -48,7 +48,7 @@ If you use SiYuan on multiple computers with different directory paths, open the
 
 ![MCP configuration page](image/README/1785317465017.png)
 
-On first connection, Siyuan Bridge creates a notebook (named "Siyuan Bridge") in your workspace. It stores user preferences, workspace index, usage guide, and privacy rules. All documents can be viewed and edited like any other SiYuan document.
+When the plugin is first enabled, Siyuan Bridge creates a notebook named "Siyuan Bridge" in the current workspace. It stores user preferences, the workspace index, usage guides, and privacy rules. Installation and updates maintain it automatically when the plugin reloads; opening settings or calling an AI tool first is not required. All documents can be viewed and edited like any other SiYuan document.
 
 In "User Preferences," you can tell AI how concise answers should be, when to ask for confirmation before writing, which notebooks are more important, and what conventions to follow when organizing content. These preferences live in SiYuan and sync with your workspace.
 

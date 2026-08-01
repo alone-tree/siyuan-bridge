@@ -37,11 +37,11 @@ from .indexer import (
 )
 from .agent_notebook import (
     AgentNotebookState,
-    ensure_agent_notebook,
+    PrivacyRulesUnavailableError,
     is_privacy_rules_document,
     is_system_notebook_name,
+    load_agent_notebook,
 )
-from .i18n import get_doc_name
 from .telemetry import (
     _resolve_proxy,
     _with_telemetry,
@@ -1522,61 +1522,59 @@ class McpServer:
                 request_id,
                 {"content": [{"type": "text", "text": f"工具执行失败：{exc}"}], "isError": True},
             )
+        except PrivacyRulesUnavailableError as exc:
+            self._clear_active_connection()
+            return make_result(
+                request_id,
+                {"content": [{"type": "text", "text": str(exc)}], "isError": True},
+            )
 
     def _refresh_index_with_system_context(self, client: SiYuanClient) -> None:
-        config = load_config(self.root)
-        state = ensure_agent_notebook(client, self.root, config_language=config.language or None)
+        state = self._load_system_context(client)
         write_privacy_rules_cache(self.root, state.privacy_rules)
         refresh_index(
             client,
             self.root,
             system_notebook_id=state.notebook_id,
-            privacy_rules_doc_id=state.privacy_rules_doc_id,
+            privacy_rules_doc_ids=set(state.privacy_rules_doc_ids),
         )
 
-    def _wait_for_system_documents(
+    def _load_system_context(
         self,
         client: SiYuanClient,
-        state: AgentNotebookState,
-    ) -> None:
-        expected = {
-            state.ai_guide_doc_id: get_doc_name("ai_guide", state.language),
-            state.mcp_usage_guide_doc_id: get_doc_name("mcp_usage_guide", state.language),
-            state.workspace_index_guide_doc_id: get_doc_name(
-                "workspace_index_guide", state.language
-            ),
-            state.workspace_index_doc_id: get_doc_name("workspace_index", state.language),
-            state.about_doc_id: get_doc_name("about", state.language),
-            state.privacy_rules_doc_id: get_doc_name("privacy_rules", state.language),
-        }
-        expected = {
-            doc_id: title
-            for doc_id, title in expected.items()
-            if doc_id and title
-        }
-        deadline = time.monotonic() + POST_WRITE_SYNC_TIMEOUT
-        while time.monotonic() < deadline:
-            live_docs = {
-                str(doc.get("id") or ""): normalize_display_path(
-                    str(doc.get("hpath") or "")
-                ).strip("/")
-                for doc in load_live_docs(client)
+        *,
+        notify_missing: bool = False,
+    ) -> AgentNotebookState:
+        config = load_config(self.root)
+        try:
+            state = load_agent_notebook(
+                client, self.root, config_language=config.language or None
+            )
+        except PrivacyRulesUnavailableError as exc:
+            try:
+                client.push_err_msg(str(exc), timeout=12000)
+            except Exception:
+                pass
+            raise
+        if notify_missing and state.missing_document_keys:
+            labels = {
+                "ai_guide": "用户个性化要求",
+                "mcp_usage_guide": "MCP 使用指南",
+                "workspace_index_guide": "工作空间索引创建指南",
+                "workspace_index": "工作空间索引",
+                "about": "关于思源桥",
             }
-            if all(
-                live_docs.get(doc_id, "").casefold() == title.casefold()
-                for doc_id, title in expected.items()
-            ):
-                return
-            time.sleep(POST_WRITE_SYNC_INTERVAL)
-        missing = [
-            f"{title} ({doc_id})"
-            for doc_id, title in expected.items()
-            if live_docs.get(doc_id, "").casefold() != title.casefold()
-        ]
-        raise SiYuanApiError(
-            "系统笔记本文档路径尚未完成同步，请稍后重试："
-            + "、".join(missing)
-        )
+            missing = [labels[key] for key in state.missing_document_keys if key in labels]
+            if missing:
+                message = (
+                    "思源桥系统文档缺失：" + "、".join(missing)
+                    + "。当前仍可继续使用；禁用并重新启用思源桥插件可重新创建。"
+                )
+                try:
+                    client.push_msg(message, timeout=10000)
+                except Exception:
+                    pass
+        return state
 
     def _wait_for_hpath(self, client: SiYuanClient, doc_id: str, expected_hpath: str) -> PostWriteSyncStatus:
         expected = normalize_display_path(expected_hpath).casefold()
@@ -1634,9 +1632,8 @@ class McpServer:
         load_anonymous_id(self.root)
         ensure_session_id()
 
-        # Ensure system notebook and parse privacy rules
-        state = ensure_agent_notebook(client, self.root, config_language=config.language or None)
-        self._wait_for_system_documents(client, state)
+        # Read the plugin-maintained system notebook and parse privacy rules.
+        state = self._load_system_context(client, notify_missing=True)
         nb_id = state.notebook_id
 
         # Cache privacy rules for other tools
@@ -1657,7 +1654,7 @@ class McpServer:
         refresh_index(
             client, self.root,
             system_notebook_id=nb_id,
-            privacy_rules_doc_id=state.privacy_rules_doc_id,
+            privacy_rules_doc_ids=set(state.privacy_rules_doc_ids),
         )
 
         overview = build_notebook_overview(self.root)
@@ -1711,6 +1708,27 @@ class McpServer:
             "",
             f"最后更新时间：{format_siyuan_updated(state.workspace_index_updated)}",
         ]
+        non_privacy_missing = [
+            key for key in state.missing_document_keys if key != "privacy_rules"
+        ]
+        if non_privacy_missing:
+            labels = {
+                "ai_guide": "用户个性化要求",
+                "mcp_usage_guide": "MCP 使用指南",
+                "workspace_index_guide": "工作空间索引创建指南",
+                "workspace_index": "工作空间索引",
+                "about": "关于思源桥",
+            }
+            missing_text = "、".join(labels.get(key, key) for key in non_privacy_missing)
+            parts[4:4] = [
+                "## 系统文档警告",
+                "",
+                (
+                    f"> 以下系统文档缺失：{missing_text}。当前功能继续运行；"
+                    "请提醒用户禁用并重新启用思源桥插件以重新创建。"
+                ),
+                "",
+            ]
 
         age_days = workspace_index_age_days(state.workspace_index_updated)
         if state.workspace_index_is_placeholder:
@@ -1741,16 +1759,15 @@ class McpServer:
         return result
 
     def _refresh_safe_index(self) -> str:
-        config = load_config(self.root)
         client = self._require_active_client()
 
-        state = ensure_agent_notebook(client, self.root, config_language=config.language or None)
+        state = self._load_system_context(client)
         write_privacy_rules_cache(self.root, state.privacy_rules)
 
         result = refresh_index(
             client, self.root,
             system_notebook_id=state.notebook_id,
-            privacy_rules_doc_id=state.privacy_rules_doc_id,
+            privacy_rules_doc_ids=set(state.privacy_rules_doc_ids),
         )
         total_ignore = len(state.privacy_rules.ignore)
         total_permissions = len(state.privacy_rules.permissions)
@@ -3969,7 +3986,7 @@ def tool_specs() -> list[dict[str, Any]]:
     return [
         {
             "name": "siyuan_start",
-            "description": "Refresh the safe index, ensure the system notebook 思源桥 and its fixed documents, and return the mandatory startup packet: notebook overview table, Workspace Index (if it exists — an AI-generated semantic navigation map), and AI Guide (user preferences and rules). Always call this first — it ensures the index is up to date.",
+            "description": "Read the plugin-maintained system notebook, load and merge all registered system documents, refresh the safe index, and return the mandatory startup packet: notebook overview table, Workspace Index, MCP Usage Guide, and User Preferences. This tool never creates, updates, migrates, or registers system documents. Missing non-privacy documents produce a warning and startup continues; if all registered Privacy Rules documents are missing, startup stops and asks the user to disable and re-enable the plugin. Always call this first.",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
         },
         {

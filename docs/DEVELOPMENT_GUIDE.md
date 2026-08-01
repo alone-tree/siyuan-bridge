@@ -108,17 +108,19 @@
 
 ## 修改系统笔记本或启动包时必须验证
 
-涉及 `ensure_agent_notebook()`、系统模板、`system_state.json` 或 `siyuan_start` 时，必须验证：
+涉及插件系统笔记本维护、`load_agent_notebook()`、系统模板、`system_state.json` 或 `siyuan_start` 时，必须验证：
 
 - 新安装会创建六篇固定文档。
 - `AI 使用指南` / `AI Guide` 按原文档 ID 更名为 `用户个性化要求` / `User Preferences`，不删除重建。
 - 旧正文由用户修改时完整保留；只有和已知历史默认模板完全一致时才替换成新空模板。
-- 新旧文档名同时存在时使用新名称，旧文档保留但忽略。
-- 本地 JSON 尚不存在或其中 ID 失效时，能按当前名称、历史名称恢复并重写 JSON。
+- 插件激活时合并 JSON 有效 ID、当前名称和历史名称匹配的全部文档；只有结果为空才创建。
+- `system_state.json` 每类记录多个文档条目；失效 ID 由插件激活清理，Python MCP 不写状态。
 - 两篇托管指南只有在当前正文仍等于上次记录的实际正文时才自动升级；用户修改后不得覆盖。
 - 设置页重置指南必须保留文档 ID，并重写模板版本和导入后实际正文哈希。
 - About 用户修改标题或正文后仍按 JSON 记录的原 ID 恢复标准标题和开发者模板，不得创建重复文档。
 - Workspace Index 缺失时只创建一句占位内容，已有真实索引绝不覆盖。
+- 多篇 User Preferences、Workspace Index 和 Privacy Rules 在 MCP 运行时合并使用；全部 Privacy Rules ID 都硬隔离。
+- 非隐私系统文档全部失效时 `siyuan_start` warning 后继续；Privacy Rules 全部失效时失败关闭并提示禁用后重新启用插件。
 - 29/30 天不提示过期，超过 30 天才在 MCP 返回中临时提示；不能写回思源文档或改变更新时间。
 - 启动包顺序固定为运行状态、MCP Usage Guide、User Preferences、笔记本概览、Workspace Index；不再返回语言偏好和 About 入口。
 
@@ -232,8 +234,8 @@
 
 | 工具 | 是否写思源 | 是否需要 confirmed | 是否快照 | 主要权限 |
 |---|---:|---:|---:|---|
-| `siyuan_start` | 可能创建/更新系统文档 | 否 | 否 | 内部系统操作 |
-| `siyuan_operate:refresh` | 可能创建/更新系统文档 | 否 | 否 | 内部系统操作 |
+| `siyuan_start` | 否 | 否 | 否 | 只读系统状态；Privacy Rules 缺失时失败关闭 |
+| `siyuan_operate:refresh` | 否 | 否 | 否 | 只读系统状态并刷新安全索引 |
 | `siyuan_operate:sync` | 否，触发思源内置同步 | 否 | 否 | 思源同步配置 |
 | `siyuan_operate:check_references` | 否 | 否 | 否 | 目标可见；来源和子文档经隐私过滤 |
 | `siyuan_list` | 否 | 否 | 否 | 只返回可见索引 |

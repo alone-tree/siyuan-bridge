@@ -25,6 +25,7 @@ const SYSTEM_DOC_NAMES = {
 };
 const LEGACY_SYSTEM_DOC_NAMES = {
   ai_guide: ["AI 使用指南", "AI Guide"],
+  mcp_usage_guide: ["MCP使用指南"],
   about: ["关于思源代理桥", "About SiYuan Agent Bridge", "关于Siyuan Agent Bridge"],
 };
 const SYSTEM_BOOTSTRAP_FILES = {
@@ -49,6 +50,7 @@ const LEGACY_AI_GUIDE_HASHES = new Set([
   "39576ef97d8e9d319aa346ddd80265629b8f72d8de9fb08447f08ed2954205df",
   "a3e3c01d4925547b747e5342fafbfff8dab0e77eaa345db6eab49e2aed3412a9",
 ]);
+const SYSTEM_STATE_SCHEMA_VERSION = 2;
 
 class SiyuanBridgePlugin extends Plugin {
   onload() {
@@ -69,8 +71,9 @@ class SiyuanBridgePlugin extends Plugin {
     ensureTelemetryConfig().catch((error) => {
       console.warn("Siyuan Bridge telemetry init failed", error);
     });
-    ensureSystemNotebook().catch((error) => {
+    this.systemNotebookMaintenance = ensureSystemNotebook().catch((error) => {
       console.warn("Siyuan Bridge system notebook init failed", error);
+      return null;
     });
   }
 
@@ -80,6 +83,9 @@ class SiyuanBridgePlugin extends Plugin {
       title: "思源桥",
       position: "right",
       callback: () => this.openHome(),
+    });
+    this.systemNotebookMaintenance?.then((documentCache) => {
+      if (documentCache) showDuplicateSystemDocuments(documentCache);
     });
   }
 
@@ -259,12 +265,14 @@ async function loadAndRenderSystemGuides(root) {
       ["mcp_usage_guide", "MCP 使用指南"],
       ["workspace_index_guide", "工作空间索引创建指南"],
     ].map(([key, label]) => {
-      const entry = documents[key];
-      const status = !entry
+      const entries = registryEntries(documents[key]);
+      const modified = entries.filter((entry) => entry.user_modified).length;
+      const versions = entries.map((entry) => Number(entry.template_version || 1));
+      const status = entries.length === 0
         ? "尚未初始化"
-        : entry.user_modified
-          ? "用户已修改"
-          : `系统默认版本 v${entry.template_version || 1}`;
+        : modified > 0
+          ? `${entries.length} 篇，其中 ${modified} 篇用户已修改`
+          : `${entries.length} 篇，系统默认版本 v${Math.max(...versions)}`;
       return `
         <div class="siyuan-bridge-home__guide-row">
           <div>
@@ -273,7 +281,7 @@ async function loadAndRenderSystemGuides(root) {
           </div>
           <button class="b3-button b3-button--outline"
                   data-action="reset-system-guide" data-guide-key="${key}"
-                  ${entry?.id ? "" : "disabled"}>重置</button>
+                  ${entries.length > 0 ? "" : "disabled"}>重置</button>
         </div>`;
     });
     area.innerHTML = rows.join("");
@@ -289,16 +297,15 @@ async function resetSystemGuide(root, guideKey) {
   };
   const label = labels[guideKey];
   if (!label) return;
-  if (!window.confirm(`确定要把《${label}》重置为当前插件的默认内容吗？文档 ID 会保留。`)) {
-    return;
-  }
-
   try {
     const {state, workspace} = await getCurrentSystemWorkspace();
-    const entry = workspace?.documents?.[guideKey];
-    if (!entry?.id) {
+    const entries = registryEntries(workspace?.documents?.[guideKey]);
+    if (entries.length === 0) {
       throw new Error("尚未找到系统文档 ID，请重新启用插件后重试");
     }
+    if (!window.confirm(
+      `确定要把《${label}》的 ${entries.length} 篇已登记文档全部重置为当前默认内容吗？文档 ID 会保留。`
+    )) return;
     const bridgeConfig = await readBridgeConfig();
     const language = bridgeConfig.config?.language === "en" ? "en" : "zh-CN";
     const manifest = JSON.parse(await getFile(`${SYSTEM_TEMPLATE_ROOT}/manifest.json`));
@@ -307,27 +314,23 @@ async function resetSystemGuide(root, guideKey) {
     if (!filename) throw new Error("内置模板缺失");
     const markdown = await getFile(`${SYSTEM_TEMPLATE_ROOT}/${filename}`);
 
-    await callSiyuanApi("/api/block/updateBlock", {
-      id: entry.id,
-      dataType: "markdown",
-      data: markdown,
-    });
-    const exported = await callSiyuanApi("/api/export/exportMdContent", {
-      id: entry.id,
-      refMode: 0,
-      embedMode: 0,
-    });
-    const actualMarkdown = String(
-      exported?.content || exported?.markdown || exported?.md || exported?.kramdown || ""
-    );
-    entry.template_version = Number(templateInfo.version || 1);
-    entry.source_sha256 = String(templateInfo?.source_sha256?.[language] || "");
-    entry.rendered_sha256 = await sha256Text(normalizeManagedMarkdown(actualMarkdown));
-    entry.current_sha256 = entry.rendered_sha256;
-    entry.user_modified = false;
+    for (const entry of entries) {
+      await callSiyuanApi("/api/block/updateBlock", {
+        id: entry.id,
+        dataType: "markdown",
+        data: markdown,
+      });
+      const actualMarkdown = await exportSystemDocument(entry.id);
+      entry.template_version = Number(templateInfo.version || 1);
+      entry.source_sha256 = String(templateInfo?.source_sha256?.[language] || "");
+      entry.rendered_sha256 = await sha256Text(normalizeManagedMarkdown(actualMarkdown));
+      entry.current_sha256 = entry.rendered_sha256;
+      entry.user_modified = false;
+    }
+    workspace.documents[guideKey] = entries;
     await putFile(SYSTEM_STATE_PATH, JSON.stringify(state, null, 2) + "\n");
     await loadAndRenderSystemGuides(root);
-    showMessage(`《${label}》已重置，原文档 ID 保持不变`);
+    showMessage(`《${label}》的 ${entries.length} 篇文档已重置，原文档 ID 保持不变`);
   } catch (error) {
     console.error("Failed to reset system guide:", error);
     showMessage(`重置失败：${error?.message || error}`, -1, "error");
@@ -449,6 +452,7 @@ async function ensureSystemNotebook() {
     workspace.refreshed_at = new Date().toISOString();
     state.active_workspace_key = notebookId;
     await putFile(SYSTEM_STATE_PATH, JSON.stringify(state, null, 2) + "\n");
+    return documentCache;
   } finally {
     if (wasClosed) {
       await callSiyuanApi("/api/notebook/closeNotebook", {notebook: notebookId});
@@ -461,7 +465,7 @@ async function loadSystemState() {
     const parsed = JSON.parse(await getFile(SYSTEM_STATE_PATH));
     if (parsed && typeof parsed === "object") {
       return {
-        schema_version: 1,
+        schema_version: SYSTEM_STATE_SCHEMA_VERSION,
         active_workspace_key: String(parsed.active_workspace_key || ""),
         workspaces: parsed.workspaces && typeof parsed.workspaces === "object"
           ? parsed.workspaces
@@ -471,7 +475,7 @@ async function loadSystemState() {
   } catch (_error) {
     // Missing state is normal for existing users upgrading to this version.
   }
-  return {schema_version: 1, active_workspace_key: "", workspaces: {}};
+  return {schema_version: SYSTEM_STATE_SCHEMA_VERSION, active_workspace_key: "", workspaces: {}};
 }
 
 function ensureSystemWorkspaceState(state, notebookId, notebookName) {
@@ -496,25 +500,33 @@ function systemDocTitle(doc) {
   return parts[parts.length - 1] || "";
 }
 
-function findSystemDoc(docs, key, language, cachedId = "") {
-  const desiredName = SYSTEM_DOC_NAMES[key]?.[language] || SYSTEM_DOC_NAMES[key]?.["zh-CN"];
-  const currentNames = Object.values(SYSTEM_DOC_NAMES[key] || {});
-  const legacyNames = LEGACY_SYSTEM_DOC_NAMES[key] || [];
-  const findByNames = (names) => names
-    .map((name) => docs.find((doc) =>
-      systemDocTitle(doc).toLowerCase() === String(name).toLowerCase()
-    ))
-    .find(Boolean);
-  const current = findByNames([
-    desiredName,
-    ...currentNames.filter((name) => name !== desiredName),
-  ]);
-  const legacy = findByNames(legacyNames);
-  if (current && legacy) return current;
-  const cached = cachedId
-    ? docs.find((doc) => String(doc?.id || "") === String(cachedId))
-    : null;
-  return cached || current || legacy || null;
+function registryEntries(value) {
+  if (Array.isArray(value)) {
+    return value.filter((entry) => entry && typeof entry === "object" && entry.id);
+  }
+  return value && typeof value === "object" && value.id ? [value] : [];
+}
+
+function findSystemDocs(docs, key, documentCache) {
+  const entries = registryEntries(documentCache[key]);
+  const names = new Set([
+    ...Object.values(SYSTEM_DOC_NAMES[key] || {}),
+    ...(LEGACY_SYSTEM_DOC_NAMES[key] || []),
+  ].map((name) => String(name).toLowerCase()));
+  const result = [];
+  const seen = new Set();
+  const add = (doc) => {
+    const id = String(doc?.id || "");
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      result.push(doc);
+    }
+  };
+  entries.forEach((entry) => add(docs.find((doc) => String(doc?.id || "") === String(entry.id))));
+  docs.forEach((doc) => {
+    if (names.has(systemDocTitle(doc).toLowerCase())) add(doc);
+  });
+  return result;
 }
 
 async function createSystemDocument(docs, notebookId, title, markdown) {
@@ -559,36 +571,49 @@ async function loadBootstrapTemplate(key, language) {
   return getFile(`${SYSTEM_TEMPLATE_ROOT}/${filename}`);
 }
 
-function recordSystemDocument(documentCache, key, doc, extra = {}) {
-  documentCache[key] = {
+function systemDocumentRecord(doc, extra = {}) {
+  return {
     id: String(doc?.id || ""),
     name: systemDocTitle(doc),
     ...extra,
   };
 }
 
+function cachedRecordsById(documentCache, key) {
+  return new Map(registryEntries(documentCache[key]).map((entry) => [String(entry.id), entry]));
+}
+
+function recordSystemDocuments(documentCache, key, records) {
+  documentCache[key] = records.filter((entry) => entry?.id);
+}
+
 async function ensureAiPreferences(docs, notebookId, language, documentCache) {
   const key = "ai_guide";
   const template = await loadBootstrapTemplate(key, language);
-  let doc = findSystemDoc(docs, key, language, documentCache[key]?.id);
-  if (!doc) {
-    doc = await createSystemDocument(
+  let matches = findSystemDocs(docs, key, documentCache);
+  if (matches.length === 0) {
+    matches = [await createSystemDocument(
       docs, notebookId, SYSTEM_DOC_NAMES[key][language], template
-    );
-  } else if ((LEGACY_SYSTEM_DOC_NAMES[key] || []).includes(systemDocTitle(doc))) {
-    await callSiyuanApi("/api/filetree/renameDocByID", {
-      id: doc.id,
-      title: SYSTEM_DOC_NAMES[key][language],
-    });
-    doc.hpath = `/${SYSTEM_DOC_NAMES[key][language]}`;
+    )];
   }
-  let markdown = await exportSystemDocument(doc.id);
-  const currentHash = await sha256Text(normalizeManagedMarkdown(markdown));
-  if (LEGACY_AI_GUIDE_HASHES.has(currentHash)) {
-    markdown = await updateSystemDocument(doc.id, template);
+  const legacyNames = new Set((LEGACY_SYSTEM_DOC_NAMES[key] || []).map((name) => name.toLowerCase()));
+  const records = [];
+  for (const doc of matches) {
+    if (legacyNames.has(systemDocTitle(doc).toLowerCase())) {
+      await callSiyuanApi("/api/filetree/renameDocByID", {
+        id: doc.id,
+        title: SYSTEM_DOC_NAMES[key][language],
+      });
+      doc.hpath = `/${SYSTEM_DOC_NAMES[key][language]}`;
+    }
+    let markdown = await exportSystemDocument(doc.id);
+    const currentHash = await sha256Text(normalizeManagedMarkdown(markdown));
+    if (LEGACY_AI_GUIDE_HASHES.has(currentHash)) {
+      markdown = await updateSystemDocument(doc.id, template);
+    }
+    records.push(systemDocumentRecord(doc));
   }
-  recordSystemDocument(documentCache, key, doc);
-  return markdown;
+  recordSystemDocuments(documentCache, key, records);
 }
 
 async function ensureAboutDocument(docs, notebookId, language, documentCache) {
@@ -596,46 +621,52 @@ async function ensureAboutDocument(docs, notebookId, language, documentCache) {
   const template = await loadBootstrapTemplate(key, language);
   const sourceHash = await sha256Text(template);
   const templateHash = await sha256Text(normalizeManagedMarkdown(template));
-  let doc = findSystemDoc(docs, key, language, documentCache[key]?.id);
-  if (!doc) {
-    doc = await createSystemDocument(
+  const cached = cachedRecordsById(documentCache, key);
+  let matches = findSystemDocs(docs, key, documentCache);
+  if (matches.length === 0) {
+    matches = [await createSystemDocument(
       docs, notebookId, SYSTEM_DOC_NAMES[key][language], template
-    );
-  } else if (systemDocTitle(doc) !== SYSTEM_DOC_NAMES[key][language]) {
-    await callSiyuanApi("/api/filetree/renameDocByID", {
-      id: doc.id,
-      title: SYSTEM_DOC_NAMES[key][language],
-    });
-    doc.hpath = `/${SYSTEM_DOC_NAMES[key][language]}`;
+    )];
   }
-  let markdown = await exportSystemDocument(doc.id);
-  const currentHash = await sha256Text(normalizeManagedMarkdown(markdown));
-  const entry = documentCache[key] || {};
-  const baselineMatches = String(entry.id || "") === String(doc.id)
-    && String(entry.rendered_sha256 || "") === currentHash
-    && String(entry.source_sha256 || "") === sourceHash;
-  if (!baselineMatches && currentHash !== templateHash) {
-    markdown = await updateSystemDocument(doc.id, template);
+  const records = [];
+  for (const doc of matches) {
+    if (systemDocTitle(doc) !== SYSTEM_DOC_NAMES[key][language]) {
+      await callSiyuanApi("/api/filetree/renameDocByID", {
+        id: doc.id,
+        title: SYSTEM_DOC_NAMES[key][language],
+      });
+      doc.hpath = `/${SYSTEM_DOC_NAMES[key][language]}`;
+    }
+    let markdown = await exportSystemDocument(doc.id);
+    const currentHash = await sha256Text(normalizeManagedMarkdown(markdown));
+    const entry = cached.get(String(doc.id)) || {};
+    const baselineMatches = String(entry.rendered_sha256 || "") === currentHash
+      && String(entry.source_sha256 || "") === sourceHash;
+    if (!baselineMatches && currentHash !== templateHash) {
+      markdown = await updateSystemDocument(doc.id, template);
+    }
+    records.push(systemDocumentRecord(doc, {
+      source_sha256: sourceHash,
+      rendered_sha256: await sha256Text(normalizeManagedMarkdown(markdown)),
+      developer_controlled: true,
+    }));
   }
-  recordSystemDocument(documentCache, key, doc, {
-    source_sha256: sourceHash,
-    rendered_sha256: await sha256Text(normalizeManagedMarkdown(markdown)),
-    developer_controlled: true,
-  });
+  recordSystemDocuments(documentCache, key, records);
 }
 
 async function ensureSimpleSystemDocument(
   docs, notebookId, language, documentCache, key
 ) {
-  let doc = findSystemDoc(docs, key, language, documentCache[key]?.id);
-  if (!doc) {
+  let matches = findSystemDocs(docs, key, documentCache);
+  if (matches.length === 0) {
     const template = await loadBootstrapTemplate(key, language);
-    doc = await createSystemDocument(
+    matches = [await createSystemDocument(
       docs, notebookId, SYSTEM_DOC_NAMES[key][language], template
-    );
+    )];
   }
-  recordSystemDocument(documentCache, key, doc);
-  return doc;
+  recordSystemDocuments(
+    documentCache, key, matches.map((doc) => systemDocumentRecord(doc))
+  );
 }
 
 async function ensureManagedGuide(
@@ -656,84 +687,64 @@ async function ensureManagedGuide(
     throw new Error(`内置指南模板哈希不匹配：${filename}`);
   }
 
-  let doc = findSystemDoc(docs, key, language, documentCache[key]?.id);
-  if (!doc) {
-    doc = await createSystemDocument(
+  const cached = cachedRecordsById(documentCache, key);
+  let matches = findSystemDocs(docs, key, documentCache);
+  if (matches.length === 0) {
+    matches = [await createSystemDocument(
       docs, notebookId, SYSTEM_DOC_NAMES[key][language], template
-    );
-    const markdown = await exportSystemDocument(doc.id);
-    recordManagedGuide(documentCache, key, doc, templateInfo, language, sourceHash, markdown);
-    return;
+    )];
   }
-
-  const entry = documentCache[key] || {};
-  const sameRegisteredDocument = String(entry.id || "") === String(doc.id);
-  let markdown = await exportSystemDocument(doc.id);
-  const currentHash = await sha256Text(normalizeManagedMarkdown(markdown));
-  if (sameRegisteredDocument && entry.user_modified === true) {
-    recordManagedGuide(
-      documentCache, key, doc, templateInfo, language, sourceHash, markdown,
-      true, String(entry.rendered_sha256 || "")
-    );
-    return;
-  }
-
-  const baselineHash = sameRegisteredDocument
-    ? String(entry.rendered_sha256 || "")
-    : "";
-  if (baselineHash && currentHash !== baselineHash) {
-    recordManagedGuide(
-      documentCache, key, doc, templateInfo, language, sourceHash, markdown,
-      true, baselineHash
-    );
-    return;
-  }
-
-  const templateVersion = Number(templateInfo.version || 1);
-  if (baselineHash) {
-    const templateChanged = Number(entry.template_version || 0) !== templateVersion
-      || String(entry.source_sha256 || "") !== sourceHash;
-    if (templateChanged) {
-      markdown = await updateSystemDocument(doc.id, template);
+  const records = [];
+  for (const doc of matches) {
+    const entry = cached.get(String(doc.id)) || {};
+    let markdown = await exportSystemDocument(doc.id);
+    const currentHash = await sha256Text(normalizeManagedMarkdown(markdown));
+    if (entry.user_modified === true) {
+      records.push(await managedGuideRecord(
+        doc, templateInfo, sourceHash, markdown, true, String(entry.rendered_sha256 || "")
+      ));
+      continue;
     }
-    recordManagedGuide(
-      documentCache, key, doc, templateInfo, language, sourceHash, markdown
-    );
-    return;
-  }
-
-  const knownHashes = new Set([
-    await sha256Text(normalizeManagedMarkdown(template)),
-    ...(templateInfo?.historical_normalized_sha256?.[language] || []),
-  ]);
-  if (knownHashes.has(currentHash)) {
-    if (currentHash !== await sha256Text(normalizeManagedMarkdown(template))) {
-      markdown = await updateSystemDocument(doc.id, template);
+    const baselineHash = String(entry.rendered_sha256 || "");
+    if (baselineHash && currentHash !== baselineHash) {
+      records.push(await managedGuideRecord(
+        doc, templateInfo, sourceHash, markdown, true, baselineHash
+      ));
+      continue;
     }
-    recordManagedGuide(
-      documentCache, key, doc, templateInfo, language, sourceHash, markdown
-    );
-  } else {
-    recordManagedGuide(
-      documentCache, key, doc, templateInfo, language, sourceHash, markdown,
-      true, ""
-    );
+    const templateVersion = Number(templateInfo.version || 1);
+    if (baselineHash) {
+      const templateChanged = Number(entry.template_version || 0) !== templateVersion
+        || String(entry.source_sha256 || "") !== sourceHash;
+      if (templateChanged) markdown = await updateSystemDocument(doc.id, template);
+      records.push(await managedGuideRecord(doc, templateInfo, sourceHash, markdown));
+      continue;
+    }
+    const templateHash = await sha256Text(normalizeManagedMarkdown(template));
+    const knownHashes = new Set([
+      templateHash,
+      ...(templateInfo?.historical_normalized_sha256?.[language] || []),
+    ]);
+    if (knownHashes.has(currentHash)) {
+      if (currentHash !== templateHash) markdown = await updateSystemDocument(doc.id, template);
+      records.push(await managedGuideRecord(doc, templateInfo, sourceHash, markdown));
+    } else {
+      records.push(await managedGuideRecord(doc, templateInfo, sourceHash, markdown, true, ""));
+    }
   }
+  recordSystemDocuments(documentCache, key, records);
 }
 
-async function recordManagedGuide(
-  documentCache,
-  key,
+async function managedGuideRecord(
   doc,
   templateInfo,
-  language,
   sourceHash,
   markdown,
   userModified = false,
   baselineHash = null
 ) {
   const currentHash = await sha256Text(normalizeManagedMarkdown(markdown));
-  recordSystemDocument(documentCache, key, doc, {
+  return systemDocumentRecord(doc, {
     template_version: Number(templateInfo.version || 1),
     source_sha256: sourceHash,
     rendered_sha256: baselineHash === null ? currentHash : baselineHash,
@@ -745,21 +756,47 @@ async function recordManagedGuide(
 async function ensureWorkspaceIndex(docs, notebookId, language, documentCache) {
   const key = "workspace_index";
   const placeholder = await loadBootstrapTemplate(key, language);
-  let doc = findSystemDoc(docs, key, language, documentCache[key]?.id);
-  if (!doc) {
-    doc = await createSystemDocument(
+  let matches = findSystemDocs(docs, key, documentCache);
+  if (matches.length === 0) {
+    matches = [await createSystemDocument(
       docs, notebookId, SYSTEM_DOC_NAMES[key][language], placeholder
-    );
+    )];
   }
-  const markdown = await exportSystemDocument(doc.id);
-  const rows = await callSiyuanApi("/api/query/sql", {
-    stmt: `SELECT updated FROM blocks WHERE id='${String(doc.id).replaceAll("'", "''")}' LIMIT 1`,
-  });
-  const updated = Array.isArray(rows) ? String(rows[0]?.updated || "") : "";
-  recordSystemDocument(documentCache, key, doc, {
-    placeholder: await sha256Text(normalizeManagedMarkdown(markdown))
-      === await sha256Text(normalizeManagedMarkdown(placeholder)),
-    updated,
+  const placeholderHash = await sha256Text(normalizeManagedMarkdown(placeholder));
+  const records = [];
+  for (const doc of matches) {
+    const markdown = await exportSystemDocument(doc.id);
+    const rows = await callSiyuanApi("/api/query/sql", {
+      stmt: `SELECT updated FROM blocks WHERE id='${String(doc.id).replaceAll("'", "''")}' LIMIT 1`,
+    });
+    records.push(systemDocumentRecord(doc, {
+      placeholder: await sha256Text(normalizeManagedMarkdown(markdown)) === placeholderHash,
+      updated: Array.isArray(rows) ? String(rows[0]?.updated || "") : "",
+    }));
+  }
+  recordSystemDocuments(documentCache, key, records);
+}
+
+function showDuplicateSystemDocuments(documentCache) {
+  const labels = {
+    ai_guide: "用户个性化要求",
+    mcp_usage_guide: "MCP 使用指南",
+    workspace_index_guide: "工作空间索引创建指南",
+    workspace_index: "工作空间索引",
+    about: "关于思源桥",
+    privacy_rules: "隐私规则",
+  };
+  const duplicates = Object.entries(labels)
+    .map(([key, label]) => ({label, count: registryEntries(documentCache[key]).length}))
+    .filter((item) => item.count > 1);
+  if (duplicates.length === 0) return;
+  const items = duplicates
+    .map((item) => `<li>${escapeHtml(item.label)}：${item.count} 篇</li>`)
+    .join("");
+  new Dialog({
+    title: "发现重复的思源桥系统文档",
+    content: `<div class="b3-dialog__content"><p>以下系统文档存在多篇：</p><ul>${items}</ul><p>请检查内容后手动删除多余文档。删除后可以继续使用；禁用并重新启用思源桥插件可立即清理内部记录，否则下次插件激活时会自动清理。</p></div>`,
+    width: "520px",
   });
 }
 

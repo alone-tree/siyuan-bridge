@@ -405,7 +405,8 @@ class McpServerTests(unittest.TestCase):
         client.version.return_value = "3.3.0"
         state = mock.Mock(
             notebook_id="system-nb",
-            privacy_rules_doc_id="privacy-doc",
+            privacy_rules_doc_ids=("privacy-doc",),
+            missing_document_keys=(),
             privacy_rules=PrivacyRules(ignore=[], allow=[]),
             mcp_usage_guide_markdown="Guide",
             ai_guide_markdown="Preferences",
@@ -416,16 +417,35 @@ class McpServerTests(unittest.TestCase):
 
         with (
             mock.patch.object(mcp_server, "detect_active_profile", return_value=(profile, client)),
-            mock.patch.object(mcp_server, "ensure_agent_notebook", return_value=state),
+            mock.patch.object(mcp_server, "load_agent_notebook", return_value=state),
             mock.patch.object(mcp_server, "refresh_index"),
             mock.patch.object(mcp_server, "build_notebook_overview", return_value="# 概览\n\n内容"),
-            mock.patch.object(server, "_wait_for_system_documents"),
         ):
             result = server.siyuan_start({})
 
         self.assertIn("# 思源桥启动包", result)
         self.assertIs(server._active_profile, profile)
         self.assertIs(server._active_client, client)
+
+    def test_missing_privacy_rules_blocks_start_and_requests_plugin_reload(self):
+        server = mcp_server.McpServer(self.root)
+        profile = Profile(name="current", token="token")
+        client = mock.Mock()
+        error = mcp_server.PrivacyRulesUnavailableError(
+            "隐私规则文档缺失。请禁用并重新启用思源桥插件后再次启动。"
+        )
+
+        with (
+            mock.patch.object(mcp_server, "detect_active_profile", return_value=(profile, client)),
+            mock.patch.object(mcp_server, "load_agent_notebook", side_effect=error),
+        ):
+            response = server.call_tool(1, "siyuan_start", {})
+
+        self.assertTrue(response["result"]["isError"])
+        self.assertIn("禁用并重新启用", response["result"]["content"][0]["text"])
+        client.push_err_msg.assert_called_once()
+        self.assertIsNone(server._active_profile)
+        self.assertIsNone(server._active_client)
 
     def test_auth_error_invalidates_started_connection(self):
         server = mcp_server.McpServer(self.root)
@@ -450,6 +470,9 @@ class McpServerTests(unittest.TestCase):
         names = [tool["name"] for tool in specs]
         self.assertIn("siyuan_operate", names)
         self.assertNotIn("siyuan_refresh_index", names)
+        start = next(tool for tool in specs if tool["name"] == "siyuan_start")
+        self.assertIn("never creates", start["description"])
+        self.assertIn("Privacy Rules", start["description"])
         operate = next(tool for tool in specs if tool["name"] == "siyuan_operate")
         properties = operate["inputSchema"]["properties"]
         self.assertIn("check_references", properties["action"]["enum"])
@@ -998,26 +1021,30 @@ class McpServerWriteTests(unittest.TestCase):
             "".join(json.dumps(doc, ensure_ascii=False) + "\n" for doc in docs),
             encoding="utf-8",
         )
-        self._original_ensure_agent_notebook = mcp_server.ensure_agent_notebook
+        self._original_load_agent_notebook = mcp_server.load_agent_notebook
 
-        def fake_ensure_agent_notebook(_client, _root, config_language=None):
+        def fake_load_agent_notebook(_client, _root, config_language=None):
             return mcp_server.AgentNotebookState(
                 language=config_language or "zh-CN",
                 notebook_id="system-nb",
                 notebook_name="思源桥",
-                ai_guide_doc_id="system-guide",
+                document_ids={
+                    "ai_guide": ("system-guide",),
+                    "mcp_usage_guide": (),
+                    "workspace_index_guide": (),
+                    "workspace_index": (),
+                    "about": ("system-about",),
+                    "privacy_rules": ("system-pr",),
+                },
                 ai_guide_markdown="",
-                workspace_index_doc_id=None,
-                workspace_index_markdown=None,
-                about_doc_id="system-about",
-                privacy_rules_doc_id="system-pr",
+                workspace_index_markdown="",
                 privacy_rules=PrivacyRules(ignore=[], allow=[]),
             )
 
-        mcp_server.ensure_agent_notebook = fake_ensure_agent_notebook
+        mcp_server.load_agent_notebook = fake_load_agent_notebook
 
     def tearDown(self):
-        mcp_server.ensure_agent_notebook = self._original_ensure_agent_notebook
+        mcp_server.load_agent_notebook = self._original_load_agent_notebook
 
     def _make_client(self, query_sql_blocks=None):
         """Create a FakeSearchClient with optional block data for SQL queries."""
@@ -1120,7 +1147,7 @@ class McpServerWriteTests(unittest.TestCase):
             })
             self.assertIn("路径已同步", result)
             self.assertEqual(calls[-1]["system_notebook_id"], "system-nb")
-            self.assertEqual(calls[-1]["privacy_rules_doc_id"], "system-pr")
+            self.assertEqual(calls[-1]["privacy_rules_doc_ids"], {"system-pr"})
         finally:
             mcp_server.refresh_index = original_refresh
             mcp_server.detect_active_profile = original_detect
@@ -1310,7 +1337,7 @@ class McpServerWriteTests(unittest.TestCase):
             })
             self.assertIn("路径已同步", result)
             self.assertEqual(calls[-1]["system_notebook_id"], "system-nb")
-            self.assertEqual(calls[-1]["privacy_rules_doc_id"], "system-pr")
+            self.assertEqual(calls[-1]["privacy_rules_doc_ids"], {"system-pr"})
         finally:
             mcp_server.refresh_index = original_refresh
             mcp_server.detect_active_profile = original_detect

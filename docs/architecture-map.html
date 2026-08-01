@@ -238,7 +238,7 @@
 
       <rect x="640" y="445" width="210" height="105" rx="8" class="node purple"/>
       <text x="663" y="481" class="title">agent_notebook.py</text>
-      <text x="663" y="509" class="text">系统笔记本服务层</text>
+      <text x="663" y="509" class="text">系统笔记本只读加载层</text>
       <text x="663" y="533" class="text">六篇文档 / ID 注册 / 模板</text>
 
       <rect x="640" y="585" width="210" height="82" rx="8" class="node blue"/>
@@ -337,7 +337,7 @@ flowchart TD
   E["siyuan_start 再次探测<br/>load_config()<br/>detect_active_profile()"]
   F["读取思源版本<br/>client.version()"]
   G["初始化遥测会话<br/>set_siyuan_version()<br/>load_anonymous_id()<br/>ensure_session_id()"]
-  H["协调系统笔记本<br/>ensure_agent_notebook()<br/>六篇固定文档 + 旧名迁移<br/>校验 system_state.json 文档 ID"]
+  H["只读系统笔记本状态<br/>load_agent_notebook()<br/>跳过失效 ID + 合并多篇<br/>Privacy Rules 缺失则失败关闭"]
   I["缓存隐私规则<br/>write_privacy_rules_cache()<br/>不向 AI 暴露规则内容"]
   J["清理并刷新索引<br/>清理 ai_workspace/ 非 README<br/>refresh_index(system ids)"]
   K["组装启动包<br/>状态 + MCP Usage Guide<br/>User Preferences + 概览<br/>Workspace Index + 临时过期提醒"]
@@ -378,8 +378,9 @@ flowchart TD
     <thead><tr><th>场景</th><th>调用关系</th></tr></thead>
     <tbody>
       <tr><td>首次使用</td><td>思源插件读取工作空间 Token → 写入 <code>bridge/config.local.json</code> → 用户复制 MCP JSON 到 AI 客户端。</td></tr>
+      <tr><td>插件激活</td><td>校验 JSON 多 ID → 合并当前名和历史名匹配文档 → 仅在某类为空时创建 → 保存状态并提示重复文档。</td></tr>
       <tr><td>Skill 生效</td><td>仓库提供 Skill 副本 → 用户或 AI 客户端主动导入 → AI 才会按 Skill 约束调用工具。</td></tr>
-      <tr><td>会话启动</td><td><code>siyuan_start</code> → 探测 profile → 确保系统笔记本 → 解析 Privacy Rules → 刷新安全索引 → 返回启动包。</td></tr>
+      <tr><td>会话启动</td><td><code>siyuan_start</code> → 探测 profile → 只读系统状态 → 合并解析 Privacy Rules → 刷新安全索引 → 返回启动包。</td></tr>
       <tr><td>搜索</td><td><code>siyuan_find</code> → 临时打开笔记本 → 思源搜索/SQL → 隐私过滤 → 按文档聚合。</td></tr>
       <tr><td>阅读</td><td><code>siyuan_read</code> → 解析可见文档 → <code>getChildBlocks</code> → 块窗口 + 大纲 → 提取附件。</td></tr>
       <tr><td>写入</td><td><code>siyuan_create/edit/doc_manage</code> → <code>confirmed=true</code> + 权限检查 → 快照 → 写思源 → 路径同步 → 安全刷新索引。</td></tr>

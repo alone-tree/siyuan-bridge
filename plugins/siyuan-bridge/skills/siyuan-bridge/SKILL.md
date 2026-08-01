@@ -9,7 +9,7 @@ description: Use when the user wants to read, search, or write their private SiY
 
 ## 启动流程
 
-1. 调用 `siyuan_start` —— 刷新安全索引，确保系统笔记本及其六篇文档就绪，返回启动包（运行状态、MCP 使用指南、用户个性化要求、笔记本概览、工作空间索引）。
+1. 调用 `siyuan_start` —— 只读获取插件已经维护的系统笔记本内容，刷新安全索引，返回启动包（运行状态、MCP 使用指南、用户个性化要求、笔记本概览、工作空间索引）。
 2. 阅读返回的启动包。
 3. 遵循启动包中的 MCP 使用指南和用户个性化要求。
 4. **以工作空间索引为导航主入口。** 快速导航表将用户意图映射到笔记本，笔记本详情是 AI 扫描后浓缩的结构摘要和判断——信任它来定位相关笔记本。
@@ -51,6 +51,7 @@ description: Use when the user wants to read, search, or write their private SiY
 - 主动检查一篇可见文档的引用时，使用 `siyuan_operate(action="check_references", document="/Notebook/Folder/Doc")`；路径歧义时改传 `document_id`。工具会检测文档 ID 和全部真实正文块 ID，覆盖块引用、可识别嵌入块和 `siyuan://` 块链接；结果按来源文档汇总并展示引用块原文，子文档只汇总次数。默认各展示 10 篇可见来源/子文档，传 `limit="none"` 查看全部。该 action 只读，不需要 `confirmed`。
 - `siyuan_bridge_feedback` —— 通过对话提交对思源桥 MCP 的反馈。type 为 bug/feature/idea，title 和 description 必填，contact 可选。不修改思源内容，不需要 confirmed=true，即使思源未启动也可使用（只要配置了遥测端点）。
 - 系统笔记本 `思源桥` / `SiYuan Bridge` 及其六篇固定文档会被自动创建和维护。MCP 使用指南和工作空间索引创建指南允许用户修改，并可在插件设置中重置。
+- 系统笔记本由思源插件激活时维护，不由 MCP 创建。若启动包警告普通系统文档缺失，可以继续工作并提醒用户重新启用插件；若 Privacy Rules 缺失，必须停止并按错误提示让用户禁用后重新启用插件。
 
 ## Safety Rules
 

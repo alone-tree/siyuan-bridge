@@ -89,12 +89,12 @@ def ensure_notebooks_open(
 
 
 def _is_privacy_rules_doc(
-    doc: dict[str, Any], system_notebook_id: str, privacy_rules_doc_id: str
+    doc: dict[str, Any], system_notebook_id: str, privacy_rules_doc_ids: set[str]
 ) -> bool:
     """Check if a document is the Privacy Rules document (hard-hidden from AI)."""
     if str(doc.get("notebook_id", "")) != system_notebook_id:
         return False
-    if privacy_rules_doc_id and str(doc.get("id", "")) == privacy_rules_doc_id:
+    if str(doc.get("id", "")) in privacy_rules_doc_ids:
         return True
     # Also check by known hpath patterns
     hpath = str(doc.get("hpath", "")).strip("/")
@@ -106,7 +106,7 @@ def refresh_index(
     root: Path,
     *,
     system_notebook_id: str = "",
-    privacy_rules_doc_id: str = "",
+    privacy_rules_doc_ids: set[str] | None = None,
 ) -> RefreshResult:
     cache_dir = root / KNOWLEDGE_BASE_DIR
     workspace_dir = root / AI_WORKSPACE_DIR
@@ -126,7 +126,9 @@ def refresh_index(
     if system_notebook_id:
         docs = [
             doc for doc in docs
-            if not _is_privacy_rules_doc(doc, system_notebook_id, privacy_rules_doc_id)
+            if not _is_privacy_rules_doc(
+                doc, system_notebook_id, privacy_rules_doc_ids or set()
+            )
         ]
 
     write_json(cache_dir / "notebooks.json", notebooks)

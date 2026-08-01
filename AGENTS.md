@@ -64,7 +64,7 @@ source_code/         Python 适配层
   mcp_server.py      MCP stdio server，9 个工具的 schema 和实现
   ignore.py          Privacy Rules Markdown 表格解析与过滤
   i18n.py            多语言名称、系统文档名、默认模板
-  agent_notebook.py  系统笔记本服务层
+  agent_notebook.py  系统笔记本只读加载与多文档合并
   config.py          配置加载和 profile 探测
   cli.py             开发诊断 CLI
 

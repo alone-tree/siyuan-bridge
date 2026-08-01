@@ -45,7 +45,7 @@ flowchart LR
 | MCP 工具层 | 暴露 9 个高层工具，执行权限、快照、路径同步、遥测包装 | `source_code/mcp_server.py` |
 | 思源 API 封装 | 封装项目需要的思源 HTTP API，不做完整 SDK | `source_code/client.py`、`docs/思源API.md` |
 | 索引与隐私层 | 生成可见索引，解析 Privacy Rules，过滤 list/search/read/write | `source_code/indexer.py`、`source_code/ignore.py` |
-| 系统笔记本层 | 维护六篇固定系统文档、兼容迁移、模板版本和本地 ID 注册表 | `source_code/agent_notebook.py`、`source_code/system_state.py`、`source_code/system_templates.py`、`source_code/i18n.py` |
+| 系统笔记本层 | 插件激活时维护六类固定系统文档和多 ID 注册表；Python MCP 只读校验、合并内容 | `siyuan-plugin/index.js`、`source_code/agent_notebook.py`、`source_code/system_state.py` |
 | 反馈与遥测层 | 可选记录工具调用元数据，提交反馈，不收集笔记内容 | `source_code/telemetry.py`、`worker/` |
 
 核心调用关系：
@@ -53,7 +53,8 @@ flowchart LR
 | 场景 | 主调用链 |
 |---|---|
 | 首次使用 | 思源插件读取当前设备 Token → 合并写入 `bridge/config.local.json` 的 profiles → 用户复制 MCP JSON 到 AI 客户端 |
-| 会话启动 | AI 调 `siyuan_start` → 探测 profile → 确保系统笔记本 → 解析 Privacy Rules → 刷新安全索引 → 返回启动包 |
+| 插件激活 | 插件调用系统笔记本维护入口 → 校验并合并 JSON ID 与同名文档 → 必要时创建缺失类型 → 持久化状态并通知重复文档 |
+| 会话启动 | AI 调 `siyuan_start` → 探测 profile → 读取已维护的系统笔记本内容 → 解析 Privacy Rules → 刷新安全索引 → 返回启动包；不创建、更新或迁移系统文档 |
 | 搜索 | `siyuan_find` → 临时打开目标笔记本 → 思源搜索/SQL → 隐私过滤 → 按文档聚合结果 |
 | 阅读 | `siyuan_read` → 解析可见文档 → 路径 live 校验 → `getChildBlocks` → 块窗口 + 大纲 → 提取附件到 `ai_workspace/` |
 | 写入 | `siyuan_create/edit/doc_manage` → `confirmed=true` + 权限检查 → 创建快照 → 写思源 → 路径同步 → 安全刷新索引 |
@@ -106,7 +107,7 @@ source_code/
   ignore.py          Privacy Rules Markdown 表格解析与权限判断
   indexer.py         刷新本地安全索引与工作区 README
   i18n.py            系统笔记本和系统文档名称、模板、多语言
-  agent_notebook.py  系统笔记本服务层
+  agent_notebook.py  系统笔记本只读加载与多文档合并
   mcp_server.py      MCP stdio server、工具实现、工具 schema
   cli.py             开发诊断 CLI
 
@@ -208,16 +209,16 @@ MCP JSON 只包含 Python 命令、`run_mcp.py` 绝对路径和 `PYTHONUTF8=1`�
 | `about` | `关于思源桥` | `About SiYuan Bridge` | 开发者控制；按 JSON 文档 ID 定位；标题或正文被修改时恢复标准标题并按原 ID 覆盖 |
 | `privacy_rules` | `隐私规则` | `Privacy Rules` | 不存在时创建；存在后不覆盖；只供 MCP 内部解析 |
 
-启动时数据流：
+系统笔记本生命周期决策：
 
-1. `siyuan_start` 调用 `ensure_agent_notebook()`。
-2. 查找或创建系统笔记本。
-3. 用 `knowledge_base/system_state.json` 中当前工作空间的文档 ID 优先定位六篇固定文档；JSON 尚未建立或 ID 失效时回退到当前名称和历史名称。
-4. 迁移旧 AI Guide：按原文档 ID 更名为 User Preferences；用户正文保留。新旧名称同时存在时使用新名称，旧文档保留但忽略。
-5. 创建或更新两篇可重置指南和 About；创建缺失的 User Preferences、Workspace Index 占位文档和 Privacy Rules。
-6. 解析 Privacy Rules，写入 `knowledge_base/privacy_rules.json` 缓存。
-7. 刷新安全索引并组装启动包。
-8. 成功后原子更新 `knowledge_base/system_state.json`。
+1. **插件激活是唯一维护入口。** 插件激活时完成系统笔记本和六类系统文档的发现、创建、迁移、模板维护与状态持久化；不得等到 `siyuan_start` 才维护。
+2. **每类文档记录多个 ID。** 每次插件激活都合并：JSON 中仍然有效的全部 ID、当前名称匹配的全部文档、历史名称匹配的全部文档。被用户删除的 ID 从 JSON 移除。
+3. **只有合并结果为空才创建。** 只要某一类型仍找到至少一篇文档，就不得再为该类型创建新文档；新创建的 ID 立即写入 JSON。
+4. **多篇文档不自动修复。** 找到多篇时全部纳入该类型并继续正常使用；需要聚合的内容按类型合并。插件只通知用户存在重复文档，不自动删除、合并正文或提供一次性修复功能。用户手动删除后，下次激活自动清理失效 ID，同时继续保证每类至少一篇。
+5. **Privacy Rules 全量硬隔离。** 所有被识别为 Privacy Rules 的文档 ID 都不可被 AI 读取、搜索或编辑；规则表合并解析，空表不影响结果。
+6. **`siyuan_start` 是只读会话入口。** 它只探测 profile、获取已维护的系统笔记本内容、解析合并后的 Privacy Rules、刷新安全索引并组装启动包，不创建、更新、迁移系统文档，也不改写系统状态。这样既消除第二个写入入口，也降低每次 AI 会话启动的维护开销。
+
+`siyuan_start` 对 JSON 中的 ID 做实时只读校验。失效 ID 仅在本次运行中跳过，不写回 JSON；非 Privacy Rules 类型全部失效时，向思源推送 warning 并在启动包注入提示，但继续运行。Privacy Rules 只要仍有一篇有效文档就合并解析并继续；全部失效时失败关闭，提示用户禁用并重新启用插件后重试。
 
 系统笔记本设计原则：
 
@@ -227,7 +228,7 @@ MCP JSON 只包含 Python 命令、`run_mcp.py` 绝对路径和 `PYTHONUTF8=1`�
 
 - Privacy Rules 的硬隔离使用系统笔记本 ID 和 Privacy Rules 文档 ID；其他笔记本下同名普通文档不受硬隔离。
 
-系统身份只记录在本地 JSON，不写思源自定义属性。JSON 以实时确认存在的系统笔记本 ID 作为工作空间键，不保存工作空间路径和 Token。它是本地缓存而非权威数据：每次启动实时校验 ID，失效后按名称恢复并重写。
+系统身份只记录在本地 JSON，不写思源自定义属性。JSON 以实时确认存在的系统笔记本 ID 作为工作空间键，不保存工作空间路径和 Token。它是本地缓存而非权威数据：每次插件激活实时校验全部 ID，合并名称匹配结果，移除失效 ID，并在确实没有候选文档时创建后重写。
 
 两篇可重置指南的模板位于 `templates/system-docs/`。JSON 记录文档 ID、模板版本、源文件 SHA-256、导入思源后实际 Markdown 的 SHA-256 和用户修改状态。升级时只有当前正文仍等于上次记录的实际正文，才允许自动更新；检测到用户修改后永久保留，直到用户在设置页重置。
 
@@ -299,10 +300,7 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 - Privacy Rules 解析错误可以告诉表名、行号、字段名和错误类型。
 - 错误信息不暴露具体隐藏的笔记本名、文档 ID 或标题。
 
-当前实现差距：
-
-- `ensure_agent_notebook()` 解析 Privacy Rules 时没有传入全量笔记本/文档引用表，因此实际启动更偏语法解析和后续规则匹配；部分“ID 不存在”校验主要在测试或显式传参路径中体现。
-- 所有自动 refresh 路径都传入系统笔记本 ID 和 Privacy Rules 文档 ID，只硬过滤该文档本身。
+所有自动 refresh 路径都传入系统笔记本 ID 和全部 Privacy Rules 文档 ID；这些 ID 以及系统笔记本内匹配 Privacy Rules 名称的文档都被硬过滤。多篇规则文档逐篇解析后合并，任一文档解析失败都保持失败关闭。
 
 ## 索引模型
 
@@ -439,10 +437,10 @@ siyuan_bridge_feedback
 
 1. 加载配置并探测当前在线 profile。
 2. 调用思源 version 确认连接。
-3. 确保系统笔记本和系统文档。
-4. 解析 Privacy Rules 并写入本地缓存。
+3. 只读加载插件已维护的系统笔记本注册表，实时跳过失效 ID。
+4. 合并解析全部有效 Privacy Rules 并写入本地缓存；全部缺失时失败关闭。
 5. 清理 `ai_workspace/` 中除 README 外的内容。
-6. 调用 `refresh_index()`，并传入系统笔记本 ID 和 Privacy Rules 文档 ID。
+6. 调用 `refresh_index()`，并传入系统笔记本 ID 和全部 Privacy Rules 文档 ID。
 7. 读取本地 notebook overview。
 8. 组装启动包。
 9. 完整启动成功后，将当前 profile 和 Client 缓存在本 MCP 进程中。
@@ -484,9 +482,9 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 `action=refresh` 数据流：
 
 1. 加载配置并探测当前在线工作空间。
-2. 确保系统笔记本和 Privacy Rules。
+2. 只读加载系统笔记本状态并合并解析全部有效 Privacy Rules；不创建或更新文档。
 3. 写入隐私规则缓存。
-4. 调用 `refresh_index()`，并传入系统笔记本 ID 和 Privacy Rules 文档 ID。
+4. 调用 `refresh_index()`，并传入系统笔记本 ID 和全部 Privacy Rules 文档 ID。
 5. 返回扫描数量、可见数量、隐藏数量。
 
 `action=sync` 数据流：

@@ -36,6 +36,7 @@ LEGACY_DOC_NAMES: dict[str, list[str]] = {
         "AI 使用指南",
         "AI Guide",
     ],
+    "mcp_usage_guide": ["MCP使用指南"],
     "about": [
         "关于思源代理桥",
         "About SiYuan Agent Bridge",

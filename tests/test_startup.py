@@ -12,8 +12,14 @@ from source_code.ignore import PrivacyRules
 
 
 class StartupClient:
+    def __init__(self):
+        self.messages = []
+
     def version(self):
         return "3.7.2"
+
+    def push_msg(self, message, timeout=7000):
+        self.messages.append((message, timeout))
 
 
 class StartupPacketTests(unittest.TestCase):
@@ -40,12 +46,13 @@ class StartupPacketTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.original_detect = mcp_server.detect_active_profile
-        self.original_ensure = mcp_server.ensure_agent_notebook
+        self.original_load = mcp_server.load_agent_notebook
         self.original_refresh = mcp_server.refresh_index
         self.original_load_live_docs = mcp_server.load_live_docs
+        self.client = StartupClient()
         mcp_server.detect_active_profile = lambda _config: (
             Profile(name="当前工作空间", token="test"),
-            StartupClient(),
+            self.client,
         )
         mcp_server.refresh_index = lambda *_args, **_kwargs: None
         mcp_server.load_live_docs = lambda _client: [
@@ -59,33 +66,41 @@ class StartupPacketTests(unittest.TestCase):
 
     def tearDown(self):
         mcp_server.detect_active_profile = self.original_detect
-        mcp_server.ensure_agent_notebook = self.original_ensure
+        mcp_server.load_agent_notebook = self.original_load
         mcp_server.refresh_index = self.original_refresh
         mcp_server.load_live_docs = self.original_load_live_docs
         self.temp_dir.cleanup()
 
-    def _state(self, *, placeholder=False, updated="20260501000000"):
+    def _state(
+        self,
+        *,
+        placeholder=False,
+        updated="20260501000000",
+        missing_document_keys=(),
+    ):
         return mcp_server.AgentNotebookState(
             language="zh-CN",
             notebook_id="system-nb",
             notebook_name="思源桥",
-            ai_guide_doc_id="preferences-id",
+            document_ids={
+                "ai_guide": ("preferences-id",),
+                "mcp_usage_guide": ("mcp-guide-id",),
+                "workspace_index_guide": ("index-guide-id",),
+                "workspace_index": ("index-id",),
+                "about": ("about-id",),
+                "privacy_rules": ("privacy-id",),
+            },
             ai_guide_markdown="用户要求：简洁回答。",
-            workspace_index_doc_id="index-id",
             workspace_index_markdown="# 我的工作空间索引",
-            about_doc_id="about-id",
-            privacy_rules_doc_id="privacy-id",
             privacy_rules=PrivacyRules(ignore=[], allow=[]),
-            mcp_usage_guide_doc_id="mcp-guide-id",
             mcp_usage_guide_markdown="这是完整 MCP 使用指南。",
-            workspace_index_guide_doc_id="index-guide-id",
-            workspace_index_guide_markdown="索引创建说明。",
             workspace_index_updated=updated,
             workspace_index_is_placeholder=placeholder,
+            missing_document_keys=missing_document_keys,
         )
 
     def test_startup_packet_has_new_sections_in_fixed_order(self):
-        mcp_server.ensure_agent_notebook = (
+        mcp_server.load_agent_notebook = (
             lambda *_args, **_kwargs: self._state()
         )
 
@@ -109,7 +124,7 @@ class StartupPacketTests(unittest.TestCase):
         self.assertNotIn("系统笔记本：", result)
 
     def test_placeholder_gets_not_created_prompt_without_stale_warning(self):
-        mcp_server.ensure_agent_notebook = (
+        mcp_server.load_agent_notebook = (
             lambda *_args, **_kwargs: self._state(
                 placeholder=True, updated="20250101000000"
             )
@@ -121,7 +136,7 @@ class StartupPacketTests(unittest.TestCase):
         self.assertNotIn("工作空间索引已经", result)
 
     def test_real_old_index_gets_transient_warning(self):
-        mcp_server.ensure_agent_notebook = (
+        mcp_server.load_agent_notebook = (
             lambda *_args, **_kwargs: self._state(
                 placeholder=False, updated="20250101000000"
             )
@@ -131,6 +146,19 @@ class StartupPacketTests(unittest.TestCase):
 
         self.assertIn("工作空间索引已经", result)
         self.assertIn("《工作空间索引创建指南》", result)
+
+    def test_missing_non_privacy_document_warns_but_start_continues(self):
+        mcp_server.load_agent_notebook = lambda *_args, **_kwargs: self._state(
+            missing_document_keys=("about", "ai_guide")
+        )
+
+        result = mcp_server.McpServer(self.root).siyuan_start({})
+
+        self.assertIn("# 思源桥启动包", result)
+        self.assertIn("## 系统文档警告", result)
+        self.assertIn("关于思源桥、用户个性化要求", result)
+        self.assertEqual(len(self.client.messages), 1)
+        self.assertIn("当前仍可继续使用", self.client.messages[0][0])
 
     def test_index_age_boundary_is_strictly_more_than_30_days(self):
         now = datetime(2026, 7, 31, 12, 0, 0)

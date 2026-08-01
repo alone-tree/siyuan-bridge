@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
-SYSTEM_STATE_SCHEMA_VERSION = 1
+SYSTEM_STATE_SCHEMA_VERSION = 2
 SYSTEM_STATE_PATH = Path("knowledge_base") / "system_state.json"
 
 
@@ -28,53 +27,16 @@ def load_system_state(root: Path) -> dict[str, Any]:
     }
 
 
-def save_system_state(root: Path, state: dict[str, Any]) -> None:
-    path = root / SYSTEM_STATE_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "schema_version": SYSTEM_STATE_SCHEMA_VERSION,
-        "active_workspace_key": str(state.get("active_workspace_key") or ""),
-        "workspaces": state.get("workspaces") if isinstance(state.get("workspaces"), dict) else {},
-    }
-    temp_path = path.with_suffix(".tmp")
-    temp_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    temp_path.replace(path)
+def document_entries(value: Any) -> list[dict[str, Any]]:
+    """Return document registry entries from either schema v1 or v2."""
+    if isinstance(value, list):
+        return [entry for entry in value if isinstance(entry, dict) and entry.get("id")]
+    if isinstance(value, dict) and value.get("id"):
+        return [value]
+    return []
 
 
-def get_workspace_state(state: dict[str, Any], key: str) -> dict[str, Any]:
-    workspaces = state.setdefault("workspaces", {})
-    workspace = workspaces.get(key)
-    if not isinstance(workspace, dict):
-        workspace = {}
-        workspaces[key] = workspace
-    documents = workspace.get("documents")
-    if not isinstance(documents, dict):
-        workspace["documents"] = {}
-    return workspace
-
-
-def update_workspace_metadata(
-    state: dict[str, Any],
-    key: str,
-    *,
-    notebook_id: str,
-    notebook_name: str,
-) -> dict[str, Any]:
-    workspace = get_workspace_state(state, key)
-    workspace["system_notebook"] = {
-        "id": notebook_id,
-        "name": notebook_name,
-    }
-    workspace["refreshed_at"] = datetime.now(timezone.utc).isoformat()
-    state["active_workspace_key"] = key
-    return workspace
-
-
-def active_system_ids(root: Path) -> tuple[str, dict[str, str]]:
+def active_system_ids(root: Path) -> tuple[str, dict[str, set[str]]]:
     state = load_system_state(root)
     key = str(state.get("active_workspace_key") or "")
     workspace = state.get("workspaces", {}).get(key, {})
@@ -86,8 +48,11 @@ def active_system_ids(root: Path) -> tuple[str, dict[str, str]]:
     if not isinstance(documents, dict):
         return notebook_id, {}
     ids = {
-        str(doc_key): str(entry.get("id") or "")
-        for doc_key, entry in documents.items()
-        if isinstance(entry, dict) and entry.get("id")
+        str(doc_key): {
+            str(entry.get("id") or "")
+            for entry in document_entries(value)
+            if entry.get("id")
+        }
+        for doc_key, value in documents.items()
     }
     return notebook_id, ids
