@@ -89,10 +89,11 @@
 }
 
 .siyuan-bridge-home__notifications {
+  --notification-row-height: 48px;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 160px;
+  max-height: 100px;
   overflow-y: auto;
 }
 
@@ -105,10 +106,16 @@
 }
 
 .siyuan-bridge-home__notification-item {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   border-radius: 4px;
+  box-sizing: border-box;
   color: var(--b3-theme-primary);
-  display: block;
+  display: -webkit-box;
   font-size: 13px;
+  height: var(--notification-row-height);
+  line-height: 18px;
+  overflow: hidden;
   padding: 6px 8px;
   text-decoration: none;
   transition: background 0.15s;
