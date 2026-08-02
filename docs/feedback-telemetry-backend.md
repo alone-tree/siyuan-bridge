@@ -17,6 +17,7 @@
 │  GET  /api/dashboard     ← 统计聚合 │
 │  GET  /api/errors        ← 错误下钻 │
 │  GET  /api/feedbacks     ← 反馈列表 │
+│  POST /api/feedbacks/:id/status ← 反馈状态更新 │
 └──────────────┬──────────────────────┘
                │
 ┌──────────────▼──────────────────────┐
@@ -170,10 +171,27 @@ Worker 端点**无需认证**——所有 3 个 API 均为公开访问。
 {
   "days": 90,
   "feedbacks": [
-    {"id": 9, "ts": "2026-06-25T...", "type": "idea", "title": "...", "description": "...", "contact": null}
+    {"id": 9, "ts": "2026-06-25T...", "type": "idea", "title": "...", "description": "...", "contact": null, "status": "open", "note": null}
   ]
 }
 ```
+
+### POST /api/feedbacks/:id/status — 更新反馈状态（开发者用）
+
+- **用途**：标记反馈处理状态，可附带备注
+- **Body**：
+
+```json
+{
+  "status": "done",
+  "note": "v1.0.5 修复：multi_block_replace 摘要排除旧块"
+}
+```
+
+- `status` 必填，取值：`open`（默认，未处理）/ `done`（已处理）/ `ignored`（忽略）
+- `note` 可选：提供则覆盖备注（传空字符串清空）；不传则保留原值
+- **成功响应** (200)：`{"ok": true}`
+- **失败响应**：`400 {"ok": false, "error": "invalid status"}`（非法状态）或 `{"ok": false, "error": "invalid payload"}`（参数格式错误）；`404 {"ok": false, "error": "feedback not found"}`（id 不存在）
 
 ---
 
@@ -205,6 +223,8 @@ Worker 端点**无需认证**——所有 3 个 API 均为公开访问。
 | `title` | TEXT | 反馈标题 |
 | `description` | TEXT | 反馈内容 |
 | `contact` | TEXT (nullable) | 联系方式 |
+| `status` | TEXT | 处理状态：open（默认）/ done / ignored |
+| `note` | TEXT (nullable) | 处理备注（如修复版本、忽略原因），可选 |
 
 ### `notifications` — 通知消息
 
@@ -458,7 +478,9 @@ CREATE TABLE IF NOT EXISTS feedbacks (
   type TEXT NOT NULL,
   title TEXT NOT NULL,
   description TEXT NOT NULL,
-  contact TEXT
+  contact TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  note TEXT
 );
 
 CREATE TABLE IF NOT EXISTS notifications (

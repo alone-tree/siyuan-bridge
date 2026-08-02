@@ -169,6 +169,28 @@ export default {
       }
     }
 
+    // POST /api/feedbacks/:id/status — 更新反馈状态（开发者用）
+    const statusMatch = path.match(/^\/api\/feedbacks\/(\d+)\/status$/);
+    if (statusMatch && request.method === 'POST') {
+      try {
+        const id = Number(statusMatch[1]);
+        const body = await request.json();
+        const allowedStatus = ['open', 'done', 'ignored'];
+        if (!allowedStatus.includes(body.status)) {
+          return cors(JSON.stringify({ ok: false, error: 'invalid status' }), 400);
+        }
+        const result = await env.DB.prepare(
+          `UPDATE feedbacks SET status = ?, note = COALESCE(?, note) WHERE id = ?`
+        ).bind(body.status, body.note ?? null, id).run();
+        if (!result.meta || result.meta.changes === 0) {
+          return cors(JSON.stringify({ ok: false, error: 'feedback not found' }), 404);
+        }
+        return cors(JSON.stringify({ ok: true }));
+      } catch (e) {
+        return cors(JSON.stringify({ ok: false, error: 'invalid payload' }), 400);
+      }
+    }
+
     // GET /api/feedbacks — 反馈列表（开发者用）
     if (path === '/api/feedbacks' && request.method === 'GET') {
       try {
@@ -176,7 +198,7 @@ export default {
         const since = new Date(Date.now() - days * 86400000).toISOString();
 
         const { results } = await env.DB.prepare(
-          `SELECT id, ts, type, title, description, contact FROM feedbacks WHERE ts >= ? ORDER BY ts DESC`
+          `SELECT id, ts, type, title, description, contact, status, note FROM feedbacks WHERE ts >= ? ORDER BY ts DESC`
         ).bind(since).all();
 
         return cors(JSON.stringify({ days, feedbacks: results || [] }));
@@ -189,3 +211,4 @@ export default {
     return new Response('Not Found', { status: 404 });
   }
 };
+

@@ -4,6 +4,13 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
+## 2026-08-02：反馈状态标记（open/done/ignored）
+
+- `feedbacks` 表新增 `status`（默认 `open`）与 `note`（可选备注）两列；存量 16 条反馈初始化：测试噪音与 fund-account 误提交标记 `ignored`（后者注明来源），已修复项标记 `done` 并附版本备注，未决项保持 `open`。
+- `GET /api/feedbacks` 返回 `status`/`note`；新增 `POST /api/feedbacks/:id/status` 更新状态，`note` 不传保留原值、传空字符串清空。
+- 看板 `dashboard.html` 暂不改动（面向所有用户），开发者先通过 API 管理反馈状态。
+- 验证：`node --test worker/index.test.mjs` 7 passed；D1 加列与存量初始化完成；Worker 已部署，远端 GET/400/404/成功更新均验证通过。
+
 ## 2026-08-01：v1.5.2 通知区固定显示两条
 
 - Home Dialog 的通知区域固定为两条通知卡片的高度；第三条及后续通知在区域内纵向滚动，不再继续撑高页面。
