@@ -50,6 +50,7 @@ CodeGraph 的退回顺序固定为：
 | 安装、打包、发布材料 | `docs/DEVELOPMENT_GUIDE.md` 的发布/验证部分 | `mcp_configs/`；`README.md`；`siyuan-plugin/README*.md` |
 | 历史问题、排障、阶段性结论 | `docs/devlog.md`，优先读最新记录；不要把旧计划当当前事实 | 必要时同步回 `ARCHITECTURE.md` 或 `DEVELOPMENT_GUIDE.md` |
 | 遥测、统计、用户体验改善 | `docs/ARCHITECTURE.md` 的”遥测数据流”；`docs/feedback-telemetry-backend.md` | `source_code/telemetry.py`；`source_code/mcp_server.py`；`worker/` |
+| 查看用户反馈/未处理 issue | 无（直接运行脚本即可） | `scripts/check_feedback.py`：运行 `python scripts/check_feedback.py`，输出遥测反馈中 status != done 的条目 + GitHub open issues（仓库 alone-tree/siyuan-bridge）；遥测接口无需认证，GitHub 需 gh 已登录；若 403 需带 User-Agent（脚本已内置） |
 | 插件前端 UI、消息通知、用户反馈 | `docs/FRONTEND.md` | `siyuan-plugin/index.js`；`siyuan-plugin/src/index.js`；`siyuan-plugin/index.css`；`siyuan-plugin/plugin.json` |
 | 未决定的想法、待评估 idea | `docs/IDEAS.md` | 定案后再迁移到 `ARCHITECTURE.md` 或 `DEVELOPMENT_GUIDE.md` |
 
