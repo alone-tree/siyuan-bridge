@@ -467,7 +467,7 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 
 ## `siyuan_operate`
 
-用途：执行只读查询和维护操作。当前支持刷新安全索引、触发思源内置默认同步和主动检查文档引用。
+用途：执行只读查询和维护操作。当前支持刷新安全索引、触发思源内置默认同步和主动检查文档引用。导入本地 Markdown 文件请使用 `siyuan_create` / `siyuan_edit` 的 `markdown_file` 参数，不使用本工具。
 
 参数：
 
@@ -644,7 +644,8 @@ scope：
 | 参数            | 类型    | 默认       | 含义                                        |
 | --------------- | ------- | ---------- | ------------------------------------------- |
 | `title`       | string  | 必填       | 文档标题                                    |
-| `markdown`    | string  | 必填       | 写入内容                                    |
+| `markdown`    | string  | 二选一必填 | 写入内容；与 `markdown_file` 互斥           |
+| `markdown_file` | string | 二选一必填 | 本地 Markdown 文件绝对路径，导入其内容为文档正文 |
 | `path`        | string  | 可选       | 首选完整可读路径 `/Notebook/Folder/Doc`   |
 | `notebook_id` | string  | 可选       | 笔记本重名或使用内部路径时消歧              |
 | `if_exists`   | enum    | `reject` | `reject` / `overwrite` / `create_new` |
@@ -667,9 +668,16 @@ scope：
 | `overwrite`  | 清空已有文档展示块后追加新内容，保留文档 ID |
 | `create_new` | 调用思源创建同名新文档                      |
 
+本地 Markdown 文件导入：
+
+- `markdown_file` 传入本地 `.md` 文件绝对路径，内容按 UTF-8 → GBK → GB18030 顺序解码，换行统一为 `\n`，之后作为 `markdown` 走同一写入流程（含去重首 H1）。
+- 与 `markdown` 互斥：同时传入或都不传都会在写入前报错。
+- 读取失败（路径不存在、无法解码、内容为空）在快照之前拒绝，不写思源、不创建快照。
+- 只导入文本；文件内嵌图片/附件不会随文本上传，需要时另用 `siyuan_edit(action="insert_assets")`。
+
 数据流：
 
-1. 校验 `confirmed=true`、title、markdown、if_exists。
+1. 校验 `confirmed=true`、title、if_exists，以及 `markdown` / `markdown_file` 二选一（互斥，都传或都不传报错）。
 2. 从可见笔记本和缓存文档解析目标路径，再读取思源当前 live 文档列表重新判断同路径文档，避免外部新建后缓存未刷新导致 `if_exists=reject` 漏检。
 3. 检查目标路径权限必须是 `read_write`。
 4. 拒绝创建 Privacy Rules 文档。
@@ -711,7 +719,8 @@ scope：
 | `start_id`    | string  | action 非 append 时必填 | 引用阅读中的起始块 ID  |
 | `end_index`   | integer | 范围操作可选            | 结束块序号，闭区间     |
 | `end_id`      | string  | 范围操作可选            | 结束块 ID              |
-| `markdown`    | string  | 部分 action 必填        | 新内容                 |
+| `markdown`    | string  | 部分 action 二选一必填  | 新内容；与 `markdown_file` 互斥 |
+| `markdown_file` | string | 部分 action 二选一可选  | 本地 Markdown 文件绝对路径，替代 markdown |
 | `table_edit`  | object  | table_edit 必填         | 表格编辑对象           |
 | `assets`      | array   | insert_assets 必填      | 同一锚点后插入的本地文件/文件夹 |
 | `upload_large_files` | boolean | false | 是否允许上传超过 20 MB 的普通文件 |
@@ -751,6 +760,7 @@ scope：
 
 - `single_block_replace` 只能替换单个块，且 markdown 只能生成一个展示块。
 - 如果 markdown 会生成多个块，必须用 `multi_block_replace`。
+- 需要 markdown 的 action（single/multi/insert_after/insert_before/append）可用 `markdown_file` 替代 `markdown`，二者互斥；文件内容按 UTF-8 → GBK → GB18030 解码并统一换行，只导入文本，读取失败在快照前拒绝。
 - 复杂块类型拒绝 replace：attachment、database、superblock、html、iframe、video、audio、widget。
 - index/id 不匹配时拒绝写入，并要求重新引用阅读。
 - `insert_assets` 一次只接受一个锚点，可按数组顺序插入多个项目；多位置必须分次调用并重新引用阅读。
@@ -1002,7 +1012,7 @@ API 设计原则：
 1. 拆分 `mcp_server.py`，按协议层、工具层、块展示、表格、附件、快照、搜索、文档管理模块化。
 2. 测试文件按工具和领域拆分，避免一个 `test_mcp_server.py` 继续膨胀。
 3. 建立 `scripts/verify.py` 或等价命令，把每次修改后的完整验证自动化。
-4. 设计 `siyuan_import`，处理外部文件导入为思源文档。
+4. 外部文件导入：纯文本 Markdown 已通过 `siyuan_create` / `siyuan_edit` 的 `markdown_file` 参数覆盖（v1.6.0）。剩余的 `siyuan_import` 方向只针对需要保留内嵌资源或目录批量导入的场景。
 5. 设计资产写入能力，处理图片/Excel/PDF 等资源上传和插入位置。
 6. 增强权限模型，使父路径只读、子路径覆盖、系统笔记本保护等规则更明确。
 7. 评估思源插件壳或更低安装门槛的发布方式，但保持 MCP-first 和 AI-agent-first 的产品核心。

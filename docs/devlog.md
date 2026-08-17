@@ -4,6 +4,15 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
+## 2026-08-17：v1.6.0 本地 Markdown 文件导入（markdown_file）
+
+- `siyuan_create` 与 `siyuan_edit` 新增 `markdown_file`（本地 `.md` 文件绝对路径），作为 `markdown` 的替代；二者互斥，都传或都不传在快照前报错。
+- 文件按 UTF-8 → GBK → GB18030 顺序解码，换行统一为 `\n`；读取失败（路径不存在、无法解码、内容为空）在快照前拒绝，不写思源、不创建快照。
+- `siyuan_create` 用文件内容作为文档正文（仍走去重首 H1、if_exists、引用保护、快照、路径同步、索引刷新全流程）；`siyuan_edit` 对需要 markdown 的 action（single/multi/insert_after/insert_before/append）用文件内容作为插入/替换正文。
+- 只导入文本，文件内嵌图片/附件不随文本上传，需要时另用 `insert_assets`；不支持目录批量导入。
+- `siyuan_operate` 的 description 增加“导入本地 Markdown 请用 create/edit”指引；不新增独立 `siyuan_import` 工具。
+- 版本 1.5.2 → 1.6.0。验证：完整测试 315 passed；JSON-RPC 探针确认 9 工具、create required 由 [title, markdown, confirmed] 改为 [title, confirmed]、create/edit 均含 markdown_file；真实思源（3.7.3）端到端探针通过：markdown_file 创建 UTF-8 文档读回一致、append GBK 内容读回一致、互斥报错生效，临时文档已删除；能力库临时开发版 MCP（caplib keep-alive + use）验证通过：start → create(markdown_file) → read 读回一致 → delete 清理，临时注册已删除。第三层子代理调用本次跳过（用户确认能力库调用通过即可）。
+
 ## 2026-08-02：反馈状态标记（open/done/ignored）
 
 - `feedbacks` 表新增 `status`（默认 `open`）与 `note`（可选备注）两列；存量 16 条反馈初始化：测试噪音与 fund-account 误提交标记 `ignored`（后者注明来源），已修复项标记 `done` 并附版本备注，未决项保持 `open`。

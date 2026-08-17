@@ -1302,6 +1302,157 @@ class McpServerWriteTests(unittest.TestCase):
         finally:
             mcp_server.detect_active_profile = original
 
+    def _write_markdown_file(self, name: str, content: str, encoding: str = "utf-8") -> str:
+        path = self.root / name
+        path.write_text(content, encoding=encoding)
+        return str(path)
+
+    def test_create_document_from_markdown_file(self):
+        server, client, original = self._server_and_client()
+        file_path = self._write_markdown_file("import.md", "# Imported Title\n\nBody from file.")
+        try:
+            result = server.siyuan_create({
+                "notebook_id": "nb1",
+                "title": "Imported Doc",
+                "markdown_file": file_path,
+                "confirmed": True,
+            })
+            self.assertEqual(client._created_docs, [("nb1", "/Imported Doc", "# Imported Title\n\nBody from file.")])
+            self.assertIn("Imported Doc", result)
+            self.assertEqual(len(client._snapshots), 1)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_create_document_from_gbk_markdown_file(self):
+        server, client, original = self._server_and_client()
+        file_path = self._write_markdown_file("gbk.md", "# 中文标题\n\n正文内容", encoding="gbk")
+        try:
+            server.siyuan_create({
+                "notebook_id": "nb1",
+                "title": "GBK Doc",
+                "markdown_file": file_path,
+                "confirmed": True,
+            })
+            self.assertEqual(client._created_docs, [("nb1", "/GBK Doc", "# 中文标题\n\n正文内容")])
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_create_document_markdown_and_file_mutually_exclusive(self):
+        server, client, original = self._server_and_client()
+        file_path = self._write_markdown_file("import.md", "Body")
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_create({
+                    "notebook_id": "nb1",
+                    "title": "Doc",
+                    "markdown": "inline",
+                    "markdown_file": file_path,
+                    "confirmed": True,
+                })
+            self.assertIn("只能填写一个", str(ctx.exception))
+            self.assertFalse(client._snapshots)
+            self.assertFalse(client._created_docs)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_create_document_requires_markdown_or_file(self):
+        server, client, original = self._server_and_client()
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_create({
+                    "notebook_id": "nb1",
+                    "title": "Doc",
+                    "confirmed": True,
+                })
+            self.assertIn("markdown", str(ctx.exception))
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_create_document_markdown_file_missing_raises_before_snapshot(self):
+        server, client, original = self._server_and_client()
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_create({
+                    "notebook_id": "nb1",
+                    "title": "Doc",
+                    "markdown_file": str(self.root / "does-not-exist.md"),
+                    "confirmed": True,
+                })
+            self.assertIn("无法读取文件", str(ctx.exception))
+            self.assertFalse(client._snapshots)
+            self.assertFalse(client._created_docs)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_insert_after_from_markdown_file(self):
+        blocks = {
+            "doc1": [
+                {"id": "block1", "type": "p", "markdown": "Anchor text."},
+            ]
+        }
+        file_path = self._write_markdown_file("insert.md", "Inserted from file.")
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            result = server.siyuan_edit({
+                "document": "/Main/Projects/Doc One",
+                "action": "insert_after",
+                "start_index": 1,
+                "start_id": "block1",
+                "markdown_file": file_path,
+                "confirmed": True,
+            })
+            self.assertEqual(client._inserted_after, [("block1", "Inserted from file.")])
+            self.assertIn("insert_after", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_markdown_and_file_mutually_exclusive(self):
+        blocks = {
+            "doc1": [
+                {"id": "block1", "type": "p", "markdown": "Anchor text."},
+            ]
+        }
+        file_path = self._write_markdown_file("insert.md", "From file.")
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_edit({
+                    "document": "/Main/Projects/Doc One",
+                    "action": "insert_after",
+                    "start_index": 1,
+                    "start_id": "block1",
+                    "markdown": "inline",
+                    "markdown_file": file_path,
+                    "confirmed": True,
+                })
+            self.assertIn("只能填写一个", str(ctx.exception))
+            self.assertFalse(client._snapshots)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_single_block_replace_from_multi_block_file_rejected(self):
+        blocks = {
+            "doc1": [
+                {"id": "block1", "type": "p", "markdown": "Anchor text."},
+            ]
+        }
+        file_path = self._write_markdown_file("multi.md", "First.\n\nSecond.")
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_edit({
+                    "document": "/Main/Projects/Doc One",
+                    "action": "single_block_replace",
+                    "start_index": 1,
+                    "start_id": "block1",
+                    "markdown_file": file_path,
+                    "confirmed": True,
+                })
+            self.assertIn("multi_block_replace", str(ctx.exception))
+            self.assertFalse(client._snapshots)
+        finally:
+            mcp_server.detect_active_profile = original
+
     def test_siyuan_doc_manage_rename_creates_snapshot(self):
         server, client, original = self._server_and_client()
         try:

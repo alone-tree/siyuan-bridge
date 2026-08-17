@@ -144,6 +144,8 @@ _ERR_SYNC_TIMEOUT = "api:sync_timeout"
 _ERR_SYNC_CONNECTION = "api:sync_connection"
 _ERR_ASSET_UPLOAD = "api:asset_upload"
 _ERR_ASSET_INSERT = "api:asset_insert"
+_ERR_MARKDOWN_CONFLICT = "validation:markdown_conflict"
+_ERR_FILE_READ = "api:file_read"
 
 
 def tool_error(code: str, message: str) -> ValueError:
@@ -166,6 +168,39 @@ def normalize_new_document_markdown(title: str, markdown: str) -> str:
         # Stop at first non-empty line — only strip immediate duplicate H1
         break
     return markdown
+
+
+def read_markdown_file(path: str) -> str:
+    """Read a local Markdown file, decoding utf-8 -> gbk -> gb18030 in order."""
+    file_path = Path(path)
+    try:
+        data = file_path.read_bytes()
+    except OSError as exc:
+        raise tool_error(_ERR_FILE_READ, f"无法读取文件：{path}（{exc}）") from exc
+    for encoding in ("utf-8", "gbk", "gb18030"):
+        try:
+            text = data.decode(encoding)
+            return text.replace("\r\n", "\n").replace("\r", "\n")
+        except UnicodeDecodeError:
+            continue
+    raise tool_error(_ERR_FILE_READ, f"无法解码文件：{path}（已尝试 utf-8 / gbk / gb18030）")
+
+
+def resolve_markdown_input(args: dict[str, Any], require: bool) -> str:
+    """Resolve markdown content from `markdown` or `markdown_file` (mutually exclusive)."""
+    markdown = args.get("markdown")
+    markdown_file = args.get("markdown_file")
+    has_markdown = markdown is not None and str(markdown) != ""
+    has_file = markdown_file is not None and str(markdown_file).strip() != ""
+    if has_markdown and has_file:
+        raise tool_error(_ERR_MARKDOWN_CONFLICT, "markdown 与 markdown_file 只能填写一个，请二选一。")
+    if has_file:
+        return read_markdown_file(str(markdown_file).strip())
+    if has_markdown:
+        return str(markdown)
+    if require:
+        raise tool_error(_ERR_MISSING_PARAM, "需要提供 markdown 或 markdown_file（二者填一个）。")
+    return ""
 
 
 SKIP_BLOCK_TYPES = frozenset({"d"})
@@ -2606,9 +2641,9 @@ class McpServer:
         if not title:
             raise tool_error(_ERR_MISSING_PARAM, "title 参数是必填的")
 
-        markdown = str(args.get("markdown") or "").strip()
+        markdown = resolve_markdown_input(args, require=True).strip()
         if not markdown:
-            raise tool_error(_ERR_MISSING_PARAM, "markdown 参数是必填的")
+            raise tool_error(_ERR_MISSING_PARAM, "markdown 或 markdown_file 内容不能为空。")
 
         if_exists = str(args.get("if_exists") or "reject").strip().casefold()
         if if_exists not in {"reject", "overwrite", "create_new"}:
@@ -3033,10 +3068,11 @@ class McpServer:
         target_blocks: list[DisplayBlock] = []
         if action != "append":
             target_blocks = self._edit_range_from_args(args, display_blocks)
-        markdown = str(args.get("markdown") or "")
-
-        if action in {"single_block_replace", "multi_block_replace", "insert_after", "insert_before", "append"} and not markdown.strip():
-            raise tool_error(_ERR_MISSING_PARAM, f"action={action} 需要 markdown。")
+        markdown = ""
+        if action in {"single_block_replace", "multi_block_replace", "insert_after", "insert_before", "append"}:
+            markdown = resolve_markdown_input(args, require=True)
+            if not markdown.strip():
+                raise tool_error(_ERR_MISSING_PARAM, f"action={action} 需要 markdown 或 markdown_file。")
         if action == "table_edit" and not isinstance(args.get("table_edit"), dict):
             raise tool_error(_ERR_MISSING_PARAM, "action=table_edit 需要 table_edit 对象。")
 
@@ -3991,7 +4027,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_operate",
-            "description": "Run read-only or maintenance operations. action=refresh refreshes the safe local SiYuan index without cleaning ai_workspace. action=sync triggers SiYuan's built-in default sync. action=check_references checks standard block references, recognized embed-block references, and siyuan:// block links targeting one visible document and its blocks; the target document is detailed while descendant documents are summarized.",
+            "description": "Run read-only or maintenance operations. action=refresh refreshes the safe local SiYuan index without cleaning ai_workspace. action=sync triggers SiYuan's built-in default sync. action=check_references checks standard block references, recognized embed-block references, and siyuan:// block links targeting one visible document and its blocks; the target document is detailed while descendant documents are summarized. To import a local Markdown file as a new document or into an existing document, use siyuan_create or siyuan_edit with markdown_file.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -4062,25 +4098,26 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_create",
-            "description": "Create or write a SiYuan document. Prefer path as the full readable path including notebook name, e.g. /Notebook/Folder/Doc; the server resolves the notebook ID and internal hpath. If the notebook name is ambiguous, use notebook_id plus an internal path like /Folder/Doc. Creates a SiYuan workspace snapshot before writing. After writing, waits for SiYuan to expose the target path and refreshes the safe index. Existing target behavior is controlled by if_exists: reject refuses by default, overwrite clears all blocks in the existing document and rewrites it while preserving the document ID, create_new asks SiYuan to create another same-name document. overwrite checks backlinks for every disappearing body block and refuses by default.",
+            "description": "Create or write a SiYuan document. Prefer path as the full readable path including notebook name, e.g. /Notebook/Folder/Doc; the server resolves the notebook ID and internal hpath. If the notebook name is ambiguous, use notebook_id plus an internal path like /Folder/Doc. Creates a SiYuan workspace snapshot before writing. After writing, waits for SiYuan to expose the target path and refreshes the safe index. Existing target behavior is controlled by if_exists: reject refuses by default, overwrite clears all blocks in the existing document and rewrites it while preserving the document ID, create_new asks SiYuan to create another same-name document. overwrite checks backlinks for every disappearing body block and refuses by default. To import a local Markdown file as a new document, pass markdown_file (an absolute path) instead of markdown; markdown and markdown_file are mutually exclusive, and only the file's text is imported (embedded images/assets are not uploaded).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "notebook_id": {"type": "string", "description": "Optional notebook ID. Required only when path is an internal notebook path or when the notebook name in a full path is ambiguous."},
                     "title": {"type": "string", "description": "Document title."},
                     "path": {"type": "string", "description": "Preferred: full readable path /Notebook/Folder/Doc. With notebook_id, legacy internal path /Folder/Doc is also accepted. If omitted, notebook_id is required and path defaults to /<title> inside that notebook."},
-                    "markdown": {"type": "string", "description": "Markdown content to write."},
+                    "markdown": {"type": "string", "description": "Markdown content to write. Mutually exclusive with markdown_file: provide exactly one."},
+                    "markdown_file": {"type": "string", "description": "Absolute path to a local Markdown file whose content is imported as the document body. Mutually exclusive with markdown: provide exactly one. Only the text is imported; images and other assets referenced in the file are not uploaded (use siyuan_edit insert_assets for those)."},
                     "if_exists": {"type": "string", "enum": ["reject", "overwrite", "create_new"], "default": "reject", "description": "Behavior when the target path already exists. reject refuses and explains options. overwrite clears all existing blocks and appends markdown, preserving document ID. create_new creates another same-name document."},
                     "reference_policy": {"type": "string", "enum": ["reject", "break"], "default": "reject", "description": "For overwrite only. reject refuses when any disappearing block ID is referenced. Use break only after the user explicitly confirms that those reported references may be broken."},
                     "confirmed": {"type": "boolean", "description": "Must be true. Writing to SiYuan requires explicit user approval."},
                 },
-                "required": ["title", "markdown", "confirmed"],
+                "required": ["title", "confirmed"],
                 "additionalProperties": False,
             },
         },
         {
             "name": "siyuan_edit",
-            "description": "Edit a visible SiYuan document by document path plus reference-read block index and block ID. Requires confirmed=true and creates a SiYuan workspace snapshot before writing. Use siyuan_read(include_block_ids=true) first to get start_index/start_id. Actions: single_block_replace = one existing block -> one block, uses updateBlock, preserves the target block ID and block attrs, so existing block references stay valid. multi_block_replace = one or more existing blocks -> one or more new blocks, inserts new markdown then deletes old blocks, so old block IDs/attrs are not preserved. multi_block_replace and delete check backlinks for every disappearing block ID and refuse by default. insert_after/insert_before do not modify the anchor block. append adds to document end. table_edit edits one normal Markdown table block. insert_assets uploads one or more local files/folders through SiYuan's native asset API and inserts their links after one anchor.",
+            "description": "Edit a visible SiYuan document by document path plus reference-read block index and block ID. Requires confirmed=true and creates a SiYuan workspace snapshot before writing. Use siyuan_read(include_block_ids=true) first to get start_index/start_id. Actions: single_block_replace = one existing block -> one block, uses updateBlock, preserves the target block ID and block attrs, so existing block references stay valid. multi_block_replace = one or more existing blocks -> one or more new blocks, inserts new markdown then deletes old blocks, so old block IDs/attrs are not preserved. multi_block_replace and delete check backlinks for every disappearing block ID and refuse by default. insert_after/insert_before do not modify the anchor block. append adds to document end. table_edit edits one normal Markdown table block. insert_assets uploads one or more local files/folders through SiYuan's native asset API and inserts their links after one anchor. For actions that take markdown, pass markdown_file (an absolute path) instead of markdown to import a local Markdown file's content; markdown and markdown_file are mutually exclusive, and only text is imported.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -4091,7 +4128,8 @@ def tool_specs() -> list[dict[str, Any]]:
                     "start_id": {"type": "string", "description": "Block ID from reference reading. Required except append."},
                     "end_index": {"type": "integer", "description": "Inclusive global display block index for multi_block_replace/delete range operations."},
                     "end_id": {"type": "string", "description": "Inclusive end block ID for multi_block_replace/delete range operations."},
-                    "markdown": {"type": "string", "description": "Markdown to insert or replace with. For single_block_replace this must render as exactly one display block. For multi_block_replace it may render as one or more new blocks."},
+                    "markdown": {"type": "string", "description": "Markdown to insert or replace with. For single_block_replace this must render as exactly one display block. For multi_block_replace it may render as one or more new blocks. Mutually exclusive with markdown_file."},
+                    "markdown_file": {"type": "string", "description": "Absolute path to a local Markdown file whose content is used instead of markdown, for actions that take markdown (single_block_replace, multi_block_replace, insert_after, insert_before, append). Mutually exclusive with markdown. Only text is imported; embedded images/assets are not uploaded."},
                     "reference_policy": {"type": "string", "enum": ["reject", "break"], "default": "reject", "description": "For delete and multi_block_replace only. reject refuses when any disappearing block ID is referenced. Use break only after the user explicitly confirms that those reported references may be broken."},
                     "assets": {
                         "type": "array",

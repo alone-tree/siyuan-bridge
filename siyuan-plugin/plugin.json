@@ -2,7 +2,7 @@
   "name": "siyuan-bridge",
   "author": "alone-tree",
   "url": "https://github.com/alone-tree/siyuan-bridge",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "minAppVersion": "3.3.0",
   "backends": [
     "windows",

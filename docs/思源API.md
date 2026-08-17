@@ -53,7 +53,7 @@
 | MCP 工具 | 用户语义 | 内部 API 组合 |
 |----------|----------|---------------|
 | `siyuan_edit` | 在已有可见文档中替换、追加、删除、插入文本、编辑普通 Markdown 表格或插入本地附件 | 隐私检查；引用阅读定位校验；delete/multi 写前查询 `refs`；`repo/createSnapshot`；`asset/insertLocalAssets`；`block/updateBlock` / `appendBlock` / `insertBlock` / `deleteBlock`；`notification/pushMsg` |
-| `siyuan_create` | 通过完整可读路径创建、覆盖或新增同名文档 | 隐私和路径检查；overwrite 写前查询旧正文块反链；`repo/createSnapshot`；`filetree/createDocWithMd` 或 `block/deleteBlock` + `block/appendBlock`；`notification/pushMsg`；`filetree/getHPathByID` 等待路径同步 |
+| `siyuan_create` | 通过完整可读路径创建、覆盖或新增同名文档；`markdown_file` 可将本地 `.md` 文件内容导入为新文档（与 `markdown` 互斥，复用同一写入链） | 隐私和路径检查；overwrite 写前查询旧正文块反链；`repo/createSnapshot`；`filetree/createDocWithMd` 或 `block/deleteBlock` + `block/appendBlock`；`notification/pushMsg`；`filetree/getHPathByID` 等待路径同步 |
 | `siyuan_doc_manage` | 管理文档树：改名、移动、删除、复制、导出 | 权限检查；`copy/export` 允许只读源文档；`rename/move/delete` 需可写；`delete` 写前扫描子孙权限和整棵子树反链；`move` 写前检查源文档祖先链和目标父路径权限；写操作调用 `repo/createSnapshot`；内部使用 `renameDocByID` / `moveDocsByID` / `removeDocByID` / `duplicateDoc` / `exportMdContent`；写后用 `getHPathByID` 确认路径同步 |
 
 AI 不需要知道这些底层端点。它只提供：
