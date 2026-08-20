@@ -29,7 +29,7 @@ class SiYuanApiError(RuntimeError):
 class SiYuanClient:
     base_url: str
     token: str | None = None
-    timeout: float = 2.0
+    timeout: float = 5.0
     transport: Transport | None = None
 
     def __post_init__(self) -> None:

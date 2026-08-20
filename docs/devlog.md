@@ -4,6 +4,13 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
+## 2026-08-17：修复超时被误判为连接失效
+
+- 根因：`SiYuanTimeoutError` 继承 `SiYuanConnectionError`，普通工具请求超时被当作“连接失效”处理——清空缓存并强制要求重新 `siyuan_start`，频繁断开会话，违背 start“会话开始时调用一次”的设计。
+- 修复：`mcp_server` 拆分 `SiYuanTimeoutError` 单独处理。普通工具超时不清缓存、不要求重新 start，提示“思源响应超时（超过 5 秒），可能是思源正忙，请稍后重试；若连续多次仍超时请检查思源是否正常运行”；仅 `siyuan_start` 建连超时视为启动失败并清空缓存。真连接失败 / 401 / 403 行为不变。
+- `SiYuanClient` 默认超时由 2 秒提高到 5 秒，减少思源忙时误触发；重试机制保持现状（连接类错误重试 1 次）。
+- 验证：新增“普通工具超时不清缓存”“start 超时清缓存”两个测试；完整测试 317 passed。
+
 ## 2026-08-17：v1.6.0 本地 Markdown 文件导入（markdown_file）
 
 - `siyuan_create` 与 `siyuan_edit` 新增 `markdown_file`（本地 `.md` 文件绝对路径），作为 `markdown` 的替代；二者互斥，都传或都不传在快照前报错。

@@ -465,6 +465,43 @@ class McpServerTests(unittest.TestCase):
         self.assertIsNone(server._active_profile)
         self.assertIsNone(server._active_client)
 
+    def test_timeout_does_not_invalidate_connection(self):
+        server = mcp_server.McpServer(self.root)
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = FakeSearchClient([])
+
+        def fail_timeout(_args):
+            raise SiYuanTimeoutError("Request timed out")
+
+        server.siyuan_find = fail_timeout
+        response = server.call_tool(1, "siyuan_find", {"query": "test"})
+
+        self.assertTrue(response["result"]["isError"])
+        text = response["result"]["content"][0]["text"]
+        self.assertIn("超时", text)
+        self.assertIn("请稍后重试", text)
+        self.assertNotIn("请重新调用 siyuan_start", text)
+        self.assertIsNotNone(server._active_profile)
+        self.assertIsNotNone(server._active_client)
+
+    def test_start_timeout_clears_connection(self):
+        server = mcp_server.McpServer(self.root)
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = FakeSearchClient([])
+
+        def fail_timeout(_args):
+            raise SiYuanTimeoutError("Request timed out")
+
+        server.siyuan_start = fail_timeout
+        response = server.call_tool(1, "siyuan_start", {})
+
+        self.assertTrue(response["result"]["isError"])
+        text = response["result"]["content"][0]["text"]
+        self.assertIn("启动失败", text)
+        self.assertIn("超时", text)
+        self.assertIsNone(server._active_profile)
+        self.assertIsNone(server._active_client)
+
     def test_tool_specs_expose_operate_not_refresh_index(self):
         specs = mcp_server.tool_specs()
         names = [tool["name"] for tool in specs]

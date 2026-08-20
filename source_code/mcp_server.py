@@ -1523,6 +1523,23 @@ class McpServer:
                     lambda: tools[name](args),
                 )
             return make_result(request_id, {"content": [{"type": "text", "text": text}]})
+        except SiYuanTimeoutError as exc:
+            # 超时 ≠ 连接失效：思源可能只是忙（同步/索引/大数据量操作），
+            # 不清缓存、不要求重新 start，避免频繁断开会话。
+            if name == "siyuan_start":
+                # start 是建连动作，超时视为启动失败，清缓存保持现状。
+                self._clear_active_connection()
+                message = "思源桥启动失败：思源响应超时（超过 5 秒）。请检查思源是否正常运行后重试。"
+            else:
+                message = (
+                    "思源响应超时（超过 5 秒），可能是思源正忙（同步、索引、大数据量操作）。"
+                    "请稍后重试本操作；如果连续多次仍超时，请检查思源是否正常运行，"
+                    "必要时可重新调用 siyuan_start。"
+                )
+            return make_result(
+                request_id,
+                {"content": [{"type": "text", "text": message}], "isError": True},
+            )
         except SiYuanConnectionError as exc:
             reason = str(exc).strip()
             if not reason:
