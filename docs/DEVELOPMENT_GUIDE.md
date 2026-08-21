@@ -168,6 +168,7 @@
 - `reference_policy=break` 只能在用户已看到冲突报告并明确允许破坏引用后使用；同一删除集合内部的引用不应阻止操作。
 - 返回信息必须让 AI 确认改了什么。
 - `markdown_file` 与 `markdown` 互斥：需要 markdown 的 action 同时传入或都不传，必须在快照前报错；文件按 UTF-8 → GBK → GB18030 解码并统一换行，读取失败或内容为空在快照前拒绝且不写思源、不创建快照。
+- `markdown_file` 写入成功后必须处理本次受影响块中的标准 Markdown 图片/链接：本地文件和目录走 `insertLocalAssets`，只替换链接目标；网络地址保持不变；唯一标题锚点转为 `siyuan://blocks/<ID>`；超过 20 MB、缺失或上传失败时保留原引用并报告，正文仍成功。直接传入 `markdown` 不得扫描调用端文件系统。
 
 `siyuan_edit` 特别要求：
 

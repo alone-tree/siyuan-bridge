@@ -42,6 +42,8 @@ class FakeSearchClient:
         self._sync_performed = False
         self._sync_timeout = None
         self._sync_info = {"stat": "Synced", "synced": 20260614010101}
+        self.force_empty_child_reads = 0
+        self._empty_child_reads = 0
 
     def version(self):
         return "3.0.0"
@@ -129,6 +131,7 @@ class FakeSearchClient:
         doc_id = f"new-doc-{len(self._docs)}"
         self._docs[doc_id] = markdown
         self._hpaths[doc_id] = path
+        self._blocks[doc_id] = self._new_blocks(doc_id, markdown)
         return {"id": doc_id}
 
     def rename_doc_by_id(self, doc_id, title):
@@ -236,6 +239,10 @@ class FakeSearchClient:
         ]
 
     def get_child_blocks(self, block_id):
+        if self.force_empty_child_reads > 0:
+            self.force_empty_child_reads -= 1
+            self._empty_child_reads += 1
+            return []
         blocks = self._blocks.get(block_id)
         if isinstance(blocks, list):
             return blocks
@@ -1490,6 +1497,169 @@ class McpServerWriteTests(unittest.TestCase):
         finally:
             mcp_server.detect_active_profile = original
 
+    def _write_import_assets(self) -> Path:
+        folder = self.root / "import-assets"
+        folder.mkdir(exist_ok=True)
+        (folder / "pic.png").write_bytes(b"png")
+        (folder / "note.pdf").write_bytes(b"pdf")
+        (folder / "pack.zip").write_bytes(b"zip")
+        (folder / "chapter.md").write_text("# Chapter\n", encoding="utf-8")
+        (folder / "files").mkdir(exist_ok=True)
+        return folder
+
+    def test_create_markdown_file_uploads_local_links(self):
+        folder = self._write_import_assets()
+        md = self.root / "post.md"
+        md.write_text(
+            "\n".join([
+                "See ![图](./import-assets/pic.png)",
+                "",
+                "[报告](./import-assets/note.pdf)",
+                "",
+                "[章节](./import-assets/chapter.md)",
+                "",
+                "[外链](https://example.com/a.png)",
+                "",
+                "[目录](./import-assets/files)",
+                "",
+                f"<file:///{(folder / 'pack.zip').as_posix()}>",
+            ]),
+            encoding="utf-8",
+        )
+        server, client, original = self._server_and_client()
+        client.force_empty_child_reads = 2
+        try:
+            result = server.siyuan_create({
+                "notebook_id": "nb1",
+                "title": "Imported Assets",
+                "markdown_file": str(md),
+                "confirmed": True,
+            })
+            self.assertGreaterEqual(client._empty_child_reads, 1)
+            uploaded = [paths for _, paths, _ in client._inserted_assets]
+            self.assertTrue(any(str(folder / "pic.png") in item for batch in uploaded for item in batch))
+            self.assertTrue(any(str(folder / "note.pdf") in item for batch in uploaded for item in batch))
+            self.assertTrue(any(str(folder / "chapter.md") in item for batch in uploaded for item in batch))
+            self.assertTrue(any(str(folder / "pack.zip") in item for batch in uploaded for item in batch))
+            self.assertTrue(any(str(folder / "files") in item for batch in uploaded for item in batch))
+            self.assertIn("assets/pic.png", result)
+            self.assertIn("https://example.com/a.png", "\n".join(
+                str(block.get("markdown", ""))
+                for block in client._blocks.get("new-doc-0", [])
+            ) or "")
+            updated = "\n".join(md for _, md in client._updated_blocks)
+            self.assertIn("assets/pic.png", updated)
+            self.assertIn("assets/note.pdf", updated)
+            self.assertNotIn("https://example.com/a.png", "".join(path for batch in uploaded for path in batch))
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_create_markdown_file_skips_code_block_and_missing_and_large(self):
+        folder = self._write_import_assets()
+        (folder / "big.bin").write_bytes(b"12345")
+        md = self.root / "mixed.md"
+        md.write_text(
+            "\n".join([
+                "```",
+                "![代码](./import-assets/pic.png)",
+                "```",
+                "",
+                "![缺](./import-assets/missing.png)",
+                "",
+                "![大](./import-assets/big.bin)",
+            ]),
+            encoding="utf-8",
+        )
+        server, client, original = self._server_and_client()
+        try:
+            with mock.patch.object(mcp_server, "ASSET_LARGE_FILE_THRESHOLD_BYTES", 4):
+                result = server.siyuan_create({
+                    "notebook_id": "nb1",
+                    "title": "Mixed",
+                    "markdown_file": str(md),
+                    "confirmed": True,
+                })
+            self.assertFalse(client._inserted_assets)
+            self.assertIn("未找到", result)
+            self.assertIn("超过 20 MB", result)
+            self.assertNotIn("成功：", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_create_markdown_file_converts_unique_heading_anchor(self):
+        md = self.root / "anchor.md"
+        md.write_text("## 安装说明\n\n请看[这里](#安装说明)", encoding="utf-8")
+        server, client, original = self._server_and_client()
+        try:
+            result = server.siyuan_create({
+                "notebook_id": "nb1",
+                "title": "Guide",
+                "markdown_file": str(md),
+                "confirmed": True,
+            })
+            self.assertIn("锚点已转换", result)
+            self.assertTrue(any("siyuan://blocks/" in markdown for _, markdown in client._updated_blocks))
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_create_markdown_file_keeps_duplicate_heading_anchor(self):
+        md = self.root / "dup-anchor.md"
+        md.write_text("## 安装说明\n\n## 安装说明\n\n请看[这里](#安装说明)", encoding="utf-8")
+        server, client, original = self._server_and_client()
+        try:
+            result = server.siyuan_create({
+                "notebook_id": "nb1",
+                "title": "Guide",
+                "markdown_file": str(md),
+                "confirmed": True,
+            })
+            self.assertIn("锚点重名未转换", result)
+            self.assertFalse(client._updated_blocks)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_create_plain_markdown_does_not_scan_local_files(self):
+        folder = self._write_import_assets()
+        server, client, original = self._server_and_client()
+        try:
+            server.siyuan_create({
+                "notebook_id": "nb1",
+                "title": "Plain",
+                "markdown": f"![图]({(folder / 'pic.png').as_posix()})",
+                "confirmed": True,
+            })
+            self.assertFalse(client._inserted_assets)
+            self.assertFalse(client._updated_blocks)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_edit_markdown_file_processes_only_new_blocks(self):
+        folder = self._write_import_assets()
+        (self.root / "old.png").write_bytes(b"old")
+        blocks = {
+            "doc1": [
+                {"id": "block1", "type": "p", "markdown": "![旧](./old.png)"},
+            ]
+        }
+        md = self.root / "insert-assets.md"
+        md.write_text("![新](./import-assets/pic.png)", encoding="utf-8")
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            result = server.siyuan_edit({
+                "document": "/Main/Projects/Doc One",
+                "action": "insert_after",
+                "start_index": 1,
+                "start_id": "block1",
+                "markdown_file": str(md),
+                "confirmed": True,
+            })
+            uploaded = [path for _, paths, _ in client._inserted_assets for path in paths]
+            self.assertEqual(uploaded, [str(folder / "pic.png")])
+            self.assertIn("assets/pic.png", result)
+            self.assertIn("![旧](./old.png)", client._blocks["doc1"][0]["markdown"])
+        finally:
+            mcp_server.detect_active_profile = original
+
     def test_siyuan_doc_manage_rename_creates_snapshot(self):
         server, client, original = self._server_and_client()
         try:
@@ -1852,6 +2022,22 @@ class McpServerWriteTests(unittest.TestCase):
             exported_md = export_dir / "Main_Projects_Doc One.md"
             self.assertTrue(exported_md.exists())
             self.assertEqual(exported_md.read_text(encoding="utf-8"), "# Exported\n\nBody")
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_doc_manage_export_rewrites_asset_links_relative(self):
+        server, client, original = self._server_and_client()
+        client._docs["doc1"] = "![图](assets/a.png)\n\n[报告](assets/a.pdf)"
+        try:
+            server.siyuan_doc_manage({
+                "document": "/Main/Projects/Doc One",
+                "action": "export",
+            })
+            exported_md = self.root / "ai_workspace" / "exports" / "Main_Projects_Doc One" / "Main_Projects_Doc One.md"
+            text = exported_md.read_text(encoding="utf-8")
+            self.assertIn("](./assets/a.png)", text)
+            self.assertIn("](./assets/a.pdf)", text)
+            self.assertNotIn("](assets/", text)
         finally:
             mcp_server.detect_active_profile = original
 

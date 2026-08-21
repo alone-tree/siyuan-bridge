@@ -5,10 +5,11 @@ import re
 import shutil
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import unquote, urlparse
 
 from .cli import load_live_docs
 from .client import SiYuanApiError, SiYuanClient, SiYuanConnectionError, SiYuanTimeoutError
@@ -596,6 +597,279 @@ def resolve_uploaded_asset_paths(
             )
         resolved.append(str(value))
     return resolved
+
+
+_MARKDOWN_LINK_RE = re.compile(
+    r"(?P<bang>!?)\[(?P<label>(?:\\.|[^\]])*)\]\(\s*"
+    r"(?:<(?P<angled>[^>\n]*)>|(?P<bare>(?:\\.|[^\s\)])+))"
+    r"(?:\s+(?:\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'))?\s*\)"
+)
+_AUTOLINK_RE = re.compile(r"<(?P<auto>[A-Za-z][A-Za-z0-9+.-]*:[^>\s]+)>")
+
+
+@dataclass
+class MarkdownLinkProcessResult:
+    uploaded: list[str] = field(default_factory=list)
+    missing: list[str] = field(default_factory=list)
+    too_large: list[str] = field(default_factory=list)
+    upload_failed: list[str] = field(default_factory=list)
+    block_update_failed: list[str] = field(default_factory=list)
+    anchors_converted: list[str] = field(default_factory=list)
+    anchors_unmatched: list[str] = field(default_factory=list)
+    anchors_ambiguous: list[str] = field(default_factory=list)
+    skipped_no_doc_id: bool = False
+
+
+def _blank_inline_code(text: str) -> str:
+    chars = list(text)
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] != "`":
+            i += 1
+            continue
+        ticks = 1
+        while i + ticks < n and text[i + ticks] == "`":
+            ticks += 1
+        j = i + ticks
+        found = False
+        while j < n:
+            if text[j] != "`":
+                j += 1
+                continue
+            close = 1
+            while j + close < n and text[j + close] == "`":
+                close += 1
+            if close == ticks:
+                for k in range(i, j + close):
+                    if chars[k] != "\n":
+                        chars[k] = " "
+                i = j + close
+                found = True
+                break
+            j += close
+        if not found:
+            i += ticks
+    return "".join(chars)
+
+
+def _iter_markdown_link_dests(text: str) -> list[tuple[int, int, str, str]]:
+    """Return (dest_start, dest_end, dest, kind) where kind is 'link' or 'autolink'."""
+    masked = _blank_inline_code(text)
+    found: list[tuple[int, int, str, str]] = []
+    occupied: list[tuple[int, int]] = []
+
+    def _overlaps(start: int, end: int) -> bool:
+        return any(start < other_end and end > other_start for other_start, other_end in occupied)
+
+    for match in _MARKDOWN_LINK_RE.finditer(masked):
+        if match.group("angled") is not None:
+            dest_start, dest_end = match.span("angled")
+            dest = text[dest_start:dest_end]
+        else:
+            dest_start, dest_end = match.span("bare")
+            dest = text[dest_start:dest_end]
+        occupied.append((match.start(), match.end()))
+        found.append((dest_start, dest_end, dest, "link"))
+    for match in _AUTOLINK_RE.finditer(masked):
+        if _overlaps(match.start(), match.end()):
+            continue
+        dest_start, dest_end = match.span("auto")
+        found.append((dest_start, dest_end, text[dest_start:dest_end], "autolink"))
+    found.sort(key=lambda item: item[0])
+    return found
+
+
+def _strip_query_fragment(dest: str) -> str:
+    if dest.casefold().startswith("file:"):
+        parsed = urlparse(dest)
+        if parsed.query or parsed.fragment:
+            rebuilt = dest
+            if parsed.fragment:
+                rebuilt = rebuilt.rsplit("#", 1)[0]
+            if parsed.query:
+                rebuilt = rebuilt.rsplit("?", 1)[0]
+            return rebuilt
+        return dest
+    cut = min((index for index in (dest.find("?"), dest.find("#")) if index >= 0), default=-1)
+    return dest[:cut] if cut >= 0 else dest
+
+
+def _file_uri_to_path(uri: str) -> str:
+    parsed = urlparse(uri)
+    path = unquote(parsed.path or "")
+    if parsed.netloc and parsed.netloc.casefold() not in {"", "localhost", "127.0.0.1"}:
+        return "\\\\" + parsed.netloc + path.replace("/", "\\")
+    if re.match(r"^/[A-Za-z]:", path):
+        return path[1:]
+    return path
+
+
+def _classify_markdown_dest(dest: str) -> tuple[str, str]:
+    raw = dest.strip()
+    if not raw:
+        return "skip", raw
+    if raw.startswith("#") and "://" not in raw:
+        return "heading", unquote(raw[1:])
+    if raw.startswith("assets/") or raw.startswith("/assets/"):
+        return "skip", raw
+    if raw.casefold().startswith("siyuan://"):
+        return "skip", raw
+    scheme = re.match(r"^([A-Za-z][A-Za-z0-9+.-]*):", raw)
+    if scheme:
+        if scheme.group(1).casefold() == "file":
+            return "local", raw
+        return "skip", raw
+    return "local", raw
+
+
+def _resolve_local_markdown_path(dest: str, base_dir: Path) -> Path | None:
+    path_text = _strip_query_fragment(dest.strip())
+    if path_text.casefold().startswith("file:"):
+        path_text = _file_uri_to_path(path_text)
+    else:
+        path_text = unquote(path_text)
+    if not path_text:
+        return None
+    path = Path(path_text)
+    if not path.is_absolute():
+        path = base_dir / path_text
+    return path
+
+
+def _upload_local_markdown_path(client: Any, document_id: str, path: Path) -> str:
+    succ_map = client.insert_local_assets(document_id, [str(path)], is_upload=True)
+    if path.is_dir():
+        kind = "directory"
+        size_bytes = None
+    else:
+        kind = "image" if path.suffix.casefold() in SIYUAN_IMAGE_EXTENSIONS else "file"
+        size_bytes = path.stat().st_size
+    item = AssetInsertionItem(
+        local_path=str(path),
+        basename=path.name,
+        kind=kind,
+        name=path.name,
+        title="",
+        size_bytes=size_bytes,
+    )
+    return resolve_uploaded_asset_paths([item], succ_map)[0]
+
+
+def _unique_heading_id(fragment: str, all_blocks: list[DisplayBlock]) -> tuple[str, str]:
+    needle = fragment.casefold()
+    matches = [
+        block.id
+        for block in all_blocks
+        if block.is_heading and block.heading_text.casefold() == needle
+    ]
+    if len(matches) == 1:
+        return "ok", matches[0]
+    if len(matches) > 1:
+        return "ambiguous", ""
+    return "missing", ""
+
+
+def process_imported_markdown_links(
+    client: Any,
+    *,
+    document_id: str,
+    markdown_file: str,
+    affected_blocks: list[DisplayBlock],
+    all_blocks: list[DisplayBlock],
+) -> MarkdownLinkProcessResult:
+    result = MarkdownLinkProcessResult()
+    base_dir = Path(markdown_file).expanduser().resolve().parent
+    for block in affected_blocks:
+        if display_block_semantic_type(block) == "code":
+            continue
+        original = display_block_source(block)
+        replacements: list[tuple[int, int, str]] = []
+        for dest_start, dest_end, dest, kind in _iter_markdown_link_dests(original):
+            dest_kind, payload = _classify_markdown_dest(dest)
+            if dest_kind == "skip":
+                continue
+            if dest_kind == "heading":
+                status, heading_id = _unique_heading_id(payload, all_blocks)
+                label = f"#{payload}"
+                if status == "ok":
+                    replacements.append((dest_start, dest_end, f"siyuan://blocks/{heading_id}"))
+                    result.anchors_converted.append(label)
+                elif status == "ambiguous":
+                    result.anchors_ambiguous.append(label)
+                else:
+                    result.anchors_unmatched.append(label)
+                continue
+
+            path = _resolve_local_markdown_path(payload, base_dir)
+            display_path = str(path) if path is not None else dest
+            if path is None or not path.exists():
+                result.missing.append(display_path)
+                continue
+            if path.is_file() and path.stat().st_size > ASSET_LARGE_FILE_THRESHOLD_BYTES:
+                result.too_large.append(display_path)
+                continue
+            if not (path.is_file() or path.is_dir()):
+                result.missing.append(display_path)
+                continue
+            try:
+                resolved = _upload_local_markdown_path(client, document_id, path)
+            except Exception as exc:
+                result.upload_failed.append(f"{display_path}（{exc}）")
+                continue
+            if kind == "autolink":
+                replacements.append((
+                    dest_start - 1,
+                    dest_end + 1,
+                    f"[{_escape_markdown_label(path.name)}]({_markdown_destination(resolved)})",
+                ))
+            else:
+                replacements.append((dest_start, dest_end, resolved))
+            result.uploaded.append(f"{display_path} -> {resolved}")
+
+        if not replacements:
+            continue
+        updated = original
+        for dest_start, dest_end, new_dest in sorted(replacements, key=lambda item: item[0], reverse=True):
+            updated = updated[:dest_start] + new_dest + updated[dest_end:]
+        try:
+            McpServer._update_block_preserving_attrs(client, block.id, updated)
+        except Exception as exc:
+            result.block_update_failed.append(f"{block.id}（{exc}）")
+    return result
+
+
+def wait_for_display_blocks(client: Any, document_id: str, *, timeout: float = POST_WRITE_SYNC_TIMEOUT) -> list[DisplayBlock]:
+    deadline = time.monotonic() + timeout
+    blocks: list[DisplayBlock] = []
+    while True:
+        blocks = build_display_blocks(client, document_id, include_block_ids=True)
+        if blocks or time.monotonic() >= deadline:
+            return blocks
+        time.sleep(POST_WRITE_SYNC_INTERVAL)
+
+
+def format_markdown_link_report(result: MarkdownLinkProcessResult) -> str:
+    if result.skipped_no_doc_id:
+        return "\n".join(["", "## Markdown 引用处理", "", "写入成功但未取得文档 ID，本地引用未处理。"])
+    sections = [
+        ("成功", result.uploaded),
+        ("未找到", result.missing),
+        ("超过 20 MB", result.too_large),
+        ("上传失败", result.upload_failed),
+        ("块更新失败", result.block_update_failed),
+        ("锚点已转换", result.anchors_converted),
+        ("锚点未匹配", result.anchors_unmatched),
+        ("锚点重名未转换", result.anchors_ambiguous),
+    ]
+    if not any(items for _, items in sections):
+        return ""
+    lines = ["", "## Markdown 引用处理", ""]
+    for title, items in sections:
+        if not items:
+            continue
+        lines.append(f"- {title}：{'；'.join(items)}")
+    return "\n".join(lines)
 
 
 def semantic_block_type(raw_type: str, subtype: str, markdown: str) -> str:
@@ -2795,6 +3069,22 @@ class McpServer:
         if doc_id:
             sync_status = self._wait_for_hpath(client, doc_id, target.internal_path)
 
+        markdown_file_path = str(args.get("markdown_file") or "").strip()
+        link_result = MarkdownLinkProcessResult()
+        if markdown_file_path:
+            if doc_id:
+                with ensure_notebooks_open(client, [target.notebook_id]):
+                    all_blocks = wait_for_display_blocks(client, doc_id)
+                    link_result = process_imported_markdown_links(
+                        client,
+                        document_id=doc_id,
+                        markdown_file=markdown_file_path,
+                        affected_blocks=all_blocks,
+                        all_blocks=all_blocks,
+                    )
+            else:
+                link_result.skipped_no_doc_id = True
+
         # Auto-refresh index
         refresh_ok = False
         try:
@@ -2830,6 +3120,9 @@ class McpServer:
             "",
             "如需回滚，可通过思源快照手动恢复。",
         ])
+        report = format_markdown_link_report(link_result)
+        if report:
+            parts.append(report)
         return "\n".join(parts)
 
     @staticmethod
@@ -2844,7 +3137,7 @@ class McpServer:
             if "数据仓库密钥" in msg or "data repo key" in msg.casefold() or "key" in msg.casefold():
                 raise tool_error(_ERR_SNAPSHOT_KEY,
                     "快照创建失败：数据仓库密钥未初始化。"
-                    "请打开思源 -> 设置 -> 关于 -> 数据仓库密钥，初始化密钥后重试。"
+                    "请打开思源 → 设置 → 关于 → 数据仓库密钥，初始化密钥后重试。"
                 ) from exc
             raise tool_error(_ERR_SNAPSHOT_FAILED, f"快照创建失败，拒绝写入。错误：{msg}") from exc
 
@@ -3350,6 +3643,58 @@ class McpServer:
                     client.delete_block(block.id)
 
             new_display_blocks = build_display_blocks(client, doc_id, include_block_ids=True)
+            markdown_file_path = str(args.get("markdown_file") or "").strip()
+            link_result = MarkdownLinkProcessResult()
+            if markdown_file_path and action in {
+                "single_block_replace",
+                "multi_block_replace",
+                "insert_after",
+                "insert_before",
+                "append",
+            }:
+                deadline = time.monotonic() + POST_WRITE_SYNC_TIMEOUT
+                affected: list[DisplayBlock] = []
+                while True:
+                    if action == "single_block_replace":
+                        affected = [block for block in new_display_blocks if block.id == target_blocks[0].id]
+                    elif action == "multi_block_replace":
+                        affected = blocks_between_anchors(
+                            new_display_blocks,
+                            previous_anchor.id if previous_anchor else None,
+                            next_anchor.id if next_anchor else None,
+                        )
+                        deleted_ids = {block.id for block in target_blocks}
+                        affected = [block for block in affected if block.id not in deleted_ids]
+                    elif action == "insert_after":
+                        affected = blocks_between_anchors(
+                            new_display_blocks,
+                            target_blocks[-1].id,
+                            next_anchor.id if next_anchor else None,
+                        )
+                    elif action == "insert_before":
+                        affected = blocks_between_anchors(
+                            new_display_blocks,
+                            previous_anchor.id if previous_anchor else None,
+                            target_blocks[0].id,
+                        )
+                    else:
+                        affected = blocks_between_anchors(
+                            new_display_blocks,
+                            last_before_append.id if last_before_append else None,
+                            None,
+                        )
+                    if affected or time.monotonic() >= deadline:
+                        break
+                    time.sleep(POST_WRITE_SYNC_INTERVAL)
+                    new_display_blocks = build_display_blocks(client, doc_id, include_block_ids=True)
+                link_result = process_imported_markdown_links(
+                    client,
+                    document_id=doc_id,
+                    markdown_file=markdown_file_path,
+                    affected_blocks=affected,
+                    all_blocks=new_display_blocks,
+                )
+                new_display_blocks = build_display_blocks(client, doc_id, include_block_ids=True)
 
         try:
             client.push_msg(f"思源桥：已编辑「{doc_title}」")
@@ -3469,6 +3814,9 @@ class McpServer:
         ])
         if reference_notice:
             parts.extend(["", f"引用保护：{reference_notice}"])
+        report = format_markdown_link_report(link_result)
+        if report:
+            parts.append(report)
         return "\n".join(parts)
 
     def siyuan_doc_manage(self, args: dict[str, Any]) -> str:
@@ -3599,6 +3947,8 @@ class McpServer:
                 if export_assets_dir.exists():
                     shutil.rmtree(export_assets_dir)
                 shutil.copytree(attachments_src, export_assets_dir)
+            if attachment_count:
+                markdown = markdown.replace("](assets/", "](./assets/")
             export_md_path = export_dir / f"{safe_name}.md"
             export_md_path.write_text(markdown, encoding="utf-8")
 
@@ -4115,7 +4465,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_create",
-            "description": "Create or write a SiYuan document. Prefer path as the full readable path including notebook name, e.g. /Notebook/Folder/Doc; the server resolves the notebook ID and internal hpath. If the notebook name is ambiguous, use notebook_id plus an internal path like /Folder/Doc. Creates a SiYuan workspace snapshot before writing. After writing, waits for SiYuan to expose the target path and refreshes the safe index. Existing target behavior is controlled by if_exists: reject refuses by default, overwrite clears all blocks in the existing document and rewrites it while preserving the document ID, create_new asks SiYuan to create another same-name document. overwrite checks backlinks for every disappearing body block and refuses by default. To import a local Markdown file as a new document, pass markdown_file (an absolute path) instead of markdown; markdown and markdown_file are mutually exclusive, and only the file's text is imported (embedded images/assets are not uploaded).",
+            "description": "Create or write a SiYuan document. Prefer path as the full readable path including notebook name, e.g. /Notebook/Folder/Doc; the server resolves the notebook ID and internal hpath. If the notebook name is ambiguous, use notebook_id plus an internal path like /Folder/Doc. Creates a SiYuan workspace snapshot before writing. After writing, waits for SiYuan to expose the target path and refreshes the safe index. Existing target behavior is controlled by if_exists: reject refuses by default, overwrite clears all blocks in the existing document and rewrites it while preserving the document ID, create_new asks SiYuan to create another same-name document. overwrite checks backlinks for every disappearing body block and refuses by default. To import a local Markdown file as a new document, pass markdown_file (an absolute path) instead of markdown; markdown and markdown_file are mutually exclusive. After the body is written, local image/file/directory links in standard Markdown are uploaded through SiYuan's native asset API and rewritten; network URLs are left unchanged. Unique in-document heading anchors are rewritten to siyuan:// block links.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -4123,7 +4473,7 @@ def tool_specs() -> list[dict[str, Any]]:
                     "title": {"type": "string", "description": "Document title."},
                     "path": {"type": "string", "description": "Preferred: full readable path /Notebook/Folder/Doc. With notebook_id, legacy internal path /Folder/Doc is also accepted. If omitted, notebook_id is required and path defaults to /<title> inside that notebook."},
                     "markdown": {"type": "string", "description": "Markdown content to write. Mutually exclusive with markdown_file: provide exactly one."},
-                    "markdown_file": {"type": "string", "description": "Absolute path to a local Markdown file whose content is imported as the document body. Mutually exclusive with markdown: provide exactly one. Only the text is imported; images and other assets referenced in the file are not uploaded (use siyuan_edit insert_assets for those)."},
+                    "markdown_file": {"type": "string", "description": "Absolute path to a local Markdown file whose content is imported as the document body. Mutually exclusive with markdown: provide exactly one. After writing, local standard Markdown image/file/directory links are uploaded via SiYuan insertLocalAssets and rewritten; unique heading anchors become siyuan:// block links. Direct markdown text is not scanned for local files."},
                     "if_exists": {"type": "string", "enum": ["reject", "overwrite", "create_new"], "default": "reject", "description": "Behavior when the target path already exists. reject refuses and explains options. overwrite clears all existing blocks and appends markdown, preserving document ID. create_new creates another same-name document."},
                     "reference_policy": {"type": "string", "enum": ["reject", "break"], "default": "reject", "description": "For overwrite only. reject refuses when any disappearing block ID is referenced. Use break only after the user explicitly confirms that those reported references may be broken."},
                     "confirmed": {"type": "boolean", "description": "Must be true. Writing to SiYuan requires explicit user approval."},
@@ -4134,7 +4484,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_edit",
-            "description": "Edit a visible SiYuan document by document path plus reference-read block index and block ID. Requires confirmed=true and creates a SiYuan workspace snapshot before writing. Use siyuan_read(include_block_ids=true) first to get start_index/start_id. Actions: single_block_replace = one existing block -> one block, uses updateBlock, preserves the target block ID and block attrs, so existing block references stay valid. multi_block_replace = one or more existing blocks -> one or more new blocks, inserts new markdown then deletes old blocks, so old block IDs/attrs are not preserved. multi_block_replace and delete check backlinks for every disappearing block ID and refuse by default. insert_after/insert_before do not modify the anchor block. append adds to document end. table_edit edits one normal Markdown table block. insert_assets uploads one or more local files/folders through SiYuan's native asset API and inserts their links after one anchor. For actions that take markdown, pass markdown_file (an absolute path) instead of markdown to import a local Markdown file's content; markdown and markdown_file are mutually exclusive, and only text is imported.",
+            "description": "Edit a visible SiYuan document by document path plus reference-read block index and block ID. Requires confirmed=true and creates a SiYuan workspace snapshot before writing. Use siyuan_read(include_block_ids=true) first to get start_index/start_id. Actions: single_block_replace = one existing block -> one block, uses updateBlock, preserves the target block ID and block attrs, so existing block references stay valid. multi_block_replace = one or more existing blocks -> one or more new blocks, inserts new markdown then deletes old blocks, so old block IDs/attrs are not preserved. multi_block_replace and delete check backlinks for every disappearing block ID and refuse by default. insert_after/insert_before do not modify the anchor block. append adds to document end. table_edit edits one normal Markdown table block. insert_assets uploads one or more local files/folders through SiYuan's native asset API and inserts their links after one anchor. For actions that take markdown, pass markdown_file (an absolute path) instead of markdown to import a local Markdown file's content; markdown and markdown_file are mutually exclusive. After writing, local standard Markdown image/file/directory links in the newly written blocks are uploaded through SiYuan's native asset API and rewritten; unique in-document heading anchors become siyuan:// block links.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -4146,7 +4496,7 @@ def tool_specs() -> list[dict[str, Any]]:
                     "end_index": {"type": "integer", "description": "Inclusive global display block index for multi_block_replace/delete range operations."},
                     "end_id": {"type": "string", "description": "Inclusive end block ID for multi_block_replace/delete range operations."},
                     "markdown": {"type": "string", "description": "Markdown to insert or replace with. For single_block_replace this must render as exactly one display block. For multi_block_replace it may render as one or more new blocks. Mutually exclusive with markdown_file."},
-                    "markdown_file": {"type": "string", "description": "Absolute path to a local Markdown file whose content is used instead of markdown, for actions that take markdown (single_block_replace, multi_block_replace, insert_after, insert_before, append). Mutually exclusive with markdown. Only text is imported; embedded images/assets are not uploaded."},
+                    "markdown_file": {"type": "string", "description": "Absolute path to a local Markdown file whose content is used instead of markdown, for actions that take markdown (single_block_replace, multi_block_replace, insert_after, insert_before, append). Mutually exclusive with markdown. After writing, local standard Markdown image/file/directory links in the newly written blocks are uploaded via SiYuan insertLocalAssets and rewritten; unique heading anchors become siyuan:// block links."},
                     "reference_policy": {"type": "string", "enum": ["reject", "break"], "default": "reject", "description": "For delete and multi_block_replace only. reject refuses when any disappearing block ID is referenced. Use break only after the user explicitly confirms that those reported references may be broken."},
                     "assets": {
                         "type": "array",

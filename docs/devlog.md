@@ -4,6 +4,27 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
+## 2026-08-21：v1.7.0 markdown_file 导入本地附件
+
+- `siyuan_create` / `siyuan_edit` 的 `markdown_file` 在正文写入后处理标准 Markdown 图片和链接：本地文件/目录交给 `insertLocalAssets`，只替换链接目标；网络地址保持不变；文内唯一标题锚点转为 `siyuan://blocks/<ID>`。
+- `createDocWithMd` 后轮询展示块，避免块树未就绪时后处理被跳过。
+- 导出 Markdown 将 `assets/...` 改写为 `./assets/...`，便于导出目录再导入时带上附件。导出仍带 YAML 和标题 H1；文内锚点导出会变成 `((块ID))`，再导入后指向原文档块。
+- 版本 1.6.1 → 1.7.0。完整测试 324 passed；真实思源 3.8.1 开发版 MCP 验证通过，测试文档已删除。
+
+## 2026-08-21：markdown_file 真实 MCP 验证与导出再导入
+
+- 真实思源 3.8.1：`createDocWithMd` 后立刻 `getChildBlocks` 可能为空，附件后处理被跳过。改为先等路径同步，再轮询展示块后处理。
+- 开发版 MCP（当前仓库源码）实测：`![图](./chart.png)`、`[报告](./note.pdf)` 上传为 `assets/chart-...png` / `assets/note-...pdf`；`#安装说明` 转为 `siyuan://blocks/<ID>`；`https://` 保持不变。
+- 导出 Markdown 原为 `](assets/...)`，旁边虽复制了文件，再导入不会上传。导出改为 `](./assets/...)` 后，再导入会重新上传导出目录中的附件。
+- 导出再导入仍不一致：思源 `exportMdContent` 会加上 YAML 和标题 H1；文内锚点导出成 `((块ID "文本"))`，指向原文档块，不会变成新文档内锚点。
+- 测试文档已删除。完整测试 324 passed。
+
+## 2026-08-17：markdown_file 导入后处理本地附件和文内锚点
+
+- `siyuan_create` / `siyuan_edit` 在 `markdown_file` 正文写入成功后，扫描本次受影响块的标准 Markdown 图片和链接：本地文件/目录交给 `insertLocalAssets`，只替换链接目标；网络地址、`assets/...` 和其他 URI scheme 不变。
+- 文内唯一标题锚点改写为 `siyuan://blocks/<ID>`；重名或未匹配则保留原链接并警告。直接传 `markdown` 不扫描调用端文件系统。
+- 超过 20 MB、文件缺失或上传失败时保留原引用，正文仍成功；不新增工具或参数。
+
 ## 2026-08-17：修复超时被误判为连接失效
 
 - 根因：`SiYuanTimeoutError` 继承 `SiYuanConnectionError`，普通工具请求超时被当作“连接失效”处理——清空缓存并强制要求重新 `siyuan_start`，频繁断开会话，违背 start“会话开始时调用一次”的设计。

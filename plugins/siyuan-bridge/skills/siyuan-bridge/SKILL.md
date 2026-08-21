@@ -40,7 +40,7 @@ description: Use when the user wants to read, search, or write their private SiY
 - `siyuan_create` 优先传完整可读路径 `path=/Notebook/Folder/Doc`；只有笔记本名称重名或使用内部路径时才补充 `notebook_id`。目标已存在时默认 `if_exists=reject`，可显式用 `overwrite` 清空块后重写并保留文档 ID，或用 `create_new` 新增同名文档。
 - 如果 `siyuan_create` 提示目标笔记本不存在，先取得用户明确同意，再调用 `siyuan_doc_manage(action="create_notebook", notebook_name="<笔记本名称>", confirmed=true)`；创建成功后重试文档写入。不得根据文档路径隐式创建笔记本。
 - `siyuan_create` 成功后会等待思源路径同步并自动刷新安全索引；正常情况下可直接使用返回路径继续读取或管理。
-- 导入本地 Markdown 文件时，用 `markdown_file`（绝对路径）替代 `markdown`：`siyuan_create` 将其内容导入为新文档，`siyuan_edit` 将其内容作为插入/替换正文。`markdown` 与 `markdown_file` 互斥，只能二选一。文件按 UTF-8 → GBK → GB18030 顺序解码并统一换行；只导入文本，文件内嵌图片/附件不会上传，需要时另用 `insert_assets`。
+- 导入本地 Markdown 文件时，用 `markdown_file`（绝对路径）替代 `markdown`：`siyuan_create` 将其内容导入为新文档，`siyuan_edit` 将其内容作为插入/替换正文。`markdown` 与 `markdown_file` 互斥，只能二选一。文件按 UTF-8 → GBK → GB18030 顺序解码并统一换行。写入后会处理标准 Markdown 图片和链接：本地文件/目录上传为思源附件并改写链接目标，网络地址不变；文内唯一标题锚点转为 `siyuan://` 块链接。直接传 `markdown` 不会扫描本地文件。需要在指定锚点后插入独立附件时，仍用 `insert_assets`。
 - 编辑已有文档前，先用 `siyuan_read(include_block_ids=true)` 进行引用阅读，并把返回的块序号和块 ID 作为 `siyuan_edit` 定位参数。
 - 不必为了块 ID 本身改变编辑方案；只有被其他块引用的 ID 消失时才会影响用户。
 - `delete`、`multi_block_replace`、`siyuan_create(if_exists=overwrite)` 和整棵文档树删除都会检查即将消失的 ID 是否存在外部块引用、可识别嵌入块或 `siyuan://` 块链接，默认 `reference_policy=reject`。若返回引用冲突，按错误结果附带的语义判断说明重新规划编辑；只有用户明确允许破坏本次报告的引用后，才能用相同参数加 `reference_policy=break` 重试。不得自行使用 `break`。
