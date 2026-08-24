@@ -4,6 +4,17 @@
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
+## 2026-08-22：siyuan_find 搜索文本参数改为 query（v1.7.1）
+
+- 实测 AI 常把搜索文本放在 `query`，而公开 schema 必填的是 `keyword`，触发 `keyword 参数是必填的`。
+- 公开契约改为 `query`；后端继续接受旧参数名 `keyword`。两者同时传入且值不同时拒绝。
+- 缺参报错只提示 `query 参数是必填的`，不向 AI 暴露旧参数名。
+- `mode="keyword"` 仍按 `query` 兼容，不向 schema 暴露。
+- 这是契约纠偏，按 PATCH 从 1.7.0 升到 1.7.1，不升 MINOR。
+- 同步 Skill、ARCHITECTURE、AGENTS 版本规则和相关测试。
+- 第一层：全量测试 328 passed；当前源码 JSON-RPC `tools/list` 为 9 个工具，`siyuan_find.required=["query"]`。
+- 第二层：临时启用 DSH `siyuan-bridge-dev-test`（`python -m source_code.mcp_server`，cwd 当前仓库），load 后当时 serverVersion=1.7.0。`siyuan_start` 连上思源 3.8.1 工作空间「默认」。原先报错调用 `query="Scale-up Scale-out NVLink NVSwitch 网络架构"` 不再缺参，返回空结果；`query="NVLink"` 与 `keyword="NVLink"` 均命中 3 篇；缺参报 `query 参数是必填的`。验证后改回 disabled。
+
 ## 2026-08-21：v1.7.0 markdown_file 导入本地附件
 
 - `siyuan_create` / `siyuan_edit` 的 `markdown_file` 在正文写入后处理标准 Markdown 图片和链接：本地文件/目录交给 `insertLocalAssets`，只替换链接目标；网络地址保持不变；文内唯一标题锚点转为 `siyuan://blocks/<ID>`。

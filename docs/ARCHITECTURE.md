@@ -332,8 +332,8 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 
 当前主搜索是 API-only：
 
-- `keyword/query/regex` 走思源 `/api/search/fullTextSearchBlock`。
-- `sql` 走 `/api/query/sql`。当前代码会把 administrator/privilege 类错误解释为 SQL 权限不足，并提示改用 keyword/query/regex。
+- `query/regex` 走思源 `/api/search/fullTextSearchBlock`。
+- `sql` 走 `/api/query/sql`。当前代码会把 administrator/privilege 类错误解释为 SQL 权限不足，并提示改用 query/regex。
 - 搜索前临时打开目标关闭笔记本，用完恢复。
 - 搜索结果返回前做隐私过滤和元数据补全。
 
@@ -553,8 +553,8 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 
 | 参数                     | 类型            | 默认         | 含义                                          |
 | ------------------------ | --------------- | ------------ | --------------------------------------------- |
-| `keyword`              | string          | 必填         | 搜索语句                                      |
-| `mode`                 | enum            | `query`    | `query` / `regex` / `sql`；旧客户端传 `keyword` 时按 `query` 兼容处理 |
+| `query`                | string          | 必填         | 搜索语句                                      |
+| `mode`                 | enum            | `query`    | `query` / `regex` / `sql`；旧客户端传 `mode="keyword"` 时按 `query` 兼容处理 |
 | `scope`                | enum            | `headings` | `headings` / `full`                       |
 | `notebooks`            | string 或 array | `ALL`      | 限定笔记本 ID                                 |
 | `limit`                | integer         | 20           | 最多文档结果数                                |
@@ -568,7 +568,7 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 | `regex`   | 思源搜索 method 3 | 正则搜索                                               |
 | `sql`     | `query_sql()`   | 高级诊断；当前代码会把 administrator/privilege 类错误解释为思源 SQL 权限不足 |
 
-`keyword` 不再出现在 MCP schema 中。后端暂时接受旧客户端传入的 `mode="keyword"`，并按 `query`（method 1）执行，避免旧 Skill 或旧会话中断；不再调用语义与多词 AND 契约不一致的 method 0。
+公开 schema 的搜索文本参数是 `query`，不暴露 `keyword`。后端仍接受旧客户端传入的 `keyword` 作为 `query` 别名；两者同时传入且值不同时拒绝。旧客户端传入 `mode="keyword"` 时按 `query`（method 1）执行，避免旧 Skill 或旧会话中断；不再调用语义与多词 AND 契约不一致的 method 0。
 
 scope：
 

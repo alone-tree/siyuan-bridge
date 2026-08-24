@@ -533,9 +533,13 @@ class McpServerTests(unittest.TestCase):
 
     def test_find_tool_spec_exposes_query_as_default_without_keyword_mode(self):
         spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_find")
-        mode = spec["inputSchema"]["properties"]["mode"]
+        properties = spec["inputSchema"]["properties"]
+        mode = properties["mode"]
         self.assertEqual(mode["default"], "query")
         self.assertEqual(mode["enum"], ["query", "regex", "sql"])
+        self.assertIn("query", properties)
+        self.assertNotIn("keyword", properties)
+        self.assertEqual(spec["inputSchema"]["required"], ["query"])
 
     def test_edit_tool_spec_exposes_insert_assets_name_and_title_semantics(self):
         spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_edit")
@@ -834,7 +838,7 @@ class McpServerTests(unittest.TestCase):
                 "path": "/doc1.sy",
             }
         ])
-        output = self.run_find(client, {"keyword": "机器人", "scope": "full", "notebooks": "nb1"})
+        output = self.run_find(client, {"query": "机器人", "scope": "full", "notebooks": "nb1"})
 
         self.assertIn("doc1", output)
         self.assertIn("正文里有机器人这个词", output)
@@ -851,6 +855,34 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("（full，query）", output)
         self.assertEqual(client.seen_payloads[0]["query"], "MCP 测试")
         self.assertEqual(client.seen_payloads[0]["method"], 1)
+
+    def test_find_documents_accepts_keyword_parameter_as_query_alias(self):
+        client = FakeSearchClient([])
+        output = self.run_find(client, {"keyword": "MCP 测试", "scope": "full"})
+
+        self.assertIn("未找到匹配的可见文档", output)
+        self.assertEqual(client.seen_payloads[0]["query"], "MCP 测试")
+
+    def test_find_documents_accepts_matching_query_and_keyword(self):
+        client = FakeSearchClient([])
+        output = self.run_find(client, {"query": "MCP 测试", "keyword": "MCP 测试", "scope": "full"})
+
+        self.assertIn("未找到匹配的可见文档", output)
+        self.assertEqual(client.seen_payloads[0]["query"], "MCP 测试")
+
+    def test_find_documents_rejects_mismatched_query_and_keyword(self):
+        client = FakeSearchClient([])
+        with self.assertRaises(ValueError) as ctx:
+            self.run_find(client, {"query": "MCP", "keyword": "测试", "scope": "full"})
+        self.assertIn("query 与 keyword 不能同时传入不同值", str(ctx.exception))
+        self.assertEqual(client.seen_payloads, [])
+
+    def test_find_documents_requires_query_or_keyword_alias(self):
+        client = FakeSearchClient([])
+        with self.assertRaises(ValueError) as ctx:
+            self.run_find(client, {"scope": "full"})
+        self.assertIn("query 参数是必填的", str(ctx.exception))
+        self.assertEqual(client.seen_payloads, [])
 
     def test_find_documents_keeps_all_matching_blocks_per_document(self):
         client = FakeSearchClient([
@@ -875,7 +907,7 @@ class McpServerTests(unittest.TestCase):
                 "path": "/doc1.sy",
             },
         ])
-        output = self.run_find(client, {"keyword": "密匙", "mode": "keyword", "scope": "full", "notebooks": "nb1"})
+        output = self.run_find(client, {"query": "密匙", "scope": "full", "notebooks": "nb1"})
 
         self.assertIn("block1", output)
         self.assertIn("block2", output)
@@ -898,7 +930,7 @@ class McpServerTests(unittest.TestCase):
                 "path": "/doc1.sy",
             })
         client = FakeSearchClient(blocks)
-        output = self.run_find(client, {"keyword": "密匙", "mode": "keyword", "scope": "full", "notebooks": "nb1"})
+        output = self.run_find(client, {"query": "密匙", "scope": "full", "notebooks": "nb1"})
 
         self.assertIn("命中块：共 6 个，展示前 5 个。", output)
         self.assertIn("block5", output)
@@ -920,8 +952,7 @@ class McpServerTests(unittest.TestCase):
             })
         client = FakeSearchClient(blocks)
         output = self.run_find(client, {
-            "keyword": "密匙",
-            "mode": "keyword",
+            "query": "密匙",
             "scope": "full",
             "notebooks": "nb1",
             "max_snippets_per_doc": 6,
@@ -947,7 +978,7 @@ class McpServerTests(unittest.TestCase):
                 "path": "/doc2.sy",
             }
         ])
-        output = self.run_find(client, {"keyword": "机器人", "mode": "keyword", "scope": "full", "notebooks": "nb1"})
+        output = self.run_find(client, {"query": "机器人", "scope": "full", "notebooks": "nb1"})
 
         self.assertIn("未找到匹配的可见文档", output)
         self.assertNotIn("doc2", output)
@@ -969,7 +1000,7 @@ class McpServerTests(unittest.TestCase):
                 "path": "/doc1/doc3.sy",
             }
         ])
-        output = self.run_find(client, {"keyword": "密匙", "mode": "keyword", "scope": "full", "notebooks": "nb1"})
+        output = self.run_find(client, {"query": "密匙", "scope": "full", "notebooks": "nb1"})
 
         self.assertIn("未找到匹配的可见文档", output)
         self.assertNotIn("doc3", output)
@@ -991,7 +1022,7 @@ class McpServerTests(unittest.TestCase):
                 "path": "/doc1.sy",
             }
         ])
-        output = self.run_find(client, {"keyword": "机器人", "mode": "keyword", "scope": "full", "notebooks": "nb1"})
+        output = self.run_find(client, {"query": "机器人", "scope": "full", "notebooks": "nb1"})
 
         self.assertIn("未找到匹配的可见文档", output)
         self.assertNotIn("doc1", output)
@@ -1009,7 +1040,7 @@ class McpServerTests(unittest.TestCase):
                 "path": "/doc1.sy",
             }
         ], closed=True)
-        output = self.run_find(client, {"keyword": "机器人", "mode": "keyword", "scope": "full", "notebooks": "nb1"})
+        output = self.run_find(client, {"query": "机器人", "scope": "full", "notebooks": "nb1"})
 
         self.assertIn("doc1", output)
         self.assertEqual(client.opened, ["nb1"])

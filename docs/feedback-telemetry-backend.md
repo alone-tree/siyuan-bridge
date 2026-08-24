@@ -251,7 +251,7 @@ Worker 端点**无需认证**——所有 3 个 API 均为公开访问。
 
 | error_type | 触发场景 |
 |------------|----------|
-| `validation:missing_param` | 必填参数为空（keyword / title / markdown / document / action / new_title / target_parent / target_path / table_edit 对象等） |
+| `validation:missing_param` | 必填参数为空（query / title / markdown / document / action / new_title / target_parent / target_path / table_edit 对象等） |
 | `validation:invalid_enum` | 枚举参数取值不在允许列表中（mode / scope / if_exists / action / type / table_edit.operation 等） |
 | `validation:invalid_type` | 参数类型错误（start_index 非整数、cell 非对象、cells 非数组、values 非数组） |
 | `validation:out_of_range` | 数值越界（row / column_index / block 索引超出范围） |

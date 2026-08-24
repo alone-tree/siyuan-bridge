@@ -2470,9 +2470,16 @@ class McpServer:
         return notebook_id
 
     def siyuan_find(self, args: dict[str, Any]) -> str:
-        keyword = str(args.get("keyword") or "").strip()
-        if not keyword:
-            raise tool_error(_ERR_MISSING_PARAM, "keyword 参数是必填的")
+        query = str(args.get("query") or "").strip()
+        keyword_alias = str(args.get("keyword") or "").strip()
+        if query and keyword_alias and query != keyword_alias:
+            raise tool_error(
+                _ERR_MISMATCH,
+                "query 与 keyword 不能同时传入不同值。请只传 query；keyword 仅作为旧参数名兼容。",
+            )
+        query = query or keyword_alias
+        if not query:
+            raise tool_error(_ERR_MISSING_PARAM, "query 参数是必填的")
 
         mode = str(args.get("mode") or "query").strip().casefold()
         if mode not in ("keyword", "query", "regex", "sql"):
@@ -2508,10 +2515,10 @@ class McpServer:
             notebook_names.update(list_live_notebook_names(client))
             try:
                 with ensure_notebooks_open(client, notebooks):
-                    rows = client.query_sql(keyword)
+                    rows = client.query_sql(query)
             except SiYuanApiError as exc:
                 if "administrator" in str(exc).casefold() or "privilege" in str(exc).casefold():
-                    raise tool_error(_ERR_SQL_ADMIN, "SQL 搜索需要思源管理员权限，请改用 keyword、query 或 regex 模式。") from exc
+                    raise tool_error(_ERR_SQL_ADMIN, "SQL 搜索需要思源管理员权限，请改用 query 或 regex 模式。") from exc
                 raise
             enriched = self._enrich_sql_results(rows, indexed_docs, notebook_names, privacy, notebooks)
         else:
@@ -2522,24 +2529,24 @@ class McpServer:
             with ensure_notebooks_open(client, notebooks):
                 data = search_content(
                     client,
-                    keyword,
+                    query,
                     method=api_method,
                     scope=scope,
                     notebooks=notebooks,
                     limit=limit,
                 )
             blocks: list[dict[str, Any]] = data.get("blocks", [])
-            keywords = search_terms(keyword, mode)
+            keywords = search_terms(query, mode)
             enriched = self._enrich_search_blocks(blocks, indexed_docs, notebook_names, privacy, keywords, notebooks)
 
         if not enriched:
-            return f"# 搜索：\"{keyword}\"（{scope}，{mode}）\n\n未找到匹配的可见文档。"
+            return f"# 搜索：\"{query}\"（{scope}，{mode}）\n\n未找到匹配的可见文档。"
 
         enriched = enriched[:limit]
         grouped = self._group_by_notebook(enriched)
 
         scope_label = "标题" if scope == "headings" else "全文"
-        lines = [f"# 搜索：\"{keyword}\"（{scope_label}，{mode}，{len(enriched)} 条结果，{len(grouped)} 个笔记本）", ""]
+        lines = [f"# 搜索：\"{query}\"（{scope_label}，{mode}，{len(enriched)} 条结果，{len(grouped)} 个笔记本）", ""]
 
         remaining = limit
         for nb_name in sorted(grouped, key=str.casefold):
@@ -4432,18 +4439,18 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_find",
-            "description": "Search the SiYuan knowledge base through SiYuan search APIs, then apply privacy rules before returning results. Temporarily opens closed notebooks while searching and restores them afterwards. Supports 3 modes: query (space-separated terms use AND logic by default; also supports explicit AND/OR/NOT, phrases, and prefix*), regex, and sql (direct SQL, requires admin). Scope: headings (document titles + headings, default) or full (all block text).",
+            "description": "Search the SiYuan knowledge base through SiYuan search APIs, then apply privacy rules before returning results. Temporarily opens closed notebooks while searching and restores them afterwards. Supports 3 modes: query (space-separated terms use AND logic by default; also supports explicit AND/OR/NOT, phrases, and prefix*), regex, and sql (direct SQL, requires admin). Scope: headings (document titles + headings, default) or full (all block text). The search text parameter is query.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "keyword": {"type": "string", "description": "Search query. For query mode: space-separated terms use AND logic by default; explicit AND/OR/NOT, quoted phrases, and prefix* are supported. For regex mode: Go RE2 regex. For sql mode: raw SQL statement."},
+                    "query": {"type": "string", "description": "Search text. For query mode: space-separated terms use AND logic by default; explicit AND/OR/NOT, quoted phrases, and prefix* are supported. For regex mode: Go RE2 regex. For sql mode: raw SQL statement."},
                     "mode": {"type": "string", "enum": ["query", "regex", "sql"], "default": "query", "description": "Search mode. Defaults to query."},
                     "scope": {"type": "string", "enum": ["headings", "full"], "default": "headings", "description": "headings = document titles and outline headings only. full = all block content."},
                     "notebooks": {"description": "Notebook ID or list of IDs to scope the search. 'ALL' (default) searches all notebooks."},
                     "limit": {"type": "integer", "default": 20, "description": "Maximum document results."},
                     "max_snippets_per_doc": {"type": "integer", "default": DEFAULT_SNIPPETS_PER_DOC, "description": "Maximum matching blocks to display per document. The result still reports the total matching block count."},
                 },
-                "required": ["keyword"],
+                "required": ["query"],
                 "additionalProperties": False,
             },
         },

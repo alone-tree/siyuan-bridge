@@ -44,7 +44,7 @@ CodeGraph 的退回顺序固定为：
 |---|---|---|
 | MCP 工具名称、schema、参数、返回格式、权限边界 | `docs/ARCHITECTURE.md` 的 “MCP 工具总览” 和各工具章节；`docs/DEVELOPMENT_GUIDE.md` 的 “修改工具面时必须同步” | `source_code/mcp_server.py` 的实现和 `tool_specs()`；`plugins/siyuan-bridge/skills/siyuan-bridge/SKILL.md`；`README.md`；相关测试 |
 | `siyuan_create`、`siyuan_edit`、`siyuan_doc_manage` 写入行为 | `docs/ARCHITECTURE.md` 的 “写入模型”、对应工具章节；`docs/DEVELOPMENT_GUIDE.md` 的 “修改写入模型时必须验证” 和 “修改文档管理时必须验证” | `source_code/mcp_server.py`；`source_code/client.py`；`tests/test_mcp_server.py`；`tests/test_client.py` |
-| 附件/图片/文件夹插入（尚未实现） | `docs/ASSET_INSERTION_PLAN.md`；实现前重新核对思源当前源码/API | `source_code/mcp_server.py`；`source_code/client.py`；相关测试 |
+| 附件/图片/文件夹插入与 Markdown 引用附件导入 | `docs/ASSET_INSERTION_PLAN.md`；`docs/Markdown附件导入方案-2026-08-17.md`；实现前重新核对思源当前源码/API | `source_code/mcp_server.py`；`source_code/client.py`；相关测试 |
 | 隐私、权限、系统笔记本、Privacy Rules | `docs/ARCHITECTURE.md` 的 “系统笔记本””隐私与权限模型”；`docs/DEVELOPMENT_GUIDE.md` 的 “修改隐私模型时必须验证” | `source_code/ignore.py`；`source_code/agent_notebook.py`；`source_code/indexer.py`；相关测试 |
 | 索引、列表、搜索、读取、附件、块窗口 | `docs/ARCHITECTURE.md` 的 “索引模型””搜索模型””阅读模型”；`docs/DEVELOPMENT_GUIDE.md` 的 “修改读取模型时必须验证” | `source_code/indexer.py`；`source_code/mcp_server.py`；`source_code/client.py`；相关测试 |
 | 思源底层 API 封装 | `docs/思源API.md`；`docs/ARCHITECTURE.md` 的 “底层 API 封装策略” | `source_code/client.py`；`tests/test_client.py` |
@@ -198,6 +198,8 @@ python scripts/import_siyuan_plugin.py --workspace D:/Siyuan2test --fresh
 ### 1. Bump 版本号
 
 两个文件：`source_code/__init__.py`（`__version__`）和 `siyuan-plugin/plugin.json`（`"version"`）。
+
+semver：`MAJOR.MINOR.PATCH`。功能新增升 MINOR（y+1，PATCH 归零）；缺陷修复、兼容别名、报错文案、参数名纠偏升 PATCH（z+1）。不要把小补丁升成 MINOR。详细规则见 `docs/DEVELOPMENT_GUIDE.md` 的“版本号管理”。
 
 ### 2. 构建 + 提交 + 打 tag
 
