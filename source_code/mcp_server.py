@@ -505,6 +505,22 @@ def _escape_markdown_title(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+_ASSET_INSERT_EXAMPLE = (
+    '{"action":"insert_assets","start_index":59,"start_id":"块ID",'
+    '"assets":[{"local_path":"C:\\\\\\path\\\\image.png",'
+    '"name":"可选显示名","title":"可选标题"}],"confirmed":true}'
+)
+
+
+def _asset_parameter_error(parameter: str) -> ValueError:
+    return tool_error(
+        _ERR_INVALID_TYPE,
+        f"{parameter} 参数无效。action=insert_assets 的正确格式示例："
+        f"{_ASSET_INSERT_EXAMPLE}。assets 数组项必须是对象，必须使用 local_path；"
+        "不要使用 asset_paths 或 path。",
+    )
+
+
 def _markdown_destination(value: str) -> str:
     if any(char.isspace() for char in value) or any(char in value for char in ("(", ")")):
         return f"<{value.replace('<', '%3C').replace('>', '%3E')}>"
@@ -527,10 +543,24 @@ def preflight_asset_items(raw_assets: Any) -> list[AssetInsertionItem]:
     basename_sources: dict[str, list[str]] = {}
     for index, raw_item in enumerate(raw_assets, start=1):
         if not isinstance(raw_item, dict):
-            raise tool_error(_ERR_INVALID_TYPE, f"assets[{index}] 必须是对象。")
+            raise tool_error(
+                _ERR_INVALID_TYPE,
+                f"assets[{index}] 参数无效：必须是对象，不能直接传路径字符串。"
+                f"正确格式示例：{_ASSET_INSERT_EXAMPLE}。",
+            )
+        unsupported = [
+            str(key) for key in raw_item
+            if str(key) not in {"local_path", "name", "title"}
+        ]
+        if unsupported:
+            raise _asset_parameter_error(", ".join(unsupported))
         for field in ("local_path", "name", "title"):
             if raw_item.get(field) is not None and not isinstance(raw_item.get(field), str):
-                raise tool_error(_ERR_INVALID_TYPE, f"assets[{index}].{field} 必须是字符串。")
+                raise tool_error(
+                    _ERR_INVALID_TYPE,
+                    f"assets[{index}].{field} 参数无效：必须是字符串。"
+                    f"正确格式示例：{_ASSET_INSERT_EXAMPLE}。",
+                )
         local_path = str(raw_item.get("local_path") or "").strip()
         if not local_path:
             raise tool_error(_ERR_MISSING_PARAM, f"assets[{index}].local_path 是必填的。")
@@ -3367,6 +3397,17 @@ class McpServer:
                 "action 只支持 single_block_replace、multi_block_replace、"
                 "insert_after、insert_before、append、delete、table_edit、insert_assets。"
             )
+        if action == "insert_assets":
+            supported_parameters = {
+                "document", "document_id", "action", "start_index", "start_id",
+                "end_index", "end_id", "assets", "upload_large_files", "confirmed",
+            }
+            unsupported_parameters = [
+                str(key) for key in args
+                if str(key) not in supported_parameters
+            ]
+            if unsupported_parameters:
+                raise _asset_parameter_error(", ".join(unsupported_parameters))
 
         doc = self.resolve_visible_document(args)
         doc_id = str(doc.get("id", ""))
@@ -4491,7 +4532,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_edit",
-            "description": "Edit a visible SiYuan document by document path plus reference-read block index and block ID. Requires confirmed=true and creates a SiYuan workspace snapshot before writing. Use siyuan_read(include_block_ids=true) first to get start_index/start_id. Actions: single_block_replace = one existing block -> one block, uses updateBlock, preserves the target block ID and block attrs, so existing block references stay valid. multi_block_replace = one or more existing blocks -> one or more new blocks, inserts new markdown then deletes old blocks, so old block IDs/attrs are not preserved. multi_block_replace and delete check backlinks for every disappearing block ID and refuse by default. insert_after/insert_before do not modify the anchor block. append adds to document end. table_edit edits one normal Markdown table block. insert_assets uploads one or more local files/folders through SiYuan's native asset API and inserts their links after one anchor. For actions that take markdown, pass markdown_file (an absolute path) instead of markdown to import a local Markdown file's content; markdown and markdown_file are mutually exclusive. After writing, local standard Markdown image/file/directory links in the newly written blocks are uploaded through SiYuan's native asset API and rewritten; unique in-document heading anchors become siyuan:// block links.",
+            "description": "Edit a visible SiYuan document using block coordinates from siyuan_read(include_block_ids=true); requires confirmed=true. For action=insert_assets, pass assets as an array of objects with required local_path (optional name/title), not asset_paths or path. Other actions use markdown or markdown_file as documented by the schema.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -4508,7 +4549,7 @@ def tool_specs() -> list[dict[str, Any]]:
                     "assets": {
                         "type": "array",
                         "minItems": 1,
-                        "description": "Required for action=insert_assets. Every item is inserted after the same start_index/start_id anchor, in array order. Duplicate base filenames in one batch are rejected; split them into separate calls.",
+                        "description": "仅 action=insert_assets 使用：数组项必须是 {local_path, name?, title?} 对象；每项按顺序插在同一锚点后。不要传 asset_paths 或 path。",
                         "items": {
                             "type": "object",
                             "properties": {

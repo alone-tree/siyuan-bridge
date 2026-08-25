@@ -550,6 +550,35 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("Visible body name", asset_properties["name"]["description"])
         self.assertIn("caption below the image", asset_properties["title"]["description"])
         self.assertEqual(properties["assets"]["items"]["required"], ["local_path"])
+        self.assertIn("asset_paths", spec["description"])
+        self.assertIn("local_path", properties["assets"]["description"])
+
+    def test_insert_assets_rejects_unsupported_top_level_parameter_with_example(self):
+        server = mcp_server.McpServer(self.root)
+        with self.assertRaises(ValueError) as ctx:
+            server.siyuan_edit({
+                "action": "insert_assets",
+                "asset_paths": [r"C:\\image.png"],
+                "confirmed": True,
+            })
+        message = str(ctx.exception)
+        self.assertIn("asset_paths 参数无效", message)
+        self.assertIn('"assets":[{"local_path"', message)
+        self.assertIn("不要使用 asset_paths 或 path", message)
+
+    def test_insert_assets_rejects_unsupported_item_parameter_with_example(self):
+        with self.assertRaises(ValueError) as ctx:
+            mcp_server.preflight_asset_items([{"path": r"C:\\image.png"}])
+        message = str(ctx.exception)
+        self.assertIn("path 参数无效", message)
+        self.assertIn('"assets":[{"local_path"', message)
+
+    def test_insert_assets_rejects_string_item_with_example(self):
+        with self.assertRaises(ValueError) as ctx:
+            mcp_server.preflight_asset_items([r"C:\\image.png"])
+        message = str(ctx.exception)
+        self.assertIn("assets[1] 参数无效", message)
+        self.assertIn('"assets":[{"local_path"', message)
 
     def test_render_asset_markdown_escapes_labels_titles_and_spaced_destinations(self):
         item = mcp_server.AssetInsertionItem(
