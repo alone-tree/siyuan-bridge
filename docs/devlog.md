@@ -2,11 +2,14 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
-## 2026-08-24：增强 insert_assets 参数错误提示
+## 2026-08-24：增强 insert_assets 参数错误提示（v1.7.2）
 
 - 工具描述简要明确 `assets` 必须是包含 `local_path` 的对象数组，并排除 `asset_paths` / `path`。
 - `insert_assets` 收到不支持的顶层参数或资产项字段时，报错会指出无效参数，并给出完整正确调用示例。
 - 资产数组项传入字符串或字段类型错误时，同样返回完整示例，减少 AI 连续猜测参数名和结构。
+- 这是参数提示与报错体验修复，按 PATCH 从 1.7.1 升到 1.7.2。
+- 第一层：定向测试 194 passed；全量测试 331 passed、3 warnings；Python compileall 与 `git diff --check` 通过。
+- 第二层：临时启用 DSH `siyuan-bridge-dev-test`，确认当前源码 `serverVersion=1.7.1`，`siyuan_start` 成功；真实调用验证 `asset_paths`、字符串数组项和 `path` 均能指出无效参数并返回完整示例。验证后已禁用临时 MCP；未修改思源内容。
 
 该文档应该把最新内容放在最上，不要放到最下面，AI读不到。
 
