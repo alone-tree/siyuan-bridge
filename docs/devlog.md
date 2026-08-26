@@ -2,6 +2,15 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-08-26：明确 siyuan_find 多词查询的 AND 语义
+
+- `siyuan_find` 工具描述和 `query` 参数描述明确采用思源原生查询语法：空格表示 AND，探索相关概念时显式使用 OR。
+- `query` 模式的简单多词查询无论是否命中，均在结果末尾显示本次查询等价的显式 AND 表达式，并给出固定 OR 示例。
+- 显式 AND/OR/NOT、引号、括号以及 regex/sql 模式不追加提示。
+- 第一层：`tests/test_mcp_server.py` 198 passed；全量测试 335 passed、3 warnings；Python compileall 与 `git diff --check` 通过。
+- 第二层：临时注册 DSH `siyuan-bridge-dev-test`，确认工具描述已更新；真实调用验证 `GPU 光模块` 有结果时追加等价 AND 提示，`GPU OR 光模块` 不提示，简单多词无结果时仍提示。
+- 第三层：子代理通过同一开发版 MCP 复验上述三种场景，确认提示语义清楚且未使用生产版；验证过程只读，未修改思源内容。
+
 ## 2026-08-24：增强 insert_assets 参数错误提示（v1.7.2）
 
 - 工具描述简要明确 `assets` 必须是包含 `local_path` 的对象数组，并排除 `asset_paths` / `path`。

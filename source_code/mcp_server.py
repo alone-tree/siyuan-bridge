@@ -2569,8 +2569,10 @@ class McpServer:
             keywords = search_terms(query, mode)
             enriched = self._enrich_search_blocks(blocks, indexed_docs, notebook_names, privacy, keywords, notebooks)
 
+        query_syntax_hint = simple_query_syntax_hint(query) if mode == "query" else ""
         if not enriched:
-            return f"# 搜索：\"{query}\"（{scope}，{mode}）\n\n未找到匹配的可见文档。"
+            output = f"# 搜索：\"{query}\"（{scope}，{mode}）\n\n未找到匹配的可见文档。"
+            return output + query_syntax_hint
 
         enriched = enriched[:limit]
         grouped = self._group_by_notebook(enriched)
@@ -2613,7 +2615,7 @@ class McpServer:
             if remaining <= 0:
                 break
 
-        return "\n".join(lines)
+        return "\n".join(lines) + query_syntax_hint
 
     def _enrich_search_blocks(
         self,
@@ -4364,6 +4366,23 @@ def local_search_text(doc: dict[str, Any]) -> str:
     ])
 
 
+def simple_query_syntax_hint(query: str) -> str:
+    """Explain SiYuan's implicit AND only for plain whitespace-separated terms."""
+    if not re.search(r"\s", query):
+        return ""
+    if re.search(r'"|[()]|\b(?:AND|OR|NOT)\b', query, flags=re.IGNORECASE):
+        return ""
+    terms = query.split()
+    if len(terms) < 2:
+        return ""
+    implicit_and = " AND ".join(terms)
+    return (
+        "\n\n提示：query 模式中，空格表示 AND；"
+        f"`{query}` 等价于 `{implicit_and}`。"
+        "如需匹配任意一个词，请显式使用 OR，例如：`word1 OR word2`。"
+    )
+
+
 def search_terms(query: str, mode: str) -> list[str]:
     if mode == "regex":
         return [query]
@@ -4480,11 +4499,11 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_find",
-            "description": "Search the SiYuan knowledge base through SiYuan search APIs, then apply privacy rules before returning results. Temporarily opens closed notebooks while searching and restores them afterwards. Supports 3 modes: query (space-separated terms use AND logic by default; also supports explicit AND/OR/NOT, phrases, and prefix*), regex, and sql (direct SQL, requires admin). Scope: headings (document titles + headings, default) or full (all block text). The search text parameter is query.",
+            "description": "Search visible SiYuan notes using SiYuan's native query syntax, regex, or SQL, then apply privacy filtering. In query mode, whitespace means AND; use explicit OR for exploratory searches or related concepts.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search text. For query mode: space-separated terms use AND logic by default; explicit AND/OR/NOT, quoted phrases, and prefix* are supported. For regex mode: Go RE2 regex. For sql mode: raw SQL statement."},
+                    "query": {"type": "string", "description": "Search expression. In query mode, SiYuan treats whitespace as AND: 'GPU optical' = 'GPU AND optical'. Use explicit OR for related concepts or exploratory retrieval: 'GPU OR optical OR NVLink'. Supports AND, OR, NOT, parentheses, quoted phrases, and prefix*. Regex mode accepts Go RE2; SQL mode accepts a raw SQL statement."},
                     "mode": {"type": "string", "enum": ["query", "regex", "sql"], "default": "query", "description": "Search mode. Defaults to query."},
                     "scope": {"type": "string", "enum": ["headings", "full"], "default": "headings", "description": "headings = document titles and outline headings only. full = all block content."},
                     "notebooks": {"description": "Notebook ID or list of IDs to scope the search. 'ALL' (default) searches all notebooks."},

@@ -540,6 +540,9 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("query", properties)
         self.assertNotIn("keyword", properties)
         self.assertEqual(spec["inputSchema"]["required"], ["query"])
+        self.assertIn("whitespace means AND", spec["description"])
+        self.assertIn("GPU AND optical", properties["query"]["description"])
+        self.assertIn("GPU OR optical OR NVLink", properties["query"]["description"])
 
     def test_edit_tool_spec_exposes_insert_assets_name_and_title_semantics(self):
         spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_edit")
@@ -875,6 +878,45 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(client.seen_payloads[0]["paths"], ["nb1"])
         self.assertEqual(client.seen_payloads[0]["group_by"], 0)
         self.assertEqual(client.seen_payloads[0]["method"], 1)
+
+    def test_find_documents_plain_multi_term_query_adds_implicit_and_hint_with_results(self):
+        client = FakeSearchClient([
+            {
+                "id": "block1",
+                "rootID": "doc1",
+                "box": "nb1",
+                "type": "NodeParagraph",
+                "markdown": "GPU 与光模块同时出现。",
+                "content": "GPU 与光模块同时出现。",
+                "hPath": "/Projects/Doc One",
+                "path": "/doc1.sy",
+            }
+        ])
+        output = self.run_find(client, {"query": "GPU 光模块", "scope": "full"})
+
+        self.assertIn("doc1", output)
+        self.assertIn("`GPU 光模块` 等价于 `GPU AND 光模块`", output)
+        self.assertIn("`word1 OR word2`", output)
+
+    def test_find_documents_plain_multi_term_query_adds_implicit_and_hint_without_results(self):
+        output = self.run_find(FakeSearchClient([]), {"query": "GPU 光模块", "scope": "full"})
+
+        self.assertIn("未找到匹配的可见文档", output)
+        self.assertIn("`GPU 光模块` 等价于 `GPU AND 光模块`", output)
+
+    def test_find_documents_does_not_add_implicit_and_hint_for_explicit_or(self):
+        output = self.run_find(FakeSearchClient([]), {"query": "GPU OR 光模块", "scope": "full"})
+
+        self.assertNotIn("空格表示 AND", output)
+
+    def test_find_documents_does_not_add_implicit_and_hint_for_phrase_regex_or_sql(self):
+        phrase = self.run_find(FakeSearchClient([]), {"query": '"GPU 光模块"', "scope": "full"})
+        regex = self.run_find(FakeSearchClient([]), {"query": "GPU 光模块", "mode": "regex", "scope": "full"})
+        sql = self.run_find(FakeSearchClient([]), {"query": "SELECT * FROM blocks", "mode": "sql", "scope": "full"})
+
+        self.assertNotIn("空格表示 AND", phrase)
+        self.assertNotIn("空格表示 AND", regex)
+        self.assertNotIn("空格表示 AND", sql)
 
     def test_find_documents_accepts_keyword_as_query_compatibility_alias(self):
         client = FakeSearchClient([])

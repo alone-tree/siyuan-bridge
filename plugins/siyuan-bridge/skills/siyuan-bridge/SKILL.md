@@ -32,7 +32,7 @@ description: Use when the user wants to read, search, or write their private SiY
 ## Tool Use Hints
 
 - `siyuan_start` —— 始终最先调用。返回运行状态、MCP Usage Guide、User Preferences、笔记本概览和 Workspace Index。
-- `siyuan_find` —— 搜索知识库，通过思源 API 实时搜索后经隐私规则过滤返回结果。搜索文本参数是 `query`。默认 `mode=query`，空格分隔的多个词按 AND 处理；需要模式匹配或结构化查询时再使用 `regex` / `sql`。
+- `siyuan_find` —— 搜索知识库，通过思源 API 实时搜索后经隐私规则过滤返回结果。搜索文本参数是 `query`。默认 `mode=query`，使用思源原生查询语法：空格表示 AND；探索主题、近义词或相关概念时显式使用 OR，例如 `GPU OR 光模块 OR NVLink`。需要模式匹配或结构化查询时再使用 `regex` / `sql`。
 - `siyuan_read` —— 只读取可见文档；隐藏文档和隐私规则文档即使已知 ID 也不会被读取。
 - `siyuan_read` / `siyuan_edit` / `siyuan_doc_manage` 使用路径定位时会校验思源当前真实路径。若提示路径已过期，先调用 `siyuan_operate(action="refresh")`，再用当前真实路径重试；或改用 `document_id`。
 - `siyuan_list` —— 无参数或 `path="/"` 时列出可见笔记本；其他路径列出直接子文档及有效权限。`read_write` 可写，`read_only` 只能读取、复制或导出；隐私规则文档和隐藏内容不会出现在列表中。
