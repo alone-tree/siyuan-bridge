@@ -23,7 +23,7 @@ AGENTS.md文件是入口导航，不替代架构文档和开发指南。它告�
 
 不允许只读开头，不允许只 grep 局部，不允许跳过中间或后半段。没有完整阅读这三份文档，不准开始修改代码。
 
-读完三份必读文档后，按任务类型追加阅读下面的对应入口。
+读完三份必读文档后，按任务类型追加阅读下面的对应入口。修改 MCP 工具描述、参数说明、enum 顺序或面向 AI 的报错文案前，还必须完整阅读 `docs/DEVELOPMENT_GUIDE.md` 的「编写 MCP 工具描述」；没读完不准改 `tool_specs()`。
 
 ## CodeGraph 使用要求
 
@@ -43,6 +43,7 @@ CodeGraph 的退回顺序固定为：
 | 任务类型 | 先读文档 | 再看代码/材料 |
 |---|---|---|
 | MCP 工具名称、schema、参数、返回格式、权限边界 | `docs/ARCHITECTURE.md` 的 “MCP 工具总览” 和各工具章节；`docs/DEVELOPMENT_GUIDE.md` 的 “修改工具面时必须同步” | `source_code/mcp_server.py` 的实现和 `tool_specs()`；`plugins/siyuan-bridge/skills/siyuan-bridge/SKILL.md`；`README.md`；相关测试 |
+| MCP 工具描述、参数说明、enum 顺序、报错文案 | `docs/DEVELOPMENT_GUIDE.md` 的 “编写 MCP 工具描述”（必读全文）；`docs/ARCHITECTURE.md` 对应工具章节 | `tool_specs()`；Skill；相关测试 |
 | `siyuan_create`、`siyuan_edit`、`siyuan_doc_manage` 写入行为 | `docs/ARCHITECTURE.md` 的 “写入模型”、对应工具章节；`docs/DEVELOPMENT_GUIDE.md` 的 “修改写入模型时必须验证” 和 “修改文档管理时必须验证” | `source_code/mcp_server.py`；`source_code/client.py`；`tests/test_mcp_server.py`；`tests/test_client.py` |
 | 附件/图片/文件夹插入与 Markdown 引用附件导入 | `docs/ASSET_INSERTION_PLAN.md`；`docs/Markdown附件导入方案-2026-08-17.md`；实现前重新核对思源当前源码/API | `source_code/mcp_server.py`；`source_code/client.py`；相关测试 |
 | 隐私、权限、系统笔记本、Privacy Rules | `docs/ARCHITECTURE.md` 的 “系统笔记本””隐私与权限模型”；`docs/DEVELOPMENT_GUIDE.md` 的 “修改隐私模型时必须验证” | `source_code/ignore.py`；`source_code/agent_notebook.py`；`source_code/indexer.py`；相关测试 |

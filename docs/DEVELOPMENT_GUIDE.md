@@ -53,7 +53,7 @@
 修改归属：
 
 - 当前架构、工具契约、数据流、设计取舍、已确认债务：`ARCHITECTURE.md`；整体架构大改时同步 `architecture-map.html`。
-- 开发流程、验证规则、文档维护规则：`DEVELOPMENT_GUIDE.md`。
+- 开发流程、验证规则、文档维护规则、MCP 工具描述写法：`DEVELOPMENT_GUIDE.md`。
 - 插件前端细节和踩坑：`FRONTEND.md`。
 - 未承诺 idea：`IDEAS.md`，每条尽量 1-5 行。
 - 工程过程、排障记录、验证结果：`devlog.md`，新记录放最前。
@@ -81,6 +81,181 @@
 - `docs/devlog.md`，记录实现过程和验证结果
 
 不能只改实现，不改 schema。AI 客户端看到的是 `tool_specs()`，Skill 和 README 决定 AI 怎么调用。
+
+修改 `tool_specs()` 的 description、参数说明、enum 顺序或面向 AI 的报错文案前，必须完整阅读下一节「编写 MCP 工具描述」。
+
+## 编写 MCP 工具描述
+
+工具描述是 AI 的第一调用界面。写错会导致错误的第一次调用；报错再纠正也浪费一轮。改任何工具描述前先读本节全文，再对照 `docs/ARCHITECTURE.md` 该工具的完整契约，不要只补最近踩到的那一句。
+
+### 分层
+
+| 层 | 写什么 | 不写什么 |
+|---|---|---|
+| 工具总描述 | 总体概括工具的核心功能 | 单个参数的长说明、兼容旧名、完整语法教程 |
+| 参数描述 | 只解释这一个参数：默认选项、何时用、何时不用 | 把别的参数或整个工具再讲一遍 |
+| Skill | 调用决策（什么意图用什么参数） | 重复 schema 全文 |
+| 报错 | 指出无效点，并给出完整正确示例 | 暴露兼容旧参数名 |
+
+同一事实只出现在最合适的一层。总描述、`action`、`markdown` 不要各写一遍「default vs single」。
+
+整个工具的描述应当使用同一种语言，不要中英夹杂。
+
+### 原则
+
+1. **默认路径写在最前。** enum 第一项应是默认动作。特例写成「仅当…才用」。
+2. **不要把最近的修补堆进总描述。** 改一处问题就先看总描述是否还覆盖该工具的全部主路径。
+3. **不对等的能力不要写成对等二选一。** 例如新写正文默认 `markdown`；`markdown_file` 只导入已有本地文件。
+4. **兼容别名对 AI 不可见。** 公开 schema、工具描述、Skill、返回值和报错都不出现旧名；后端静默接受即可。
+5. **不发明上游没有的语法。** 思源/FTS5 已有规则就遵循；需要时把合法输入自动规范化，而不是另造一套。
+6. **用示例固定易错点。** 对照示例比抽象规则有效，但每个参数最多一两个。
+7. **报错要能直接改调用。** 写明「xx 参数无效」或「应改用哪个 action」，并给完整正确示例。不要只说失败。
+
+### 正误示例
+
+示例是真实会出现在 schema 或返回里的完整原文。解释单独写，说明好在哪、坏在哪。
+
+#### 1. 总描述只概括，细则放参数
+
+正例（`siyuan_edit` 总描述）：
+
+```
+Edit a visible SiYuan document using block coordinates from siyuan_read(include_block_ids=true). Requires confirmed=true and creates a workspace snapshot before writing. Choose the edit method with action; pass new body text with markdown.
+```
+
+正例（`assets` 参数）：
+
+```
+For action=insert_assets only: each item must be an object {local_path, name?, title?}; items are inserted in order after the same anchor. Do not pass asset_paths or path.
+```
+
+误例（`siyuan_edit` 总描述）：
+
+```
+Edit a visible SiYuan document using block coordinates from siyuan_read(include_block_ids=true); requires confirmed=true. For action=insert_assets, pass assets as an array of objects with required local_path (optional name/title), not asset_paths or path. For body edits, pass markdown. Use markdown_file only to import an already existing local .md file; do not create a temporary markdown file just to import it. For replacements, default to default_block_replace. Use single_block_replace only when one existing block must stay one block and default_block_replace would break references to that block ID.
+```
+
+解释：正例总描述只覆盖工具是什么、写入前提、用哪个参数选动作。`insert_assets` 的字段约束放在 `assets` 参数。误例把最近修过的三件事都堆进总描述，八个 action 几乎看不见。
+
+#### 2. 默认动作在前，特例收窄
+
+正例（`action`）：
+
+```
+default_block_replace: delete the target block(s) and create new block(s) with new IDs, without preserving formatting. single_block_replace: replace the text of exactly one block and keep its ID and formatting (color, font size); only when that block is referenced by other blocks and those references must be kept. insert_after / insert_before: insert markdown next to an anchor. append: add to the end; no start_index/start_id. delete: remove one block or an inclusive range. table_edit: edit a normal Markdown table via table_edit. insert_assets: insert local files/folders after one anchor using assets.
+```
+
+误例（`action`）：
+
+```
+Choose single_block_replace only when replacing exactly one block with exactly one block and preserving its block ID matters. Choose multi_block_replace when replacing a range or when the new markdown may create multiple blocks; old block IDs and references will be invalidated. Choose insert_assets to insert local files/folders after one existing anchor.
+```
+
+解释：正例 enum 以默认替换开头，并列出全部动作。误例把 `single_block_replace` 放在最前，还说 preserving block ID matters，AI 会尽量选 single；`insert_after` / `append` / `delete` / `table_edit` 完全没写。
+
+#### 3. 不对等参数不要写成二选一
+
+正例（`markdown`）：
+
+```
+Default. Markdown body to write. Mutually exclusive with markdown_file. Do not write a local .md file first and then import it.
+```
+
+正例（`markdown_file`）：
+
+```
+Pass a local absolute path instead of markdown. Use only when importing or inserting an existing local .md file into SiYuan. After insertion, images and attachments in that file are uploaded to SiYuan, and relative references inside the file are rewritten to siyuan:// block links when possible. Do not create a temporary .md just to insert it; prefer the markdown parameter when editing.
+```
+
+误例（`markdown`）：
+
+```
+Markdown content to write. Mutually exclusive with markdown_file: provide exactly one.
+```
+
+误例（`markdown_file`）：
+
+```
+Absolute path to a local Markdown file whose content is imported as the document body. Mutually exclusive with markdown: provide exactly one. After writing, local standard Markdown image/file/directory links are uploaded via SiYuan insertLocalAssets and rewritten; unique heading anchors become siyuan:// block links. Direct markdown text is not scanned for local files.
+```
+
+解释：正例标明 markdown 是默认，markdown_file 只用于已有本地文件。误例写成对等二选一，且 markdown_file 能力更长，AI 会先写临时 md 再导入。
+
+#### 4. 兼容旧名对 AI 隐藏
+
+正例（报错）：
+
+```
+single_block_replace 的 markdown 必须只生成一个展示块，因为它会复用原块 ID 和块属性。当前 markdown 会被思源拆成多个块；请改用 default_block_replace。仅当目标是一个块、新 markdown 也只生成一个展示块、且 default_block_replace 会破坏该块引用时，才使用 single_block_replace。
+```
+
+误例（报错）：
+
+```
+single_block_replace 的 markdown 必须只生成一个展示块，因为它会复用原块 ID 和块属性。当前 markdown 会被思源拆成多个块；请改用 multi_block_replace。注意 multi_block_replace 会重建块，旧块 ID 和指向旧块的引用会失效。
+```
+
+解释：旧名 `multi_block_replace` 可以留在后端别名里，但不能出现在 schema、Skill、返回或报错中。误例会让新 AI 继续使用旧名。
+
+#### 5. 搜索语法分层
+
+正例（`siyuan_find` 总描述）：
+
+```
+Search visible SiYuan notes using SiYuan's native query syntax, regex, or SQL, then apply privacy filtering. In query mode, whitespace means AND; use explicit OR for exploratory searches or related concepts.
+```
+
+正例（`query` 参数）：
+
+```
+Search expression. In query mode, SiYuan treats whitespace as AND: 'GPU optical' = 'GPU AND optical'. Use explicit OR for related concepts: 'GPU OR optical OR NVLink'. Supports AND, OR, NOT, parentheses, quoted phrases, and prefix*. Hyphenated or other special-character terms are auto-quoted for FTS5, e.g. Scale-out becomes "Scale-out". Regex mode accepts Go RE2; SQL mode accepts a raw SQL statement.
+```
+
+正例（简单多词查询的返回末尾）：
+
+```
+提示：query 模式中，空格表示 AND；`GPU 光模块` 等价于 `GPU AND 光模块`。如需匹配任意一个词，请显式使用 OR，例如：`word1 OR word2`。
+```
+
+误例（`siyuan_find` 总描述）：
+
+```
+Search the SiYuan knowledge base through SiYuan search APIs, then apply privacy rules before returning results. Temporarily opens closed notebooks while searching and restores them afterwards. Supports 3 modes: query (space-separated terms use AND logic by default; also supports explicit AND/OR/NOT, phrases, and prefix*), regex, and sql (direct SQL, requires admin). Scope: headings (document titles + headings, default) or full (all block text). The search text parameter is query.
+```
+
+误例（空结果）：
+
+```
+# 搜索："GPU 光模块 NVLink Scale-out"（full，query）
+
+未找到匹配的可见文档。
+```
+
+解释：正例总描述只留最容易用错的一句（空格是 AND）。对照示例和完整语法放在 `query` 参数；简单多词无论是否命中都在结果末尾提示。误例把 mode/scope/语法全塞进总描述，空结果又不解释本次查询的实际逻辑。
+
+#### 6. 无效参数报错带完整示例
+
+正例（`insert_assets` 收到 `asset_paths`）：
+
+```
+asset_paths 参数无效。action=insert_assets 的正确格式示例：{"action":"insert_assets","start_index":59,"start_id":"块ID","assets":[{"local_path":"C:\\path\\image.png","name":"可选显示名","title":"可选标题"}],"confirmed":true}。assets 数组项必须是对象，必须使用 local_path；不要使用 asset_paths 或 path。
+```
+
+误例：
+
+```
+Error: invalid parameter
+```
+
+解释：正例指出哪个参数无效，并给出可直接复制的完整调用。误例只有失败，AI 会接着猜 `path`、`asset_paths`。不要为猜错的名字加兼容别名。
+
+### 改描述时的检查
+
+1. 对照 `ARCHITECTURE.md` 该工具的完整 action/参数表，主路径是否都还在总描述或 `action` 说明里。
+2. 默认路径是否在 enum 和说明的最前面。
+3. 总描述、参数、Skill 是否重复同一段话。
+4. 公开文案是否出现兼容旧名。
+5. 同步 `tool_specs()`、测试断言、Skill、`ARCHITECTURE.md`。
 
 ## 修改隐私模型时必须验证
 
@@ -174,12 +349,13 @@
 
 - 编辑前必须先引用阅读。
 - index/id 不匹配时拒绝写入。
-- `single_block_replace` 只允许一块变一块。
-- 可能产生多块的内容必须用 `multi_block_replace`。
+- `single_block_replace` 只允许一块变一块；仅当 `default_block_replace` 会破坏该块引用时使用。
+- 可能产生多块的内容必须用 `default_block_replace`。
 - `single_block_replace` 和 `table_edit` 必须保留块属性。
-- `multi_block_replace` 必须明确旧块 ID 会失效。
-- `delete` / `multi_block_replace` 必须检查目标块及其随同删除的子孙块 ID。
-- `multi_block_replace` 的返回摘要不得把本轮已删除的旧块列入“新内容”，即使思源写后读取短暂返回旧块。
+- `default_block_replace` 必须明确旧块 ID 会失效。
+- `delete` / `default_block_replace` 必须检查目标块及其随同删除的子孙块 ID。
+- `default_block_replace` 的返回摘要不得把本轮已删除的旧块列入“新内容”，即使思源写后读取短暂返回旧块。
+- 公开 schema 不暴露旧名 `multi_block_replace`；后端别名仍可执行，但错误信息和工具描述不得再出现该旧名。
 - 表格编辑必须使用 `row` 和 `column_index` 坐标。
 - `insert_assets` 必须在快照和上传前完成路径存在性、普通文件/目录识别、同批基础文件名重名、锚点和大文件阈值检查。
 - 图片判断必须直接使用思源前端扩展名清单并做大小写不敏感比较；未知图片格式按普通文件处理，不做 MIME 推断。

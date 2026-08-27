@@ -2,6 +2,38 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-08-27：按分层原则缩短 operate/create/doc_manage 描述
+
+- `siyuan_operate` 总描述不再讲解 markdown，也不重复三个 action；细则放到 `action`。
+- `siyuan_create` 总描述只保留路径、confirmed、快照和 markdown；`if_exists` 留在参数里。
+- `siyuan_doc_manage` 总描述只保留树级管理和写入前提；各动作说明放到 `action`。
+
+## 2026-08-27：按分层原则重写 siyuan_edit 工具描述
+
+- 总描述只保留引用阅读坐标、confirmed、写前快照，以及用 action / markdown。
+- `action` 列出全部 8 个动作；`markdown` 只写适用动作和多展示块必须用 default_block_replace。
+- insert_assets 字段约束留在 `assets`；markdown_file 细则留在该参数。
+
+## 2026-08-27：把 MCP 工具描述写法写入开发指南
+
+- 在 `docs/DEVELOPMENT_GUIDE.md` 增加「编写 MCP 工具描述」：分层、原则、正误示例和改描述检查项。
+- `AGENTS.md` 任务路由要求：改工具描述前必须先读该节。
+
+## 2026-08-27：默认替换改名为 default_block_replace
+
+- 公开 action 改为 `default_block_replace`：删除旧块再建新块，覆盖 1:1 / 1:N / N:1 / N:N。
+- `single_block_replace` 仍保留，仅用于必须保住被引用块 ID 的单块对单块替换。
+- 旧名 `multi_block_replace` 仅后端兼容；公开 schema、工具描述、Skill 和返回/报错文案不再出现该词。
+- 第一层：`tests/test_mcp_server.py` 203 passed；全量测试 340 passed、3 warnings。
+- 第二层：临时注册 DSH `siyuan-bridge-dev-test`，`tools/list` 确认 `siyuan_edit` 描述以 `default_block_replace` 为默认替换，且不出现旧名。验证后已禁用。
+
+## 2026-08-27：明确 markdown 优先于 markdown_file
+
+- `siyuan_create` / `siyuan_edit` 工具描述改为：新写正文默认传 `markdown`；`markdown_file` 只用于导入已经存在的本地 `.md` 文件，不要为导入先写临时文件。
+- Skill 与 ARCHITECTURE 同步该优先级。`siyuan_operate` 不再把 markdown_file 写成常规写入入口。
+- 第一层：全量测试 339 passed、3 warnings。
+- 第二层：临时注册 DSH `siyuan-bridge-dev-test`，`tools/list` 确认 create/edit/operate 描述已改为 markdown 优先、markdown_file 仅导入已有文件。验证后已禁用。
+
 ## 2026-08-27：query 模式自动给 FTS5 非法词加引号（v1.7.3）
 
 - 根因：思源 `method=1` 把查询直接交给 SQLite FTS5；bareword 不允许 `-` 等字符，未加引号的 `Scale-out` 是语法错误，结果为空。

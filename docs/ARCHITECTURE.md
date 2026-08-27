@@ -647,8 +647,8 @@ scope：
 | 参数            | 类型    | 默认       | 含义                                        |
 | --------------- | ------- | ---------- | ------------------------------------------- |
 | `title`       | string  | 必填       | 文档标题                                    |
-| `markdown`    | string  | 二选一必填 | 写入内容；与 `markdown_file` 互斥           |
-| `markdown_file` | string | 二选一必填 | 本地 Markdown 文件绝对路径，导入其内容为文档正文 |
+| `markdown`    | string  | 二选一必填 | 默认写入正文；与 `markdown_file` 互斥           |
+| `markdown_file` | string | 二选一必填 | 仅导入已有本地 `.md` 文件；不要为导入先写临时文件 |
 | `path`        | string  | 可选       | 首选完整可读路径 `/Notebook/Folder/Doc`   |
 | `notebook_id` | string  | 可选       | 笔记本重名或使用内部路径时消歧              |
 | `if_exists`   | enum    | `reject` | `reject` / `overwrite` / `create_new` |
@@ -673,6 +673,7 @@ scope：
 
 本地 Markdown 文件导入：
 
+- 新写正文默认传 `markdown`。`markdown_file` 只用于导入调用端已经存在的本地 `.md` 文件，不要为了走导入路径先写临时文件。
 - `markdown_file` 传入本地 `.md` 文件绝对路径，内容按 UTF-8 → GBK → GB18030 顺序解码，换行统一为 `\n`，之后作为 `markdown` 走同一写入流程（含去重首 H1）。
 - 与 `markdown` 互斥：同时传入或都不传都会在写入前报错。
 - 读取失败（路径不存在、无法解码、内容为空）在快照之前拒绝，不写思源、不创建快照。
@@ -723,8 +724,8 @@ scope：
 | `start_id`    | string  | action 非 append 时必填 | 引用阅读中的起始块 ID  |
 | `end_index`   | integer | 范围操作可选            | 结束块序号，闭区间     |
 | `end_id`      | string  | 范围操作可选            | 结束块 ID              |
-| `markdown`    | string  | 部分 action 二选一必填  | 新内容；与 `markdown_file` 互斥 |
-| `markdown_file` | string | 部分 action 二选一可选  | 本地 Markdown 文件绝对路径，替代 markdown |
+| `markdown`    | string  | 部分 action 二选一必填  | 默认新内容；与 `markdown_file` 互斥 |
+| `markdown_file` | string | 部分 action 二选一可选  | 仅导入已有本地 `.md`；不要为导入先写临时文件 |
 | `table_edit`  | object  | table_edit 必填         | 表格编辑对象           |
 | `assets`      | array   | insert_assets 必填      | 同一锚点后插入的本地文件/文件夹 |
 | `upload_large_files` | boolean | false | 是否允许上传超过 20 MB 的普通文件 |
@@ -735,8 +736,8 @@ scope：
 
 | action                   | 行为                                             | 块 ID 保留                  |
 | ------------------------ | ------------------------------------------------ | --------------------------- |
-| `single_block_replace` | 一个旧块替换为一个新块，使用 updateBlock         | 保留目标块 ID 和块属性      |
-| `multi_block_replace`  | 一个或多个旧块替换为一个或多个新块，先插入后删除 | 不保留旧块 ID               |
+| `default_block_replace` | 删除旧块再按 markdown 创建新块；1:1、1:N、N:1、N:N 都可以 | 不保留旧块 ID               |
+| `single_block_replace` | 一个旧块替换为一个新块，使用 updateBlock；仅在 default 会破坏该块引用时使用 | 保留目标块 ID 和块属性      |
 | `insert_after`         | 在锚点后插入 Markdown                            | 锚点不变                    |
 | `insert_before`        | 在锚点前插入 Markdown                            | 锚点不变                    |
 | `append`               | 追加到文档末尾                                   | 不需要 start_index/start_id |
@@ -754,18 +755,20 @@ scope：
 6. 范围操作校验 `end_index/end_id` 和连续范围。
 7. 根据 action 做类型和参数校验。
 8. `insert_assets` 在快照前检查全部本地路径、类型、同批重名和 20 MB 阈值。
-9. 对 `delete` / `multi_block_replace` 计算会消失的目标块及其子孙块 ID，检查外部反链。
+9. 对 `delete` / `default_block_replace` 计算会消失的目标块及其子孙块 ID，检查外部反链。
 10. 创建快照。
 11. 执行块操作；`insert_assets` 先调用 `/api/asset/insertLocalAssets`，再用返回路径生成 Markdown 插在锚点后。
 12. 重新读取展示块；若使用 `markdown_file`，先处理本次新写入块中的本地引用和文内锚点，再读回用于返回摘要。
-13. 返回原内容、新内容或上下文；`multi_block_replace` 的“新内容”会排除本轮已删除的旧块 ID，避免思源块树短暂滞后时误报旧块仍存在。
+13. 返回原内容、新内容或上下文；`default_block_replace` 的“新内容”会排除本轮已删除的旧块 ID，避免思源块树短暂滞后时误报旧块仍存在。
 14. 尝试 pushMsg。
 
 重要校验：
 
-- `single_block_replace` 只能替换单个块，且 markdown 只能生成一个展示块。
-- 如果 markdown 会生成多个块，必须用 `multi_block_replace`。
-- 需要 markdown 的 action（single/multi/insert_after/insert_before/append）可用 `markdown_file` 替代 `markdown`，二者互斥；文件内容按 UTF-8 → GBK → GB18030 解码并统一换行，读取失败在快照前拒绝。写入成功后只扫描本次新写入或替换的块，处理其中的本地引用和文内锚点；规则与 `siyuan_create` 相同。
+- `default_block_replace` 是默认替换：删除旧块再建新块，不保留旧块 ID。
+- `single_block_replace` 只能替换单个块，且 markdown 只能生成一个展示块；仅当 `default_block_replace` 会破坏该块引用时使用。
+- 如果 markdown 会生成多个块，必须用 `default_block_replace`。
+- 需要 markdown 的 action（default/single/insert_after/insert_before/append）可用 `markdown_file` 替代 `markdown`，二者互斥；文件内容按 UTF-8 → GBK → GB18030 解码并统一换行，读取失败在快照前拒绝。写入成功后只扫描本次新写入或替换的块，处理其中的本地引用和文内锚点；规则与 `siyuan_create` 相同。
+- 公开 schema 不暴露旧名 `multi_block_replace`；后端仍接受该旧名并按 `default_block_replace` 执行。
 - 复杂块类型拒绝 replace：attachment、database、superblock、html、iframe、video、audio、widget。
 - index/id 不匹配时拒绝写入，并要求重新引用阅读。
 - `insert_assets` 一次只接受一个锚点，可按数组顺序插入多个项目；多位置必须分次调用并重新引用阅读。
@@ -786,7 +789,7 @@ scope：
 - 未被引用的块 ID 是否保留不影响用户；只有反链冲突出现后，才需要判断是否应保留对应 ID。
 - 冲突结果附带语义判断说明：修改后仍是同一个事实、观点、任务或条目时，重新规划为保留该 ID 的单块更新；原语义已撤销、合并或替代，保留 ID 反而会误导现有引用时，才请求用户允许破坏引用。
 - 多块冲突按每个被引用 ID 分别判断；只要其中仍有应保留的块，就不能直接对整个范围使用 `break`。
-- 所有会让 ID 消失的现有入口都调用统一引用关系查询：`siyuan_edit` 的 delete/multi、`siyuan_create(if_exists=overwrite)`、`siyuan_doc_manage(action=delete)`。查询同时覆盖标准块引用、可识别嵌入块和 `siyuan://` 块链接。
+- 所有会让 ID 消失的现有入口都调用统一引用关系查询：`siyuan_edit` 的 delete/`default_block_replace`、`siyuan_create(if_exists=overwrite)`、`siyuan_doc_manage(action=delete)`。查询同时覆盖标准块引用、可识别嵌入块和 `siyuan://` 块链接。
 - 默认 `reference_policy=reject`。可见引用返回文档路径、引用源块 ID 和内容；隐藏或未知来源只返回引用次数和受保护文档数。
 - 同一删除集合内部的引用不阻止操作。只有用户看过冲突报告并明确允许破坏引用后，AI 才能用相同参数加 `reference_policy=break` 重试。
 - 不自动判断内容语义，也不自动重写其他文档中的引用。
@@ -794,7 +797,7 @@ scope：
 历史踩坑：
 
 - 旧 `old_text -> new_text` 文本锚点模式已废弃。AI 看到的是近似 Markdown，而思源底层是块树；空格、表格格式、导出差异都会导致锚点脆弱。实践中文本匹配方案非常难用。
-- 实测发现 updateBlock 单块传入多块 Markdown 会截断，只保留第一块。因此严格区分 single/multi replace。
+- 实测发现 updateBlock 单块传入多块 Markdown 会截断，只保留第一块。因此默认用 `default_block_replace` 重建块；`single_block_replace` 仅用于必须保留被引用块 ID 的单块替换。
 
 ## `table_edit`
 
@@ -989,7 +992,7 @@ API 设计原则：
 | 字符 chunk 阅读             | 已改为 block window                              |
 | SQL sort 恢复块顺序         | 不可靠，主路径用 getChildBlocks                  |
 | exact text anchor 编辑      | 已废弃，改为引用阅读坐标编辑                     |
-| updateBlock 写多块 Markdown | 会截断，必须区分 single/multi replace            |
+| updateBlock 写多块 Markdown | 会截断，默认用 `default_block_replace` 重建块            |
 | updateBlock 清空块样式      | 需要读取并恢复 IAL custom attrs                  |
 | create 路径是笔记本内路径   | 已改为完整可读路径                               |
 | AI 管理隐私工具             | 已移除，隐私只由人类在思源 UI 维护               |

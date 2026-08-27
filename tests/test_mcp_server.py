@@ -518,8 +518,11 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("never creates", start["description"])
         self.assertIn("Privacy Rules", start["description"])
         operate = next(tool for tool in specs if tool["name"] == "siyuan_operate")
+        self.assertIn("does not create or edit documents", operate["description"])
+        self.assertNotIn("markdown_file", operate["description"])
         properties = operate["inputSchema"]["properties"]
         self.assertIn("check_references", properties["action"]["enum"])
+        self.assertIn("without cleaning ai_workspace", properties["action"]["description"])
         self.assertIn("document", properties)
         self.assertIn("document_id", properties)
         self.assertEqual(properties["limit"]["default"], 10)
@@ -527,9 +530,14 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(properties["limit"]["anyOf"][1]["enum"], ["none"])
 
         doc_manage = next(tool for tool in specs if tool["name"] == "siyuan_doc_manage")
+        self.assertIn("document-tree level", doc_manage["description"])
+        self.assertIn("workspace snapshot", doc_manage["description"])
         doc_manage_properties = doc_manage["inputSchema"]["properties"]
         self.assertIn("create_notebook", doc_manage_properties["action"]["enum"])
         self.assertIn("notebook_name", doc_manage_properties)
+        self.assertIn("does not create a document", doc_manage_properties["action"]["description"])
+        self.assertIn("not a notebook", doc_manage_properties["action"]["description"])
+        self.assertIn("not children", doc_manage_properties["action"]["description"])
 
     def test_find_tool_spec_exposes_query_as_default_without_keyword_mode(self):
         spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_find")
@@ -554,8 +562,35 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("Visible body name", asset_properties["name"]["description"])
         self.assertIn("caption below the image", asset_properties["title"]["description"])
         self.assertEqual(properties["assets"]["items"]["required"], ["local_path"])
-        self.assertIn("asset_paths", spec["description"])
-        self.assertIn("local_path", properties["assets"]["description"])
+        self.assertNotIn("asset_paths", spec["description"])
+        self.assertIn("asset_paths", properties["assets"]["description"])
+        self.assertIn("Choose the edit method with action", spec["description"])
+        self.assertIn("pass new body text with markdown", spec["description"])
+        self.assertIn("workspace snapshot", spec["description"])
+        self.assertIn("Do not write a local .md file first", properties["markdown"]["description"])
+        self.assertIn("Do not create a temporary .md just to insert it", properties["markdown_file"]["description"])
+        action_enum = properties["action"]["enum"]
+        self.assertEqual(action_enum[0], "default_block_replace")
+        self.assertIn("single_block_replace", action_enum)
+        self.assertNotIn("multi_block_replace", action_enum)
+        self.assertNotIn("multi_block_replace", spec["description"])
+        self.assertNotIn("multi_block_replace", properties["action"]["description"])
+        self.assertNotIn("multi_block_replace", properties["markdown"]["description"])
+        self.assertIn("insert_after", properties["action"]["description"])
+        self.assertIn("append", properties["action"]["description"])
+        self.assertIn("delete", properties["action"]["description"])
+        self.assertIn("table_edit", properties["action"]["description"])
+        self.assertIn("without preserving formatting", properties["action"]["description"])
+        self.assertIn("referenced by other blocks", properties["action"]["description"])
+        self.assertIn("those replacements must use default_block_replace", properties["markdown"]["description"])
+
+    def test_create_tool_spec_prefers_markdown_over_markdown_file(self):
+        spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_create")
+        properties = spec["inputSchema"]["properties"]
+        self.assertIn("Pass new body text with markdown", spec["description"])
+        self.assertNotIn("if_exists", spec["description"])
+        self.assertIn("Do not write a local .md file first", properties["markdown"]["description"])
+        self.assertIn("Do not create a temporary .md just to insert it", properties["markdown_file"]["description"])
 
     def test_insert_assets_rejects_unsupported_top_level_parameter_with_example(self):
         server = mcp_server.McpServer(self.root)
@@ -1633,7 +1668,8 @@ class McpServerWriteTests(unittest.TestCase):
                     "markdown_file": file_path,
                     "confirmed": True,
                 })
-            self.assertIn("multi_block_replace", str(ctx.exception))
+            self.assertIn("default_block_replace", str(ctx.exception))
+            self.assertNotIn("multi_block_replace", str(ctx.exception))
             self.assertFalse(client._snapshots)
         finally:
             mcp_server.detect_active_profile = original
@@ -2296,7 +2332,7 @@ class McpServerWriteTests(unittest.TestCase):
         finally:
             mcp_server.detect_active_profile = original
 
-    def test_siyuan_edit_multi_block_replace_range_inserts_then_deletes_old_range(self):
+    def test_siyuan_edit_default_block_replace_range_inserts_then_deletes_old_range(self):
         blocks = {
             "doc1": [
                 {"id": "block1", "type": "p", "markdown": "First."},
@@ -2307,7 +2343,7 @@ class McpServerWriteTests(unittest.TestCase):
         try:
             server.siyuan_edit({
                 "document": "/Main/Projects/Doc One",
-                "action": "multi_block_replace",
+                "action": "default_block_replace",
                 "start_index": 1,
                 "start_id": "block1",
                 "end_index": 2,
@@ -2418,7 +2454,7 @@ class McpServerWriteTests(unittest.TestCase):
         finally:
             mcp_server.detect_active_profile = original
 
-    def test_siyuan_edit_multi_block_replace_summary_filters_stale_deleted_blocks(self):
+    def test_siyuan_edit_default_block_replace_summary_filters_stale_deleted_blocks(self):
         blocks = {
             "doc1": [
                 {"id": "block1", "type": "p", "markdown": "First."},
@@ -2434,7 +2470,7 @@ class McpServerWriteTests(unittest.TestCase):
         try:
             result = server.siyuan_edit({
                 "document": "/Main/Projects/Doc One",
-                "action": "multi_block_replace",
+                "action": "default_block_replace",
                 "start_index": 1,
                 "start_id": "block1",
                 "end_index": 2,
@@ -2452,7 +2488,7 @@ class McpServerWriteTests(unittest.TestCase):
         finally:
             mcp_server.detect_active_profile = original
 
-    def test_siyuan_edit_multi_block_replace_checks_descendant_block_references(self):
+    def test_siyuan_edit_default_block_replace_checks_descendant_block_references(self):
         blocks = {
             "doc1": [
                 {"id": "heading1", "type": "h", "markdown": "## Heading", "parent_id": "doc1"},
@@ -2474,7 +2510,7 @@ class McpServerWriteTests(unittest.TestCase):
             with self.assertRaises(ValueError) as ctx:
                 server.siyuan_edit({
                     "document": "/Main/Projects/Doc One",
-                    "action": "multi_block_replace",
+                    "action": "default_block_replace",
                     "start_index": 1,
                     "start_id": "heading1",
                     "markdown": "Replacement.",
@@ -2487,7 +2523,7 @@ class McpServerWriteTests(unittest.TestCase):
         finally:
             mcp_server.detect_active_profile = original
 
-    def test_siyuan_edit_multi_block_replace_can_replace_single_block_with_multi_block_markdown(self):
+    def test_siyuan_edit_default_block_replace_can_replace_single_block_with_multi_block_markdown(self):
         blocks = {
             "doc1": [
                 {"id": "block1", "type": "p", "markdown": "Anchor."},
@@ -2499,7 +2535,7 @@ class McpServerWriteTests(unittest.TestCase):
         try:
             result = server.siyuan_edit({
                 "document": "/Main/Projects/Doc One",
-                "action": "multi_block_replace",
+                "action": "default_block_replace",
                 "start_index": 1,
                 "start_id": "block1",
                 "markdown": markdown,
@@ -2533,9 +2569,35 @@ class McpServerWriteTests(unittest.TestCase):
                     "markdown": "First.\n\nSecond.",
                     "confirmed": True,
                 })
-            self.assertIn("multi_block_replace", str(ctx.exception))
+            self.assertIn("default_block_replace", str(ctx.exception))
+            self.assertNotIn("multi_block_replace", str(ctx.exception))
             self.assertFalse(client._snapshots)
             self.assertFalse(client._updated_blocks)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_edit_accepts_legacy_multi_block_replace_alias(self):
+        blocks = {
+            "doc1": [
+                {"id": "block1", "type": "p", "markdown": "Anchor."},
+                {"id": "block2", "type": "p", "markdown": "After."},
+            ]
+        }
+        markdown = "### New heading\n\nNew paragraph."
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            result = server.siyuan_edit({
+                "document": "/Main/Projects/Doc One",
+                "action": "multi_block_replace",
+                "start_index": 1,
+                "start_id": "block1",
+                "markdown": markdown,
+                "confirmed": True,
+            })
+            self.assertEqual(client._inserted_before, [("block1", markdown)])
+            self.assertEqual(client._deleted_blocks, ["block1"])
+            self.assertIn("action：default_block_replace", result)
+            self.assertNotIn("multi_block_replace", result)
         finally:
             mcp_server.detect_active_profile = original
 
