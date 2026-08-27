@@ -593,6 +593,7 @@ scope：
 - SQL 结果必须经过同样的隐私过滤。
 - 同一文档多个命中块应保留，避免 AI 误判只有一处命中。
 - `query` 模式下，单纯由空格分隔且未使用显式布尔操作符、引号或括号的多词查询，无论是否命中，都在结果末尾提示空格等价于 AND，并给出显式 OR 示例；`regex` / `sql` 不追加该提示。
+- `query` 模式发给思源前，会把未加引号且不符合 FTS5 bareword 的词自动加英文双引号，例如 `Scale-out` → `"Scale-out"`。已有引号、括号、`AND`/`OR`/`NOT` 和合法 bareword 不变；`regex` / `sql` 不改写。
 
 ## `siyuan_read`
 

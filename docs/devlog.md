@@ -2,6 +2,14 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-08-27：query 模式自动给 FTS5 非法词加引号
+
+- 根因：思源 `method=1` 把查询直接交给 SQLite FTS5；bareword 不允许 `-` 等字符，未加引号的 `Scale-out` 是语法错误，结果为空。
+- `query` 模式发送前按 FTS5 规则扫描：已加引号的片段和结构符号原样保留；未加引号且含非法字符的词整词加英文双引号；`AND`/`OR`/`NOT` 等合法 bareword 不加引号。
+- `regex` / `sql` 不改写。返回标题仍显示用户原始查询。
+- 第一层：`tests/test_mcp_server.py` 201 passed；全量测试 338 passed、3 warnings；Python compileall 与 `git diff --check` 通过。
+- 第二层：临时注册 DSH `siyuan-bridge-dev-test`。`Scale-out` 与 `"Scale-out"` 均返回 5 条同一组文档；`Scale-out AND NVLink` 正常命中；`GPU 光模块` 仍追加隐式 AND 提示。验证后已禁用临时 MCP；未修改思源内容。
+
 ## 2026-08-26：明确 siyuan_find 多词查询的 AND 语义
 
 - `siyuan_find` 工具描述和 `query` 参数描述明确采用思源原生查询语法：空格表示 AND，探索相关概念时显式使用 OR。

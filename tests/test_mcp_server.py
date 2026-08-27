@@ -543,6 +543,7 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("whitespace means AND", spec["description"])
         self.assertIn("GPU AND optical", properties["query"]["description"])
         self.assertIn("GPU OR optical OR NVLink", properties["query"]["description"])
+        self.assertIn("Scale-out", properties["query"]["description"])
 
     def test_edit_tool_spec_exposes_insert_assets_name_and_title_semantics(self):
         spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_edit")
@@ -879,6 +880,20 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(client.seen_payloads[0]["group_by"], 0)
         self.assertEqual(client.seen_payloads[0]["method"], 1)
 
+    def test_find_documents_quotes_hyphenated_query_before_siyuan_search(self):
+        client = FakeSearchClient([])
+        self.run_find(client, {"query": "Scale-out", "scope": "full"})
+
+        self.assertEqual(client.seen_payloads[0]["query"], '"Scale-out"')
+        self.assertEqual(client.seen_payloads[0]["method"], 1)
+
+    def test_find_documents_does_not_quote_regex_query(self):
+        client = FakeSearchClient([])
+        self.run_find(client, {"query": "Scale-out", "mode": "regex", "scope": "full"})
+
+        self.assertEqual(client.seen_payloads[0]["query"], "Scale-out")
+        self.assertEqual(client.seen_payloads[0]["method"], 3)
+
     def test_find_documents_plain_multi_term_query_adds_implicit_and_hint_with_results(self):
         client = FakeSearchClient([
             {
@@ -1122,6 +1137,30 @@ class McpServerTests(unittest.TestCase):
         server._active_profile = Profile(name="test", token="test")
         server._active_client = client
         return server.siyuan_find(args)
+
+
+class Fts5QueryTokenQuoteTests(unittest.TestCase):
+    def test_quote_fts5_query_tokens(self):
+        cases = [
+            ("Scale-out", '"Scale-out"'),
+            ("GPU 光模块 NVLink", "GPU 光模块 NVLink"),
+            ("Scale-out AND NVLink", '"Scale-out" AND NVLink'),
+            ('"Scale-out"', '"Scale-out"'),
+            ("(Scale-out OR NVLink)", '("Scale-out" OR NVLink)'),
+            ("foo-bar*", '"foo-bar"*'),
+            ("AND", "AND"),
+            ("and", "and"),
+            ('"AND"', '"AND"'),
+            ("2026-08-01", '"2026-08-01"'),
+            ("foo/bar", '"foo/bar"'),
+            ("NVLink", "NVLink"),
+            ('"unclosed', '"unclosed'),
+            ("Scale-out Scale-up", '"Scale-out" "Scale-up"'),
+            ("Scale-out*", '"Scale-out"*'),
+        ]
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                self.assertEqual(mcp_server.quote_fts5_query_tokens(raw), expected)
 
 
 class McpServerWriteTests(unittest.TestCase):

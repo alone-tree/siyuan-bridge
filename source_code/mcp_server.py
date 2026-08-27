@@ -2556,10 +2556,11 @@ class McpServer:
             notebook_names.update(list_live_notebook_names(client))
             method_map = {"query": 1, "regex": 3}
             api_method = method_map[mode]
+            search_query = quote_fts5_query_tokens(query) if mode == "query" else query
             with ensure_notebooks_open(client, notebooks):
                 data = search_content(
                     client,
-                    query,
+                    search_query,
                     method=api_method,
                     scope=scope,
                     notebooks=notebooks,
@@ -4366,6 +4367,54 @@ def local_search_text(doc: dict[str, Any]) -> str:
     ])
 
 
+_FTS5_STRUCTURAL = frozenset("(){}:+^*,")
+
+
+def _is_fts5_bareword(token: str) -> bool:
+    return bool(token) and all(ord(c) > 127 or c.isalnum() or c in "_\x1a" for c in token)
+
+
+def quote_fts5_query_tokens(query: str) -> str:
+    """Quote unquoted tokens that are invalid FTS5 barewords, such as Scale-out."""
+    out: list[str] = []
+    i = 0
+    length = len(query)
+    while i < length:
+        ch = query[i]
+        if ch == '"':
+            j = i + 1
+            closed = False
+            while j < length:
+                if query[j] == '"':
+                    if j + 1 < length and query[j + 1] == '"':
+                        j += 2
+                        continue
+                    j += 1
+                    closed = True
+                    break
+                j += 1
+            if not closed:
+                out.append(query[i:])
+                break
+            out.append(query[i:j])
+            i = j
+            continue
+        if ch.isspace() or ch in _FTS5_STRUCTURAL:
+            out.append(ch)
+            i += 1
+            continue
+        j = i + 1
+        while j < length and query[j] != '"' and not query[j].isspace() and query[j] not in _FTS5_STRUCTURAL:
+            j += 1
+        token = query[i:j]
+        if _is_fts5_bareword(token):
+            out.append(token)
+        else:
+            out.append('"' + token.replace('"', '""') + '"')
+        i = j
+    return "".join(out)
+
+
 def simple_query_syntax_hint(query: str) -> str:
     """Explain SiYuan's implicit AND only for plain whitespace-separated terms."""
     if not re.search(r"\s", query):
@@ -4503,7 +4552,7 @@ def tool_specs() -> list[dict[str, Any]]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search expression. In query mode, SiYuan treats whitespace as AND: 'GPU optical' = 'GPU AND optical'. Use explicit OR for related concepts or exploratory retrieval: 'GPU OR optical OR NVLink'. Supports AND, OR, NOT, parentheses, quoted phrases, and prefix*. Regex mode accepts Go RE2; SQL mode accepts a raw SQL statement."},
+                    "query": {"type": "string", "description": "Search expression. In query mode, SiYuan treats whitespace as AND: 'GPU optical' = 'GPU AND optical'. Use explicit OR for related concepts: 'GPU OR optical OR NVLink'. Supports AND, OR, NOT, parentheses, quoted phrases, and prefix*. Hyphenated or other special-character terms are auto-quoted for FTS5, e.g. Scale-out becomes \"Scale-out\". Regex mode accepts Go RE2; SQL mode accepts a raw SQL statement."},
                     "mode": {"type": "string", "enum": ["query", "regex", "sql"], "default": "query", "description": "Search mode. Defaults to query."},
                     "scope": {"type": "string", "enum": ["headings", "full"], "default": "headings", "description": "headings = document titles and outline headings only. full = all block content."},
                     "notebooks": {"description": "Notebook ID or list of IDs to scope the search. 'ALL' (default) searches all notebooks."},
