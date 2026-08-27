@@ -56,6 +56,7 @@ CodeGraph 的退回顺序固定为：
 | 查看用户反馈/未处理 issue | 无（直接运行脚本即可） | `scripts/check_feedback.py`：运行 `python scripts/check_feedback.py`，输出遥测反馈中 status != done 的条目 + GitHub open issues（仓库 alone-tree/siyuan-bridge）；遥测接口无需认证，GitHub 需 gh 已登录；若 403 需带 User-Agent（脚本已内置） |
 | 插件前端 UI、消息通知、用户反馈 | `docs/FRONTEND.md` | `siyuan-plugin/index.js`；`siyuan-plugin/src/index.js`；`siyuan-plugin/index.css`；`siyuan-plugin/plugin.json` |
 | 未决定的想法、待评估 idea | `docs/IDEAS.md` | 定案后再迁移到 `ARCHITECTURE.md` 或 `DEVELOPMENT_GUIDE.md` |
+| 思源页面显示与 AI 一致的实时块序号 | `docs/思源桥块序号显示方案-2026-08-27.md`（待审阅） | 定案后再实施并迁移结论到 `ARCHITECTURE.md`、`FRONTEND.md` 和 `DEVELOPMENT_GUIDE.md` |
 
 涉及设计决策、工具契约、开发流程或排障结论时，不要只更新代码。必须同步更新对应文档。
 
