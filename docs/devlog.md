@@ -2,11 +2,12 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
-## 2026-08-27：按分层原则缩短 operate/create/doc_manage 描述
+## 2026-08-27：按分层原则缩短 operate/create/doc_manage 描述（v1.7.4）
 
 - `siyuan_operate` 总描述不再讲解 markdown，也不重复三个 action；细则放到 `action`。
 - `siyuan_create` 总描述只保留路径、confirmed、快照和 markdown；`if_exists` 留在参数里。
 - `siyuan_doc_manage` 总描述只保留树级管理和写入前提；各动作说明放到 `action`。
+- 这是工具描述、默认替换改名（旧名兼容）和 markdown_file 优先级纠偏，按 PATCH 从 1.7.3 升到 1.7.4。
 
 ## 2026-08-27：按分层原则重写 siyuan_edit 工具描述
 
@@ -19,7 +20,7 @@
 - 在 `docs/DEVELOPMENT_GUIDE.md` 增加「编写 MCP 工具描述」：分层、原则、正误示例和改描述检查项。
 - `AGENTS.md` 任务路由要求：改工具描述前必须先读该节。
 
-## 2026-08-27：默认替换改名为 default_block_replace
+## 2026-08-27：默认替换改名为 default_block_replace（v1.7.4）
 
 - 公开 action 改为 `default_block_replace`：删除旧块再建新块，覆盖 1:1 / 1:N / N:1 / N:N。
 - `single_block_replace` 仍保留，仅用于必须保住被引用块 ID 的单块对单块替换。
