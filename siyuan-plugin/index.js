@@ -290,6 +290,36 @@ function createBlockIndexController(options) {
     return overlay;
   }
 
+  function ancestorSuperBlockCount(node, wysiwyg) {
+    let depth = 0;
+    let current = node.parentElement;
+    while (current && current !== wysiwyg) {
+      if (current.getAttribute && current.getAttribute("data-type") === "NodeSuperBlock") {
+        depth += 1;
+      }
+      current = current.parentElement;
+    }
+    return depth;
+  }
+
+  function gutterSlotFromContent(node, wysiwyg, ancestorCounts) {
+    const selfDepth = ancestorCounts.get(node) || 0;
+    let maxDepth = selfDepth;
+    node.querySelectorAll("[data-node-id]").forEach((child) => {
+      maxDepth = Math.max(maxDepth, ancestorCounts.get(child) || 0);
+    });
+    return 1 + maxDepth - selfDepth;
+  }
+
+  function gutterTopOffset(blockHeight, badgeHeight, fontSize) {
+    const lineHeight = Math.floor(fontSize * 1.625);
+    if (blockHeight < lineHeight + 8 ||
+        (blockHeight > lineHeight + 8 && blockHeight < lineHeight * 2 + 8)) {
+      return (blockHeight - badgeHeight) / 2;
+    }
+    return 0;
+  }
+
   function restamp(protyle) {
     const overlay = overlays.get(protyle && protyle.id);
     if (!overlay || !overlay.element) {
@@ -306,6 +336,12 @@ function createBlockIndexController(options) {
       return;
     }
     const contentRect = content.getBoundingClientRect();
+    const fontSize = parseFloat(window.getComputedStyle(wysiwyg).fontSize) || 16;
+    const gutterCol = 24;
+    const ancestorCounts = new Map();
+    wysiwyg.querySelectorAll("[data-node-id]").forEach((el) => {
+      ancestorCounts.set(el, ancestorSuperBlockCount(el, wysiwyg));
+    });
     for (const item of mapping.blocks) {
       const node = wysiwyg.querySelector(`[data-node-id="${item.id}"]`);
       if (!node) {
@@ -315,8 +351,10 @@ function createBlockIndexController(options) {
       const badge = document.createElement("span");
       badge.className = BLOCK_INDEX_BADGE_CLASS;
       badge.textContent = String(item.index);
-      badge.style.top = `${nodeRect.top - contentRect.top + content.scrollTop}px`;
-      badge.style.left = `${nodeRect.left - contentRect.left + content.scrollLeft}px`;
+      const slot = gutterSlotFromContent(node, wysiwyg, ancestorCounts);
+      const topOffset = gutterTopOffset(nodeRect.height, gutterCol, fontSize);
+      badge.style.top = `${nodeRect.top - contentRect.top + content.scrollTop + topOffset}px`;
+      badge.style.left = `${nodeRect.left - contentRect.left + content.scrollLeft - gutterCol * slot}px`;
       overlay.element.appendChild(badge);
     }
   }
@@ -423,6 +461,10 @@ function createBlockIndexController(options) {
     refreshDocument(rootId);
   }
 
+  function showEnabledNotice() {
+    showMessage("思源桥块序号已启用。正文左侧数字由思源桥插件显示，与 AI 所说的「第 N 块」一致。");
+  }
+
   async function setEnabled(nextEnabled) {
     enabled = Boolean(nextEnabled);
     await plugin.saveData(BLOCK_INDEX_STORAGE, {enabled});
@@ -433,8 +475,10 @@ function createBlockIndexController(options) {
       }
       indexByDoc.clear();
       clearAllOverlays();
+      showMessage("已隐藏思源桥块序号");
       return;
     }
+    showEnabledNotice();
     refreshOpenEditors();
   }
 
@@ -444,17 +488,23 @@ function createBlockIndexController(options) {
 
   async function toggle() {
     await setEnabled(!enabled);
-    showMessage(enabled ? "已显示思源桥块序号" : "已隐藏思源桥块序号");
   }
 
   async function restore() {
+    let stored = null;
     try {
-      const stored = await plugin.loadData(BLOCK_INDEX_STORAGE);
-      enabled = Boolean(stored && stored.enabled);
+      stored = await plugin.loadData(BLOCK_INDEX_STORAGE);
     } catch (_error) {
-      enabled = false;
+      stored = null;
+    }
+    if (stored && typeof stored.enabled === "boolean") {
+      enabled = stored.enabled;
+    } else {
+      enabled = true;
+      await plugin.saveData(BLOCK_INDEX_STORAGE, {enabled: true});
     }
     if (enabled) {
+      showEnabledNotice();
       refreshOpenEditors();
     }
   }
@@ -658,7 +708,7 @@ function renderHome() {
           <span class="siyuan-bridge-home__checkbox-label">显示思源桥块序号</span>
         </label>
         <p class="siyuan-bridge-home__hint">
-          在正文左侧显示与 AI 引用阅读一致的实时块序号。默认关闭。序号是界面覆盖层，不会写入笔记。
+          在正文左侧显示与 AI 引用阅读一致的实时块序号。默认开启。序号是界面覆盖层，不会写入笔记。
         </p>
       </div>
 

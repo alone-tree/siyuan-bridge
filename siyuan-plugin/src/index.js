@@ -178,7 +178,7 @@ function renderHome() {
           <span class="siyuan-bridge-home__checkbox-label">显示思源桥块序号</span>
         </label>
         <p class="siyuan-bridge-home__hint">
-          在正文左侧显示与 AI 引用阅读一致的实时块序号。默认关闭。序号是界面覆盖层，不会写入笔记。
+          在正文左侧显示与 AI 引用阅读一致的实时块序号。默认开启。序号是界面覆盖层，不会写入笔记。
         </p>
       </div>
 

@@ -199,15 +199,19 @@
 }
 
 .siyuan-bridge-block-index {
+  box-sizing: border-box;
   color: var(--b3-theme-on-surface-light);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  height: 24px;
   left: 0;
-  line-height: 16px;
+  line-height: 24px;
   opacity: 0.55;
   pointer-events: none;
   position: absolute;
-  transform: translate(-100%, 0);
+  text-align: center;
+  top: 0;
   user-select: none;
   white-space: nowrap;
+  width: 24px;
 }
