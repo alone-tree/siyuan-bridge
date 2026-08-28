@@ -135,7 +135,7 @@ tests/               单元测试
 - 写入插件内 `bridge/telemetry.json`。
 - 生成可复制 MCP JSON。
 - 携带由同步脚本复制的 Python Bridge 运行文件。
-- 提供通知、反馈和用户体验改进开关的前端入口。
+- 提供通知、反馈、用户体验改进开关，以及与引用阅读一致的实时块序号覆盖层。
 
 插件内运行目录：
 
@@ -371,6 +371,7 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 - `include_block_ids=true` 时，每个展示块前加 `[index] id=... type=...`。
 - 这是编辑和跨文档块引用的定位模式。
 - 普通阅读不显示块 ID，保持 Markdown 干净。
+- 插件可在思源正文旁显示同一套实时序号。序号来自 `/api/block/getChildBlocks` 与 `build_display_blocks(include_block_ids=true)`，不是 DOM 顺序。文档结构变化后立即重算；AI 再次引用序号前必须重新读取。Python 与插件的 `index/id/type` 由 `tests/fixtures/display_block_index_cases.json` 锁死。
 
 块展示规则：
 

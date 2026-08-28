@@ -2,6 +2,23 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-08-28：根入口拆本地 JS 导致测试空间设置齿轮消失
+
+症状：导入 v1.8.0 到测试空间后，思源插件列表设置齿轮消失。
+
+原因：思源 `/api/petal/loadPetals` 只下发 `index.js` 字符串，用自定义 `require` 执行。根入口新增 `require("./block-index-runtime.js")` 在运行时解析失败，插件加载中断。这与 2026-06-07 的 ESM 入口失败是同一类问题：根入口必须是单文件 CommonJS，且只能 `require("siyuan")`。
+
+处理：把编号与覆盖层运行时内联进 `siyuan-plugin/index.js`；`block-index.js` 只留给 Node 一致性测试。
+
+## 2026-08-28：插件显示与 AI 一致的实时块序号（v1.8.0）
+
+- 插件设置开关和命令面板可显示当前文档的实时块序号，与 `siyuan_read(include_block_ids=true)` 使用同一套 `getChildBlocks` + `build_display_blocks` 规则。
+- 角标是独立覆盖层，不写入正文或块属性。结构变化后防抖重算；动态加载只补已有映射；失败清空旧序号。
+- 共享样例 `tests/fixtures/display_block_index_cases.json` 同时约束 Python 和 `siyuan-plugin/block-index.js`。
+- 工作区版本升至 1.8.0，尚未提交、发布或导入用户版思源。
+- 第一层：`python -m pytest tests -q` 343 passed、3 warnings；当前源码 MCP 探针 `serverVersion=1.8.0`、9 个工具；真实 `siyuan_read(include_block_ids=true)` 与插件 `collectDisplayBlockIndexes` 在测试文档上 11/11、含列表/表格/数据库的文档上 43/43 一致。
+- 第二层：临时启用 DSH `siyuan-bridge-dev-test`（cwd 当前仓库），确认 1.8.0 与引用阅读序号；随后禁用。未导入测试工作空间，未改用户版思源。
+
 ## 2026-08-27：按分层原则缩短 operate/create/doc_manage 描述（v1.7.4）
 
 - `siyuan_operate` 总描述不再讲解 markdown，也不重复三个 action；细则放到 `action`。

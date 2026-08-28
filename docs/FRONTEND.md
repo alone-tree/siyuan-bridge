@@ -11,6 +11,8 @@
 
 根 `index.js` 必须保持 CommonJS：`require("siyuan")`、`module.exports`。不要改成 `import` / `export default`，否则思源桌面端会报 `Cannot use import statement outside a module`，插件加载失败，设置齿轮消失。
 
+思源通过 `/api/petal/loadPetals` 只下发 `index.js` 字符串，再用自定义 `require` 执行。根入口只能 `require("siyuan")`，不能 `require("./xxx.js")`；本地拆出去的模块在运行时不存在，同样会导致插件加载失败、设置齿轮消失。编号算法的 Node 测试文件 `block-index.js` 不能被 `index.js` 引用，必须把运行时代码内联进根入口。
+
 ## UI 结构
 
 插件设置入口打开 Home Dialog，包含：
@@ -48,6 +50,16 @@
 
 当前工作空间没有对应 JSON 记录时禁止重置，提示用户重新启用插件；不得通过 `siyuan_start` 修复，也不得回退到另一个 profile 的最近 ID。
 
+## 块序号显示
+
+设置页开关“显示思源桥块序号”和命令面板“显示/隐藏思源桥块序号”控制同一状态，默认关闭，保存在插件 `saveData("block-index.json")`，不写入笔记。
+
+编号规则与 `siyuan_read(include_block_ids=true)` 相同。Node 测试实现是 `siyuan-plugin/block-index.js`，插件运行时必须内联在 `index.js`。顺序只来自 `/api/block/getChildBlocks`。角标画在编辑器覆盖层上，不进入 `contenteditable`，不修改块 DOM 或块属性。
+
+打开或切换文档、以及 `ws-main` 中的 insert/delete/move/append 会重算完整 `ID → 序号`。动态加载只把已有映射补到新出现的块上。失败时清空角标并 `showMessage("块序号暂不可用")`。关闭开关、销毁编辑器或卸载插件时移除覆盖层和监听器。
+
+修改展示块规则时，必须同时更新 `tests/fixtures/display_block_index_cases.json`、Python `build_display_blocks()` 和 `siyuan-plugin/block-index.js`。
+
 ## 验证
 
 不要直接改测试工作空间里的插件代码。先改仓库 `siyuan-plugin/`，再导入：
@@ -64,6 +76,7 @@ python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE% --fre
 
 最低检查：
 
+- 根 `index.js` 只有 `require("siyuan")`，没有 `import`，也没有 `require("./xxx.js")`。
 - 插件能启用，设置齿轮存在。
 - 首次启用能生成 `bridge/config.local.json`。
 - 首次启用能创建六类系统文档，并把每类文档记录为数组。

@@ -315,6 +315,8 @@ Error: invalid parameter
 - 附件提取到 `ai_workspace/attachments/<doc-id>/assets/`。
 - 返回正文中的 `assets/...` 链接改为本机绝对路径。
 - 超级块普通阅读不重复渲染子块内容。
+- 引用阅读下超级块自身占号，并继续给内部块编号。
+- 插件块序号与 `include_block_ids=true` 的 `index/id/type` 一致；共享样例在 `tests/fixtures/display_block_index_cases.json`，Python 与 `siyuan-plugin/block-index.js` 都必须通过。
 
 已知真实问题：
 
@@ -593,6 +595,7 @@ python scripts/verify.py
 11. 插件和安装文档存在版本/链接漂移。
 12. 思源插件第一版的 `bridge/` 目录由同步脚本生成，不是发布 ZIP；不要把旧 ZIP 流程误当成当前插件实现路径。
 13. 测试空间里的思源插件目录不是源码，不得直接编辑。正确流程是修改仓库 `siyuan-plugin/`，再整体导入测试空间。
+14. 思源只把 `siyuan-plugin/index.js` 当单文件执行。根入口改成 ESM，或 `require("./xxx.js")` 拆本地模块，都会让插件加载失败、设置齿轮消失。根入口只能 `require("siyuan")`，运行时逻辑必须内联；`block-index.js` 这类文件只给 Node 测试用。
 
 ## 版本号管理
 

@@ -41,7 +41,8 @@ description: Use when the user wants to read, search, or write their private SiY
 - 如果 `siyuan_create` 提示目标笔记本不存在，先取得用户明确同意，再调用 `siyuan_doc_manage(action="create_notebook", notebook_name="<笔记本名称>", confirmed=true)`；创建成功后重试文档写入。不得根据文档路径隐式创建笔记本。
 - `siyuan_create` 成功后会等待思源路径同步并自动刷新安全索引；正常情况下可直接使用返回路径继续读取或管理。
 - 新写或直接编辑正文时传 `markdown`，不要先写一个本地 `.md` 再导入。只有需要把已有本地 md 导入或插入思源时才用 `markdown_file`（绝对路径）；插入后图片和附件会上传，相对引用会尽可能改写为 `siyuan://` 块链接。独立附件仍用 `insert_assets`。
-- 编辑已有文档前，先用 `siyuan_read(include_block_ids=true)` 进行引用阅读，并把返回的块序号和块 ID 作为 `siyuan_edit` 定位参数。
+- 面向用户说“第 N 块”前，必须先用 `siyuan_read(include_block_ids=true)` 读取当前文档。用户在思源页面看到的是同一套实时序号；文档被你或用户改过之后，旧序号立即失效，再次引用前必须重新读取。
+- 编辑已有文档前，先用 `siyuan_read(include_block_ids=true)` 进行引用阅读，并把返回的块序号和块 ID 作为 `siyuan_edit` 定位参数。面向用户用“第 25 块”即可，不要要求用户识别块 ID。
 - 不必为了块 ID 本身改变编辑方案；只有被其他块引用的 ID 消失时才会影响用户。
 - 替换正文默认用 `default_block_replace`：删除旧块并创建带新 ID 的新块，不保留原格式。`single_block_replace` 只替换一个块内的文本，并保留该块 ID 和所有格式（如颜色、字号）；仅当必须保住该块引用时使用。
 - `delete`、`default_block_replace`、`siyuan_create(if_exists=overwrite)` 和整棵文档树删除都会检查即将消失的 ID 是否存在外部块引用、可识别嵌入块或 `siyuan://` 块链接，默认 `reference_policy=reject`。若返回引用冲突，按错误结果附带的语义判断说明重新规划编辑；只有用户明确允许破坏本次报告的引用后，才能用相同参数加 `reference_policy=break` 重试。不得自行使用 `break`。

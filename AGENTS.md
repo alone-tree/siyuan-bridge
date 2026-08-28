@@ -54,9 +54,9 @@ CodeGraph 的退回顺序固定为：
 | 历史问题、排障、阶段性结论 | `docs/devlog.md`，优先读最新记录；不要把旧计划当当前事实 | 必要时同步回 `ARCHITECTURE.md` 或 `DEVELOPMENT_GUIDE.md` |
 | 遥测、统计、用户体验改善 | `docs/ARCHITECTURE.md` 的”遥测数据流”；`docs/feedback-telemetry-backend.md` | `source_code/telemetry.py`；`source_code/mcp_server.py`；`worker/` |
 | 查看用户反馈/未处理 issue | 无（直接运行脚本即可） | `scripts/check_feedback.py`：运行 `python scripts/check_feedback.py`，输出遥测反馈中 status != done 的条目 + GitHub open issues（仓库 alone-tree/siyuan-bridge）；遥测接口无需认证，GitHub 需 gh 已登录；若 403 需带 User-Agent（脚本已内置） |
-| 插件前端 UI、消息通知、用户反馈 | `docs/FRONTEND.md` | `siyuan-plugin/index.js`；`siyuan-plugin/src/index.js`；`siyuan-plugin/index.css`；`siyuan-plugin/plugin.json` |
+| 插件前端 UI、消息通知、用户反馈 | `docs/FRONTEND.md`（根 `index.js` 只能 `require("siyuan")`，禁止 ESM 和 `require("./xxx.js")`） | `siyuan-plugin/index.js`；`siyuan-plugin/src/index.js`；`siyuan-plugin/index.css`；`siyuan-plugin/plugin.json` |
 | 未决定的想法、待评估 idea | `docs/IDEAS.md` | 定案后再迁移到 `ARCHITECTURE.md` 或 `DEVELOPMENT_GUIDE.md` |
-| 思源页面显示与 AI 一致的实时块序号 | `docs/思源桥块序号显示方案-2026-08-27.md`（待审阅） | 定案后再实施并迁移结论到 `ARCHITECTURE.md`、`FRONTEND.md` 和 `DEVELOPMENT_GUIDE.md` |
+| 思源页面显示与 AI 一致的实时块序号 | `docs/ARCHITECTURE.md` 的“阅读模型”；`docs/FRONTEND.md` 的“块序号显示” | 运行时内联在 `siyuan-plugin/index.js`；Node 测试用 `siyuan-plugin/block-index.js`；`tests/fixtures/display_block_index_cases.json` |
 
 涉及设计决策、工具契约、开发流程或排障结论时，不要只更新代码。必须同步更新对应文档。
 
@@ -114,6 +114,7 @@ docs/                架构、开发指南、前端、API、idea、devlog
 - 系统笔记本六篇固定文档按各自生命周期维护；旧 AI Guide 按原 ID 更名为 User Preferences；身份和模板状态记录在本地 `system_state.json`。
 - 关闭笔记本透明打开/关闭：索引、搜索和写入前可临时打开关闭的笔记本，完成后必须恢复。
 - 工作区可能有用户改动：不要回滚、删除或重置非本任务改动。
+- 插件根入口 `siyuan-plugin/index.js` 必须是单文件 CommonJS：只能 `require("siyuan")`，禁止 `import` 和 `require("./xxx.js")`。违者插件加载失败、设置齿轮消失。细节见 `docs/FRONTEND.md`。
 
 ## 协作规则
 

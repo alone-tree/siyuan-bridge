@@ -1,4 +1,5 @@
-const {Dialog, Plugin, showMessage} = require("siyuan");
+// 思源只加载本文件。只能 require("siyuan")，禁止 ESM，禁止 require 本地相对路径，否则插件加载失败、设置齿轮消失。
+const {Dialog, Plugin, showMessage, getAllEditor} = require("siyuan");
 
 const PLUGIN_NAME = "siyuan-bridge";
 const CONFIG_PATH = `/data/plugins/${PLUGIN_NAME}/bridge/config.local.json`;
@@ -52,6 +53,485 @@ const LEGACY_AI_GUIDE_HASHES = new Set([
 ]);
 const SYSTEM_STATE_SCHEMA_VERSION = 2;
 
+const SKIP_BLOCK_TYPES = new Set(["d"]);
+const SUBTREE_MARKDOWN_BLOCK_TYPES = new Set(["i", "l", "t"]);
+const COMMENT_ONLY_BLOCK_TYPES = new Set(["s"]);
+const CHILD_TRAVERSAL_BLOCK_TYPES = new Set(["h", "l", "s"]);
+const DATABASE_BLOCK_TYPES = new Set(["av"]);
+const STRUCTURE_ACTIONS = new Set(["insert", "delete", "move", "append"]);
+const BLOCK_INDEX_STORAGE = "block-index.json";
+const BLOCK_INDEX_OVERLAY_CLASS = "siyuan-bridge-block-index-layer";
+const BLOCK_INDEX_BADGE_CLASS = "siyuan-bridge-block-index";
+const BLOCK_INDEX_DEBOUNCE_MS = 200;
+
+function blockField(block, ...names) {
+  if (!block || typeof block !== "object") {
+    return "";
+  }
+  for (const name of names) {
+    const value = block[name];
+    if (value !== undefined && value !== null) {
+      return String(value);
+    }
+  }
+  return "";
+}
+
+function semanticBlockType(rawType, subtype, markdown) {
+  if (rawType === "p" && /!?\[[^\]]*\]\(assets\/[^)]+\)/.test(markdown || "")) {
+    return "attachment";
+  }
+  return {
+    h: "heading",
+    p: "paragraph",
+    l: "list",
+    i: "list_item",
+    t: "table",
+    c: "code",
+    s: "superblock",
+    av: "database",
+    b: "blockquote",
+    m: "math",
+    html: "html",
+    iframe: "iframe",
+    video: "video",
+    audio: "audio",
+    widget: "widget",
+    tb: "thematic_break",
+  }[rawType] || rawType || "unknown";
+}
+
+function childBlocks(childrenByParent, blockId) {
+  const children = childrenByParent && childrenByParent[blockId];
+  return Array.isArray(children) ? children : [];
+}
+
+function displayBlockNeedsChildren(block) {
+  const blockType = blockField(block, "type");
+  const markdown = blockField(block, "markdown").trim();
+  if (SKIP_BLOCK_TYPES.has(blockType)) {
+    return CHILD_TRAVERSAL_BLOCK_TYPES.has(blockType);
+  }
+  if (DATABASE_BLOCK_TYPES.has(blockType)) {
+    return false;
+  }
+  if (blockType === "l" && !markdown) {
+    return true;
+  }
+  if (!markdown && !COMMENT_ONLY_BLOCK_TYPES.has(blockType)) {
+    return CHILD_TRAVERSAL_BLOCK_TYPES.has(blockType);
+  }
+  if (SUBTREE_MARKDOWN_BLOCK_TYPES.has(blockType)) {
+    return false;
+  }
+  return CHILD_TRAVERSAL_BLOCK_TYPES.has(blockType);
+}
+
+function collectDisplayBlockIndexes(rootId, childrenByParent) {
+  const blocks = [];
+  const visited = new Set();
+
+  function visit(block) {
+    const blockId = blockField(block, "id");
+    if (!blockId || visited.has(blockId)) {
+      return;
+    }
+    visited.add(blockId);
+
+    const blockType = blockField(block, "type");
+    if (SKIP_BLOCK_TYPES.has(blockType)) {
+      if (CHILD_TRAVERSAL_BLOCK_TYPES.has(blockType)) {
+        for (const child of childBlocks(childrenByParent, blockId)) {
+          visit(child);
+        }
+      }
+      return;
+    }
+
+    const subtype = blockField(block, "subtype", "subType");
+    const markdown = blockField(block, "markdown");
+
+    if (DATABASE_BLOCK_TYPES.has(blockType)) {
+      blocks.push({
+        index: blocks.length + 1,
+        id: blockId,
+        type: semanticBlockType(blockType, subtype, markdown),
+      });
+      return;
+    }
+
+    if (blockType === "l" && !markdown.trim()) {
+      for (const child of childBlocks(childrenByParent, blockId)) {
+        visit(child);
+      }
+      return;
+    }
+
+    if (!markdown.trim() && !COMMENT_ONLY_BLOCK_TYPES.has(blockType)) {
+      if (CHILD_TRAVERSAL_BLOCK_TYPES.has(blockType)) {
+        for (const child of childBlocks(childrenByParent, blockId)) {
+          visit(child);
+        }
+      }
+      return;
+    }
+
+    blocks.push({
+      index: blocks.length + 1,
+      id: blockId,
+      type: semanticBlockType(blockType, subtype, markdown),
+    });
+
+    if (SUBTREE_MARKDOWN_BLOCK_TYPES.has(blockType)) {
+      return;
+    }
+    if (CHILD_TRAVERSAL_BLOCK_TYPES.has(blockType)) {
+      for (const child of childBlocks(childrenByParent, blockId)) {
+        visit(child);
+      }
+    }
+  }
+
+  for (const child of childBlocks(childrenByParent, rootId)) {
+    visit(child);
+  }
+  return blocks;
+}
+
+function transactionChangesBlockStructure(detail) {
+  if (!detail || detail.cmd !== "transactions") {
+    return false;
+  }
+  const entries = Array.isArray(detail.data) ? detail.data : [];
+  for (const entry of entries) {
+    const operations = entry && Array.isArray(entry.doOperations) ? entry.doOperations : [];
+    for (const operation of operations) {
+      if (operation && STRUCTURE_ACTIONS.has(String(operation.action || ""))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function createBlockIndexController(options) {
+  const plugin = options.plugin;
+  const fetchChildBlocks = options.fetchChildBlocks;
+  const getAllEditor = options.getAllEditor;
+  const showMessage = options.showMessage;
+
+  const overlays = new Map();
+  const indexByDoc = new Map();
+  const generations = new Map();
+  let enabled = false;
+  let debounceTimer = null;
+
+  function rootIdOf(protyle) {
+    return String((protyle && protyle.block && protyle.block.rootID) || "");
+  }
+
+  function wysiwygOf(protyle) {
+    return protyle && protyle.wysiwyg && protyle.wysiwyg.element;
+  }
+
+  function contentOf(protyle) {
+    return protyle && protyle.contentElement;
+  }
+
+  function clearOverlay(protyle) {
+    const overlay = overlays.get(protyle && protyle.id);
+    if (overlay && overlay.element && overlay.element.parentNode) {
+      overlay.element.parentNode.removeChild(overlay.element);
+    }
+    if (overlay && overlay.resizeObserver) {
+      overlay.resizeObserver.disconnect();
+    }
+    overlays.delete(protyle && protyle.id);
+  }
+
+  function clearAllOverlays() {
+    for (const overlay of overlays.values()) {
+      if (overlay.element && overlay.element.parentNode) {
+        overlay.element.parentNode.removeChild(overlay.element);
+      }
+      if (overlay.resizeObserver) {
+        overlay.resizeObserver.disconnect();
+      }
+    }
+    overlays.clear();
+  }
+
+  function ensureOverlay(protyle) {
+    const content = contentOf(protyle);
+    if (!content || !protyle.id) {
+      return null;
+    }
+    if (window.getComputedStyle(content).position === "static") {
+      content.style.position = "relative";
+    }
+    let overlay = overlays.get(protyle.id);
+    if (overlay && overlay.element && overlay.element.isConnected) {
+      return overlay;
+    }
+    const element = document.createElement("div");
+    element.className = BLOCK_INDEX_OVERLAY_CLASS;
+    element.setAttribute("contenteditable", "false");
+    element.setAttribute("aria-hidden", "true");
+    content.appendChild(element);
+    const resizeObserver = typeof ResizeObserver === "function"
+      ? new ResizeObserver(() => restamp(protyle))
+      : null;
+    const wysiwyg = wysiwygOf(protyle);
+    if (resizeObserver && wysiwyg) {
+      resizeObserver.observe(wysiwyg);
+    }
+    overlay = {element, resizeObserver};
+    overlays.set(protyle.id, overlay);
+    return overlay;
+  }
+
+  function restamp(protyle) {
+    const overlay = overlays.get(protyle && protyle.id);
+    if (!overlay || !overlay.element) {
+      return;
+    }
+    overlay.element.innerHTML = "";
+    if (!enabled) {
+      return;
+    }
+    const mapping = indexByDoc.get(rootIdOf(protyle));
+    const wysiwyg = wysiwygOf(protyle);
+    const content = contentOf(protyle);
+    if (!mapping || mapping.error || !wysiwyg || !content) {
+      return;
+    }
+    const contentRect = content.getBoundingClientRect();
+    for (const item of mapping.blocks) {
+      const node = wysiwyg.querySelector(`[data-node-id="${item.id}"]`);
+      if (!node) {
+        continue;
+      }
+      const nodeRect = node.getBoundingClientRect();
+      const badge = document.createElement("span");
+      badge.className = BLOCK_INDEX_BADGE_CLASS;
+      badge.textContent = String(item.index);
+      badge.style.top = `${nodeRect.top - contentRect.top + content.scrollTop}px`;
+      badge.style.left = `${nodeRect.left - contentRect.left + content.scrollLeft}px`;
+      overlay.element.appendChild(badge);
+    }
+  }
+
+  async function fetchTree(rootId) {
+    const childrenByParent = {};
+    async function fill(blockId) {
+      const children = await fetchChildBlocks(blockId);
+      childrenByParent[blockId] = Array.isArray(children) ? children : [];
+      for (const child of childrenByParent[blockId]) {
+        if (displayBlockNeedsChildren(child)) {
+          await fill(blockField(child, "id"));
+        }
+      }
+    }
+    await fill(rootId);
+    return childrenByParent;
+  }
+
+  async function refreshDocument(rootId) {
+    if (!rootId) {
+      return;
+    }
+    const current = (generations.get(rootId) || 0) + 1;
+    generations.set(rootId, current);
+    try {
+      const childrenByParent = await fetchTree(rootId);
+      if (generations.get(rootId) !== current) {
+        return;
+      }
+      indexByDoc.set(rootId, {
+        blocks: collectDisplayBlockIndexes(rootId, childrenByParent),
+        error: false,
+      });
+    } catch (error) {
+      if (generations.get(rootId) !== current) {
+        return;
+      }
+      indexByDoc.set(rootId, {blocks: [], error: true});
+      clearDocumentOverlays(rootId);
+      showMessage("块序号暂不可用", 3000, "error");
+      console.warn("Siyuan Bridge block index failed", error);
+      return;
+    }
+    for (const editor of getAllEditor() || []) {
+      const protyle = editor && editor.protyle;
+      if (protyle && rootIdOf(protyle) === rootId) {
+        ensureOverlay(protyle);
+        restamp(protyle);
+      }
+    }
+  }
+
+  function clearDocumentOverlays(rootId) {
+    for (const editor of getAllEditor() || []) {
+      const protyle = editor && editor.protyle;
+      if (!protyle || rootIdOf(protyle) !== rootId) {
+        continue;
+      }
+      const overlay = overlays.get(protyle.id);
+      if (overlay && overlay.element) {
+        overlay.element.innerHTML = "";
+      }
+    }
+  }
+
+  function refreshOpenEditors() {
+    const seen = new Set();
+    for (const editor of getAllEditor() || []) {
+      const protyle = editor && editor.protyle;
+      const rootId = rootIdOf(protyle);
+      if (!protyle || !rootId || seen.has(rootId)) {
+        continue;
+      }
+      seen.add(rootId);
+      ensureOverlay(protyle);
+      refreshDocument(rootId);
+    }
+  }
+
+  function scheduleRefreshOpenEditors() {
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+    }
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      refreshOpenEditors();
+    }, BLOCK_INDEX_DEBOUNCE_MS);
+  }
+
+  function attachProtyle(protyle) {
+    if (!enabled || !protyle) {
+      return;
+    }
+    ensureOverlay(protyle);
+    const rootId = rootIdOf(protyle);
+    if (!rootId) {
+      return;
+    }
+    if (indexByDoc.has(rootId) && !indexByDoc.get(rootId).error) {
+      restamp(protyle);
+      return;
+    }
+    refreshDocument(rootId);
+  }
+
+  async function setEnabled(nextEnabled) {
+    enabled = Boolean(nextEnabled);
+    await plugin.saveData(BLOCK_INDEX_STORAGE, {enabled});
+    if (!enabled) {
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
+      }
+      indexByDoc.clear();
+      clearAllOverlays();
+      return;
+    }
+    refreshOpenEditors();
+  }
+
+  function isEnabled() {
+    return enabled;
+  }
+
+  async function toggle() {
+    await setEnabled(!enabled);
+    showMessage(enabled ? "已显示思源桥块序号" : "已隐藏思源桥块序号");
+  }
+
+  async function restore() {
+    try {
+      const stored = await plugin.loadData(BLOCK_INDEX_STORAGE);
+      enabled = Boolean(stored && stored.enabled);
+    } catch (_error) {
+      enabled = false;
+    }
+    if (enabled) {
+      refreshOpenEditors();
+    }
+  }
+
+  function onLoadedStatic(event) {
+    if (!enabled) {
+      return;
+    }
+    attachProtyle(event && event.detail && event.detail.protyle);
+  }
+
+  function onLoadedDynamic(event) {
+    if (!enabled) {
+      return;
+    }
+    const protyle = event && event.detail && event.detail.protyle;
+    if (protyle) {
+      ensureOverlay(protyle);
+      restamp(protyle);
+    }
+  }
+
+  function onSwitch(event) {
+    if (!enabled) {
+      return;
+    }
+    attachProtyle(event && event.detail && event.detail.protyle);
+  }
+
+  function onDestroy(event) {
+    const protyle = event && event.detail && event.detail.protyle;
+    if (protyle) {
+      clearOverlay(protyle);
+    }
+  }
+
+  function onWsMain(event) {
+    if (!enabled) {
+      return;
+    }
+    if (transactionChangesBlockStructure(event && event.detail)) {
+      scheduleRefreshOpenEditors();
+    }
+  }
+
+  function bind() {
+    plugin.eventBus.on("loaded-protyle-static", onLoadedStatic);
+    plugin.eventBus.on("loaded-protyle-dynamic", onLoadedDynamic);
+    plugin.eventBus.on("switch-protyle", onSwitch);
+    plugin.eventBus.on("destroy-protyle", onDestroy);
+    plugin.eventBus.on("ws-main", onWsMain);
+  }
+
+  function unbind() {
+    plugin.eventBus.off("loaded-protyle-static", onLoadedStatic);
+    plugin.eventBus.off("loaded-protyle-dynamic", onLoadedDynamic);
+    plugin.eventBus.off("switch-protyle", onSwitch);
+    plugin.eventBus.off("destroy-protyle", onDestroy);
+    plugin.eventBus.off("ws-main", onWsMain);
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+      debounceTimer = null;
+    }
+    indexByDoc.clear();
+    clearAllOverlays();
+  }
+
+  return {
+    bind,
+    unbind,
+    restore,
+    setEnabled,
+    isEnabled,
+    toggle,
+  };
+}
+
 class SiyuanBridgePlugin extends Plugin {
   onload() {
     this.setting = {
@@ -64,6 +544,20 @@ class SiyuanBridgePlugin extends Plugin {
       hotkey: "",
       callback: () => this.openHome(),
     });
+    this.addCommand({
+      langKey: "toggleSiyuanBridgeBlockIndex",
+      langText: "显示/隐藏思源桥块序号",
+      hotkey: "",
+      callback: () => this.blockIndex.toggle(),
+    });
+
+    this.blockIndex = createBlockIndexController({
+      plugin: this,
+      fetchChildBlocks: (id) => callSiyuanApi("/api/block/getChildBlocks", {id}),
+      getAllEditor,
+      showMessage,
+    });
+    this.blockIndex.bind();
 
     ensureDefaultBridgeConfig().catch((error) => {
       console.warn("Siyuan Bridge config init failed", error);
@@ -87,6 +581,17 @@ class SiyuanBridgePlugin extends Plugin {
     this.systemNotebookMaintenance?.then((documentCache) => {
       if (documentCache) showDuplicateSystemDocuments(documentCache);
     });
+    this.blockIndex.restore().catch((error) => {
+      console.warn("Siyuan Bridge block index restore failed", error);
+    });
+  }
+
+  onunload() {
+    this.blockIndex?.unbind();
+  }
+
+  uninstall() {
+    this.blockIndex?.unbind();
   }
 
   async openHome() {
@@ -147,6 +652,17 @@ function renderHome() {
       </div>
 
       <div class="siyuan-bridge-home__section">
+        <div class="siyuan-bridge-home__section-title">块序号</div>
+        <label class="siyuan-bridge-home__checkbox-row">
+          <input class="b3-switch" type="checkbox" data-block-index="checkbox" />
+          <span class="siyuan-bridge-home__checkbox-label">显示思源桥块序号</span>
+        </label>
+        <p class="siyuan-bridge-home__hint">
+          在正文左侧显示与 AI 引用阅读一致的实时块序号。默认关闭。序号是界面覆盖层，不会写入笔记。
+        </p>
+      </div>
+
+      <div class="siyuan-bridge-home__section">
         <div class="siyuan-bridge-home__section-title">MCP 配置</div>
         <p class="siyuan-bridge-home__hint">配置 Python 路径、工作空间 Token 并生成 MCP JSON。</p>
         <button class="b3-button" data-action="open-mcp-settings">打开 MCP 配置</button>
@@ -200,6 +716,7 @@ function bindHome(root, plugin) {
   loadAndRenderNotifications(root);
   loadTelemetryConfig(root);
   loadAndRenderSystemGuides(root);
+  bindBlockIndexToggle(root, plugin);
 
   const telemetryCheckbox = root.querySelector("[data-telemetry='checkbox']");
   const localCopyArea = root.querySelector("[data-telemetry='local-copy-area']");
@@ -247,6 +764,21 @@ function bindHome(root, plugin) {
     if (action === "reset-system-guide") {
       const guideKey = target.getAttribute("data-guide-key") || "";
       await resetSystemGuide(root, guideKey);
+    }
+  });
+}
+
+function bindBlockIndexToggle(root, plugin) {
+  const checkbox = root.querySelector("[data-block-index='checkbox']");
+  if (!checkbox || !plugin?.blockIndex) return;
+  checkbox.checked = plugin.blockIndex.isEnabled();
+  checkbox.addEventListener("change", async () => {
+    const next = checkbox.checked;
+    try {
+      await plugin.blockIndex.setEnabled(next);
+    } catch (error) {
+      checkbox.checked = plugin.blockIndex.isEnabled();
+      console.warn("Siyuan Bridge block index toggle failed", error);
     }
   });
 }

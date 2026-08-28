@@ -1,0 +1,175 @@
+{
+  "cases": [
+    {
+      "name": "heading-paragraph-code",
+      "root_id": "doc1",
+      "children": {
+        "doc1": [
+          {"id": "heading1", "type": "h", "subtype": "h2", "markdown": "## Hello"},
+          {"id": "para1", "type": "p", "markdown": "World"},
+          {"id": "code1", "type": "c", "markdown": "```js\nconsole.log(1)\n```"}
+        ]
+      },
+      "expected": [
+        {"index": 1, "id": "heading1", "type": "heading"},
+        {"index": 2, "id": "para1", "type": "paragraph"},
+        {"index": 3, "id": "code1", "type": "code"}
+      ]
+    },
+    {
+      "name": "empty-paragraph-skipped",
+      "root_id": "doc1",
+      "children": {
+        "doc1": [
+          {"id": "empty", "type": "p", "markdown": "   "},
+          {"id": "visible", "type": "p", "markdown": "Visible"}
+        ]
+      },
+      "expected": [
+        {"index": 1, "id": "visible", "type": "paragraph"}
+      ]
+    },
+    {
+      "name": "nonempty-list-container",
+      "root_id": "doc1",
+      "children": {
+        "doc1": [
+          {"id": "list1", "type": "l", "subtype": "u", "markdown": "- item 1\n- item 2"}
+        ],
+        "list1": [
+          {"id": "item1", "type": "i", "subtype": "u", "markdown": "- item 1"},
+          {"id": "item2", "type": "i", "subtype": "u", "markdown": "- item 2"}
+        ]
+      },
+      "expected": [
+        {"index": 1, "id": "list1", "type": "list"}
+      ]
+    },
+    {
+      "name": "empty-list-sinks-to-items",
+      "root_id": "doc1",
+      "children": {
+        "doc1": [
+          {"id": "list1", "type": "l", "subtype": "u", "markdown": ""}
+        ],
+        "list1": [
+          {"id": "item1", "type": "i", "subtype": "u", "markdown": "- item 1"},
+          {"id": "item2", "type": "i", "subtype": "u", "markdown": "- item 2"}
+        ]
+      },
+      "expected": [
+        {"index": 1, "id": "item1", "type": "list_item"},
+        {"index": 2, "id": "item2", "type": "list_item"}
+      ]
+    },
+    {
+      "name": "nested-nonempty-list",
+      "root_id": "doc1",
+      "children": {
+        "doc1": [
+          {"id": "outer", "type": "l", "subtype": "u", "markdown": "- parent\n  - child"}
+        ],
+        "outer": [
+          {"id": "item", "type": "i", "subtype": "u", "markdown": "- parent"},
+          {"id": "inner", "type": "l", "subtype": "u", "markdown": "- child"}
+        ],
+        "inner": [
+          {"id": "child-item", "type": "i", "subtype": "u", "markdown": "- child"}
+        ]
+      },
+      "expected": [
+        {"index": 1, "id": "outer", "type": "list"}
+      ]
+    },
+    {
+      "name": "superblock-self-and-children",
+      "root_id": "doc1",
+      "children": {
+        "doc1": [
+          {"id": "super", "type": "s", "markdown": "{{{\nA\n}}}"}
+        ],
+        "super": [
+          {"id": "inner", "type": "p", "markdown": "A"}
+        ]
+      },
+      "expected": [
+        {"index": 1, "id": "super", "type": "superblock"},
+        {"index": 2, "id": "inner", "type": "paragraph"}
+      ]
+    },
+    {
+      "name": "table-one-number",
+      "root_id": "doc1",
+      "children": {
+        "doc1": [
+          {"id": "table1", "type": "t", "markdown": "| A | B |\n| --- | --- |\n| 1 | 2 |"}
+        ],
+        "table1": [
+          {"id": "row1", "type": "p", "markdown": "should not be numbered"}
+        ]
+      },
+      "expected": [
+        {"index": 1, "id": "table1", "type": "table"}
+      ]
+    },
+    {
+      "name": "database-one-number",
+      "root_id": "doc1",
+      "children": {
+        "doc1": [
+          {"id": "db1", "type": "av", "markdown": "<div data-av-id=\"av1\"></div>"}
+        ],
+        "db1": [
+          {"id": "row", "type": "p", "markdown": "database row"}
+        ]
+      },
+      "expected": [
+        {"index": 1, "id": "db1", "type": "database"}
+      ]
+    },
+    {
+      "name": "duplicate-block-id",
+      "root_id": "doc1",
+      "children": {
+        "doc1": [
+          {"id": "p1", "type": "p", "markdown": "Once"},
+          {"id": "p1", "type": "p", "markdown": "Twice"}
+        ]
+      },
+      "expected": [
+        {"index": 1, "id": "p1", "type": "paragraph"}
+      ]
+    },
+    {
+      "name": "empty-heading-sinks-to-children",
+      "root_id": "doc1",
+      "children": {
+        "doc1": [
+          {"id": "h1", "type": "h", "subtype": "h2", "markdown": ""}
+        ],
+        "h1": [
+          {"id": "p1", "type": "p", "markdown": "Under empty heading"}
+        ]
+      },
+      "expected": [
+        {"index": 1, "id": "p1", "type": "paragraph"}
+      ]
+    },
+    {
+      "name": "heading-then-children",
+      "root_id": "doc1",
+      "children": {
+        "doc1": [
+          {"id": "h1", "type": "h", "subtype": "h2", "markdown": "## Section"}
+        ],
+        "h1": [
+          {"id": "p1", "type": "p", "markdown": "Body"}
+        ]
+      },
+      "expected": [
+        {"index": 1, "id": "h1", "type": "heading"},
+        {"index": 2, "id": "p1", "type": "paragraph"}
+      ]
+    }
+  ]
+}

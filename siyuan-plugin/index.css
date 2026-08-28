@@ -186,3 +186,28 @@
   font-size: 14px;
   line-height: 22px;
 }
+
+.siyuan-bridge-block-index-layer {
+  height: 0;
+  left: 0;
+  overflow: visible;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  width: 0;
+  z-index: 5;
+}
+
+.siyuan-bridge-block-index {
+  color: var(--b3-theme-on-surface-light);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  left: 0;
+  line-height: 16px;
+  opacity: 0.55;
+  pointer-events: none;
+  position: absolute;
+  transform: translate(-100%, 0);
+  user-select: none;
+  white-space: nowrap;
+}

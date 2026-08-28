@@ -1,4 +1,4 @@
-import {Dialog, Plugin, showMessage} from "siyuan";
+import {Dialog, Plugin, showMessage, getAllEditor} from "siyuan";
 
 const PLUGIN_NAME = "siyuan-bridge";
 const CONFIG_PATH = `/data/plugins/${PLUGIN_NAME}/bridge/config.local.json`;
@@ -64,6 +64,20 @@ export default class SiyuanBridgePlugin extends Plugin {
       hotkey: "",
       callback: () => this.openHome(),
     });
+    this.addCommand({
+      langKey: "toggleSiyuanBridgeBlockIndex",
+      langText: "显示/隐藏思源桥块序号",
+      hotkey: "",
+      callback: () => this.blockIndex.toggle(),
+    });
+
+    this.blockIndex = createBlockIndexController({
+      plugin: this,
+      fetchChildBlocks: (id) => callSiyuanApi("/api/block/getChildBlocks", {id}),
+      getAllEditor,
+      showMessage,
+    });
+    this.blockIndex.bind();
 
     ensureDefaultBridgeConfig().catch((error) => {
       console.warn("Siyuan Bridge config init failed", error);
@@ -87,6 +101,17 @@ export default class SiyuanBridgePlugin extends Plugin {
     this.systemNotebookMaintenance?.then((documentCache) => {
       if (documentCache) showDuplicateSystemDocuments(documentCache);
     });
+    this.blockIndex.restore().catch((error) => {
+      console.warn("Siyuan Bridge block index restore failed", error);
+    });
+  }
+
+  onunload() {
+    this.blockIndex?.unbind();
+  }
+
+  uninstall() {
+    this.blockIndex?.unbind();
   }
 
   async openHome() {
@@ -147,6 +172,17 @@ function renderHome() {
       </div>
 
       <div class="siyuan-bridge-home__section">
+        <div class="siyuan-bridge-home__section-title">块序号</div>
+        <label class="siyuan-bridge-home__checkbox-row">
+          <input class="b3-switch" type="checkbox" data-block-index="checkbox" />
+          <span class="siyuan-bridge-home__checkbox-label">显示思源桥块序号</span>
+        </label>
+        <p class="siyuan-bridge-home__hint">
+          在正文左侧显示与 AI 引用阅读一致的实时块序号。默认关闭。序号是界面覆盖层，不会写入笔记。
+        </p>
+      </div>
+
+      <div class="siyuan-bridge-home__section">
         <div class="siyuan-bridge-home__section-title">MCP 配置</div>
         <p class="siyuan-bridge-home__hint">配置 Python 路径、工作空间 Token 并生成 MCP JSON。</p>
         <button class="b3-button" data-action="open-mcp-settings">打开 MCP 配置</button>
@@ -200,6 +236,7 @@ function bindHome(root, plugin) {
   loadAndRenderNotifications(root);
   loadTelemetryConfig(root);
   loadAndRenderSystemGuides(root);
+  bindBlockIndexToggle(root, plugin);
 
   const telemetryCheckbox = root.querySelector("[data-telemetry='checkbox']");
   const localCopyArea = root.querySelector("[data-telemetry='local-copy-area']");
@@ -247,6 +284,21 @@ function bindHome(root, plugin) {
     if (action === "reset-system-guide") {
       const guideKey = target.getAttribute("data-guide-key") || "";
       await resetSystemGuide(root, guideKey);
+    }
+  });
+}
+
+function bindBlockIndexToggle(root, plugin) {
+  const checkbox = root.querySelector("[data-block-index='checkbox']");
+  if (!checkbox || !plugin?.blockIndex) return;
+  checkbox.checked = plugin.blockIndex.isEnabled();
+  checkbox.addEventListener("change", async () => {
+    const next = checkbox.checked;
+    try {
+      await plugin.blockIndex.setEnabled(next);
+    } catch (error) {
+      checkbox.checked = plugin.blockIndex.isEnabled();
+      console.warn("Siyuan Bridge block index toggle failed", error);
     }
   });
 }
