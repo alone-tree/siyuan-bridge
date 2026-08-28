@@ -320,6 +320,20 @@ function createBlockIndexController(options) {
     return 0;
   }
 
+  function gutterAnchorElement(node) {
+    const type = node.getAttribute("data-type");
+    if (type === "NodeListItem" && node.firstElementChild) {
+      return node.firstElementChild;
+    }
+    if (type === "NodeSuperBlock" || type === "NodeList") {
+      const child = node.querySelector(":scope > [data-node-id]");
+      if (child && child !== node) {
+        return gutterAnchorElement(child);
+      }
+    }
+    return node;
+  }
+
   function restamp(protyle) {
     const overlay = overlays.get(protyle && protyle.id);
     if (!overlay || !overlay.element) {
@@ -347,14 +361,15 @@ function createBlockIndexController(options) {
       if (!node) {
         continue;
       }
-      const nodeRect = node.getBoundingClientRect();
+      const anchor = gutterAnchorElement(node);
+      const anchorRect = anchor.getBoundingClientRect();
       const badge = document.createElement("span");
       badge.className = BLOCK_INDEX_BADGE_CLASS;
       badge.textContent = String(item.index);
       const slot = gutterSlotFromContent(node, wysiwyg, ancestorCounts);
-      const topOffset = gutterTopOffset(nodeRect.height, gutterCol, fontSize);
-      badge.style.top = `${nodeRect.top - contentRect.top + content.scrollTop + topOffset}px`;
-      badge.style.left = `${nodeRect.left - contentRect.left + content.scrollLeft - gutterCol * slot}px`;
+      const topOffset = gutterTopOffset(anchorRect.height, gutterCol, fontSize);
+      badge.style.top = `${anchorRect.top - contentRect.top + content.scrollTop + topOffset}px`;
+      badge.style.left = `${anchorRect.left - contentRect.left + content.scrollLeft - gutterCol * slot}px`;
       overlay.element.appendChild(badge);
     }
   }

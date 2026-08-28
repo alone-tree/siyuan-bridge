@@ -14,10 +14,11 @@
 
 - 插件设置开关和命令面板可显示当前文档的实时块序号，与 `siyuan_read(include_block_ids=true)` 使用同一套 `getChildBlocks` + `build_display_blocks` 规则。
 - 角标是独立覆盖层，不写入正文或块属性。结构变化后防抖重算；动态加载只补已有映射；失败清空旧序号。
-- 共享样例 `tests/fixtures/display_block_index_cases.json` 同时约束 Python 和 `siyuan-plugin/block-index.js`。
-- 工作区版本升至 1.8.0，尚未提交、发布或导入用户版思源。
-- 第一层：`python -m pytest tests -q` 343 passed、3 warnings；当前源码 MCP 探针 `serverVersion=1.8.0`、9 个工具；真实 `siyuan_read(include_block_ids=true)` 与插件 `collectDisplayBlockIndexes` 在测试文档上 11/11、含列表/表格/数据库的文档上 43/43 一致。
-- 第二层：临时启用 DSH `siyuan-bridge-dev-test`（cwd 当前仓库），确认 1.8.0 与引用阅读序号；随后禁用。未导入测试工作空间，未改用户版思源。
+- 默认开启；插件启用或打开开关时提示：左侧数字由思源桥显示，与 AI 的「第 N 块」一致。
+- 位置对齐思源块标：短块垂直居中，多行贴顶部；超级块/列表用内部第一行作锚点；嵌套从左到右为外层→内层→叶子。
+- 共享样例 `tests/fixtures/display_block_index_cases.json` 同时约束 Python 和 `siyuan-plugin/block-index.js`。根入口必须单文件 CommonJS，只能 `require("siyuan")`。
+- 第一层：`python -m pytest tests -q` 343 passed、3 warnings；当前源码 MCP 探针 `serverVersion=1.8.0`、9 个工具；真实 `siyuan_read(include_block_ids=true)` 与插件编号函数在测试文档 11/11、含列表/表格/数据库文档 43/43 一致。
+- 第二层：临时启用 DSH `siyuan-bridge-dev-test` 后已禁用。已在 `D:\Siyuan2test` 实测显示与块标对齐。
 
 ## 2026-08-27：按分层原则缩短 operate/create/doc_manage 描述（v1.7.4）
 
