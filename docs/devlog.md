@@ -2,6 +2,13 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-08-28：README 截图与集市简介更新（v1.8.1）
+
+- 根目录 `README.md` 作为中文唯一客观来源，`README.en-US.md` 为英文翻译；插件包 README 由 `scripts/build_package.py` 自动同步。
+- 增加块序号显示截图 `image/README/block-index-preview.png`，放在 README 后半部分作为辅助功能展示。
+- 集市中文简介更新为突出 AI Agent、MCP、安全读写和知识库场景。
+- `python scripts/build_package.py` 后确认截图已进入 `dist/package.zip`；`python -m pytest tests -q`：344 passed、3 warnings。
+
 ## 2026-08-28：根入口拆本地 JS 导致测试空间设置齿轮消失
 
 症状：导入 v1.8.0 到测试空间后，思源插件列表设置齿轮消失。

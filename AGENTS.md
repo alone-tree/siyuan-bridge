@@ -114,6 +114,7 @@ docs/                架构、开发指南、前端、API、idea、devlog
 - 系统笔记本六篇固定文档按各自生命周期维护；旧 AI Guide 按原 ID 更名为 User Preferences；身份和模板状态记录在本地 `system_state.json`。
 - 关闭笔记本透明打开/关闭：索引、搜索和写入前可临时打开关闭的笔记本，完成后必须恢复。
 - 工作区可能有用户改动：不要回滚、删除或重置非本任务改动。
+- README 单一来源：根目录 `README.md`（中文）是唯一客观来源，`README.en-US.md` 根据它翻译；`siyuan-plugin/README*.md` 只能由 `scripts/build_package.py` 自动同步，禁止手动维护。
 - 插件根入口 `siyuan-plugin/index.js` 必须是单文件 CommonJS：只能 `require("siyuan")`，禁止 `import` 和 `require("./xxx.js")`。违者插件加载失败、设置齿轮消失。细节见 `docs/FRONTEND.md`。
 
 ## 协作规则

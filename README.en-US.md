@@ -16,7 +16,7 @@ It focuses on documents and knowledge bases: writing, organizing, editing tables
 - "Import a local Markdown file as a new note, or insert part of it into an existing note."
 - "Create a new project notebook and organize these PDFs into categorized documents."
 
-AI can search the entire knowledge base by keyword and browse notebook and document trees. For long documents, it sees the outline first, then reads in complete paragraphs — never splitting mid-sentence. When editing, it can rewrite single paragraphs, reorganize multiple paragraphs, insert before or after, delete ranges, and append. You can turn on “Show Siyuan Bridge block numbers” in the plugin settings so the numbers beside blocks match what AI calls “block N”; numbers refresh after structural edits, and AI re-reads before using them again.
+AI can search the entire knowledge base by keyword and browse notebook and document trees. For long documents, it sees the outline first, then reads in complete paragraphs — never splitting mid-sentence. When editing, it can rewrite single paragraphs, reorganize multiple paragraphs, insert before or after, delete ranges, and append.
 
 Tables support cell-level editing by row and column, including adding or removing rows and columns. Images and files can be uploaded to SiYuan assets; local folders are inserted as links. Local Markdown files can be imported directly as new documents, or their content inserted at a specific position in an existing document. Local image, file, and folder references in the Markdown are imported as SiYuan assets; network URLs are left unchanged. AI can also create notebooks and documents, and rename, move, copy, export, or delete existing ones.
 
@@ -54,6 +54,10 @@ When the plugin is first enabled, Siyuan Bridge creates a notebook named "Siyuan
 In "User Preferences," you can tell AI how concise answers should be, when to ask for confirmation before writing, which notebooks are more important, and what conventions to follow when organizing content. These preferences live in SiYuan and sync with your workspace.
 
 ![User preferences](image/README/1784634489547.png)
+
+Siyuan Bridge shows live block numbers on the left side of the editor by default, so you and AI can use the same numbers to locate specific paragraphs. The numbers refresh automatically after structural edits.
+
+![Siyuan Bridge block number display](image/README/block-index-preview.png)
 
 ## Currently Not Supported
 

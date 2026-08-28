@@ -2,7 +2,7 @@
   "name": "siyuan-bridge",
   "author": "alone-tree",
   "url": "https://github.com/alone-tree/siyuan-bridge",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "minAppVersion": "3.3.0",
   "backends": [
     "windows",
@@ -19,7 +19,7 @@
   },
   "description": {
     "default": "Lean, fast, and hassle-free SiYuan MCP tool.",
-    "zh-CN": "精简、高效、省心的思源笔记 MCP 工具。"
+    "zh-CN": "让 AI Agent 通过 MCP 安全地阅读、搜索和修改你的思源笔记，重点优化长文档、表格、块引用等知识库场景"
   },
   "readme": {
     "default": "README.md",
