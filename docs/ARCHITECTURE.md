@@ -363,8 +363,10 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 | --------------------- | ----: | ----------: | ----------------------------------- |
 | `block_start`       |     1 |         >=1 | 起始展示块序号                      |
 | `block_limit`       |   200 |      1-1000 | 最多返回多少展示块                  |
-| `token_budget`      | 50000 | 1000-200000 | 估算 token 上限，至少返回一个完整块 |
+| `token_budget`      | 10000 | 1000-200000 | 估算 token 上限，至少返回一个完整块 |
 | `include_block_ids` | false |        bool | 是否启用引用阅读                    |
+
+默认预算按宿主 MCP 结果输出上限校准：实测 DSH 约 50KB，混合中文内容 ≈3.7 字节/估算 token，10,000 token 加上头部和大纲仍在安全区内。读取长文档时按返回中的「下一窗口」提示翻页，或由 AI 显式调大 `token_budget`。
 
 引用阅读：
 
@@ -608,7 +610,7 @@ scope：
 | `document_id`       | string  | 空    | 路径歧义或不可用时使用                      |
 | `block_start`       | integer | 1     | 起始展示块序号                              |
 | `block_limit`       | integer | 200   | 最大展示块数量                              |
-| `token_budget`      | integer | 50000 | 估算 token 预算                             |
+| `token_budget`      | integer | 10000 | 估算 token 预算                             |
 | `include_block_ids` | boolean | false | 启用引用阅读                                |
 
 数据流：

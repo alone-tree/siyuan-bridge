@@ -4146,6 +4146,11 @@ class McpServerReadBlockWindowTests(unittest.TestCase):
         # At least one block returned
         self.assertIn("Short.", result)
 
+    def test_default_token_budget_stays_within_host_output_limit(self):
+        spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_read")
+        self.assertEqual(spec["inputSchema"]["properties"]["token_budget"]["default"], 10000)
+        self.assertEqual(mcp_server.DEFAULT_TOKEN_BUDGET, 10000)
+
     def test_next_window_hint(self):
         blocks = {}
         blocks["doc1"] = []

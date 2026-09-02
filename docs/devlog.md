@@ -2,6 +2,16 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-09-02：siyuan_read 默认窗口与宿主输出上限错配（v1.8.2）
+
+- 现象：AI 调用 `siyuan_read(document_id=20260821103311-q1xopu0, include_block_ids=true)` 报告 blocks 55-129「被省略」。
+- 排查：该文档 187 个展示块、估算 22,879 token，均在默认预算（block_limit=200、token_budget=50,000）内，桥端完整返回 84,492 字节。截断发生在宿主侧：DSH 对 MCP 工具结果约 50KB 上限，超限保留头尾、省略中间（本次省略 34,717 字节）并把完整结果转存 spill 文件；实测保留头尾共 49,775 字节。混合中文内容实测 ≈3.7 字节/估算 token。
+- 错配本质：桥用估算 token 做预算，宿主的真实约束是字节。桥头部宣称「展示块：1-187/187」完整返回，宿主却砍掉中间，AI 收不到任何「需要翻页」信号。
+- 决策（已与用户对齐）：预算单位保持估算 token 不变，`DEFAULT_TOKEN_BUDGET` 50,000 → 10,000（≈37KB，估算偏差 ±30% 仍在 50KB 安全区）；`DEFAULT_BLOCK_LIMIT=200`、`MAX_TOKEN_BUDGET=200,000` 保留不动；返回头部不加 KB 显示。2026-05-03 块窗口设计条目中「推荐 token_budget=50000-80000」的默认值建议由本条取代。
+- 实现：`DEFAULT_TOKEN_BUDGET` 50,000 → 10,000；ARCHITECTURE.md 阅读模型默认值表与校准依据；新增测试 `test_default_token_budget_stays_within_host_output_limit`。SKILL.md/README 未引用具体默认值，无需改动。发布时按 DEVELOPMENT_GUIDE「缺陷修复默认 PATCH」升 1.8.2（`source_code/__init__.py` + `siyuan-plugin/plugin.json`）。
+- 验证：`python -m pytest tests -q` 345 passed。第一层 JSON-RPC 探针（当前源码 + 真实思源）：schema default=10000；默认窗口 1-82/187、9,773/10,000 token，带「继续阅读 block_start=83」脚注；`block_start=83` 翻页正常；显式 `token_budget=200000` 仍可一次读全 1-187。第二层能力库临时注册 `siyuan-bridge-dev-test`（仓库源码）同一场景结果一致，返回约 40KB 未触发宿主 50KB 截断；验证后已禁用。
+- 既有小问题（本次未改）：窗口被 token 预算截断时，头部「下一窗口」提示不出现（其条件只判断 block_limit 是否触达），翻页信号由末尾「继续阅读」脚注承担；两条提示条件不一致，可作后续小修正。
+
 ## 2026-08-28：README 截图与集市简介更新（v1.8.1）
 
 - 根目录 `README.md` 作为中文唯一客观来源，`README.en-US.md` 为英文翻译；插件包 README 由 `scripts/build_package.py` 自动同步。
