@@ -873,7 +873,13 @@ def wait_for_display_blocks(client: Any, document_id: str, *, timeout: float = P
     deadline = time.monotonic() + timeout
     blocks: list[DisplayBlock] = []
     while True:
-        blocks = build_display_blocks(client, document_id, include_block_ids=True)
+        try:
+            blocks = build_display_blocks(client, document_id, include_block_ids=True)
+        except SiYuanApiError as exc:
+            if str(exc) != "block not found or its encrypted notebook is locked" or time.monotonic() >= deadline:
+                raise
+            time.sleep(POST_WRITE_SYNC_INTERVAL)
+            continue
         if blocks or time.monotonic() >= deadline:
             return blocks
         time.sleep(POST_WRITE_SYNC_INTERVAL)
@@ -3695,7 +3701,7 @@ class McpServer:
                 for block in reversed(target_blocks):
                     client.delete_block(block.id)
 
-            new_display_blocks = build_display_blocks(client, doc_id, include_block_ids=True)
+            new_display_blocks = wait_for_display_blocks(client, doc_id)
             markdown_file_path = str(args.get("markdown_file") or "").strip()
             link_result = MarkdownLinkProcessResult()
             if markdown_file_path and action in {

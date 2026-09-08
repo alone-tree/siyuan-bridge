@@ -2488,6 +2488,43 @@ class McpServerWriteTests(unittest.TestCase):
         finally:
             mcp_server.detect_active_profile = original
 
+    def test_siyuan_edit_default_block_replace_retries_transient_deleted_heading_read(self):
+        blocks = {
+            "doc1": [
+                {"id": "heading1", "type": "h", "markdown": "## Old heading", "parent_id": "doc1"},
+                {"id": "child1", "type": "p", "markdown": "Old child.", "parent_id": "heading1"},
+            ]
+        }
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        original_get_child_blocks = client.get_child_blocks
+        stale_root_reads = 1
+
+        def get_child_blocks(block_id):
+            nonlocal stale_root_reads
+            if block_id == "doc1" and client._deleted_blocks and stale_root_reads:
+                stale_root_reads -= 1
+                return [{"id": "heading1", "type": "h", "markdown": "## Old heading", "parent_id": "doc1"}]
+            if block_id == "heading1" and client._deleted_blocks:
+                raise SiYuanApiError("block not found or its encrypted notebook is locked")
+            return original_get_child_blocks(block_id)
+
+        client.get_child_blocks = get_child_blocks
+        try:
+            with mock.patch.object(mcp_server.time, "sleep") as sleep:
+                result = server.siyuan_edit({
+                    "document": "/Main/Projects/Doc One",
+                    "action": "default_block_replace",
+                    "start_index": 1,
+                    "start_id": "heading1",
+                    "markdown": "## New heading",
+                    "confirmed": True,
+                })
+            self.assertIn("# 文档已编辑", result)
+            self.assertIn("## New heading", result)
+            sleep.assert_called_once_with(mcp_server.POST_WRITE_SYNC_INTERVAL)
+        finally:
+            mcp_server.detect_active_profile = original
+
     def test_siyuan_edit_default_block_replace_checks_descendant_block_references(self):
         blocks = {
             "doc1": [

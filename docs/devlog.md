@@ -2,6 +2,14 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-09-08：siyuan_edit 写后块树短暂失效误报失败
+
+- 现象：`default_block_replace` 已完成插入和删除，思源正文实际更新，但 Bridge 在生成“新内容”摘要时递归读取到短暂残留的旧标题 ID；该标题已无法再取子块，思源返回 `block not found or its encrypted notebook is locked`，MCP 因此误报整个编辑失败。
+- 根因：思源块树写后可短暂不一致；原实现直接重读展示块，只能过滤读回结果中的旧 ID，无法处理遍历旧标题时已发生的 API 错误。
+- 处理：复用现有 250ms / 5 秒写后同步窗口。`wait_for_display_blocks()` 仅对该明确瞬时错误重试；`siyuan_edit` 写后改用该函数，成功后继续返回原内容和新内容摘要。其他 API 错误仍立即抛出。
+- 验证：新增回归测试，模拟首次写后根块树残留已删除标题、读取其子块报错，下一次读取稳定后仍正常返回编辑结果。
+- 验证流程调整：普通 MCP 改动在单元测试后，临时注册 GitHub 工作目录中的开发版 MCP，并通过 DSH 能力库实际调用；只有需在思源本体 UI 观察的功能才导出到 `D:\Siyuan2test`，由人类手动查看。
+
 ## 2026-09-02：siyuan_read 默认窗口与宿主输出上限错配（v1.8.2）
 
 - 现象：AI 调用 `siyuan_read(document_id=20260821103311-q1xopu0, include_block_ids=true)` 报告 blocks 55-129「被省略」。

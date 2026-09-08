@@ -761,7 +761,7 @@ scope：
 9. 对 `delete` / `default_block_replace` 计算会消失的目标块及其子孙块 ID，检查外部反链。
 10. 创建快照。
 11. 执行块操作；`insert_assets` 先调用 `/api/asset/insertLocalAssets`，再用返回路径生成 Markdown 插在锚点后。
-12. 重新读取展示块；若使用 `markdown_file`，先处理本次新写入块中的本地引用和文内锚点，再读回用于返回摘要。
+12. 重新读取展示块；写后若思源短暂返回 `block not found or its encrypted notebook is locked`，按 250ms 间隔重试至多 5 秒；若使用 `markdown_file`，先处理本次新写入块中的本地引用和文内锚点，再读回用于返回摘要。
 13. 返回原内容、新内容或上下文；`default_block_replace` 的“新内容”会排除本轮已删除的旧块 ID，避免思源块树短暂滞后时误报旧块仍存在。
 14. 尝试 pushMsg。
 
