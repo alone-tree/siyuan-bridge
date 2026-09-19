@@ -2,6 +2,12 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-09-19：遥测看板取消自动刷新并增加一小时缓存
+
+- 公开遥测看板删除每 5 分钟自动刷新，只保留页面首次加载和统计周期切换。
+- Worker `/api/dashboard` 成功响应按完整请求 URL 缓存 1 小时；缓存命中时不再执行 D1 统计查询。
+- 验证：`node --test worker/index.test.mjs` 覆盖连续相同请求只执行首轮 4 条 D1 查询，且 `Cache-Control` 为 `public, max-age=3600`。
+
 ## 2026-09-08：siyuan_edit 写后块树短暂失效误报失败
 
 - 现象：`default_block_replace` 已完成插入和删除，思源正文实际更新，但 Bridge 在生成“新内容”摘要时递归读取到短暂残留的旧标题 ID；该标题已无法再取子块，思源返回 `block not found or its encrypted notebook is locked`，MCP 因此误报整个编辑失败。

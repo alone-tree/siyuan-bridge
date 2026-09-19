@@ -5,6 +5,21 @@ import test from 'node:test';
 const source = await readFile(new URL('./index.js', import.meta.url), 'utf8');
 const worker = (await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)).default;
 
+function installMemoryCache() {
+  const entries = new Map();
+  globalThis.caches = {
+    default: {
+      async match(request) {
+        const response = entries.get(request.url);
+        return response ? response.clone() : undefined;
+      },
+      async put(request, response) {
+        entries.set(request.url, response.clone());
+      },
+    },
+  };
+}
+
 function jsonRequest(path, body) {
   return new Request(`https://example.test${path}`, {
     method: 'POST',
@@ -50,6 +65,7 @@ test('telemetry ingestion rejects test_tool without writing it', async () => {
 });
 
 test('dashboard filters by ids with at least two lifetime calls', async () => {
+  installMemoryCache();
   const queries = [];
   const env = {
     DB: {
@@ -71,6 +87,31 @@ test('dashboard filters by ids with at least two lifetime calls', async () => {
     assert.match(sql, /anonymous_id IN\s*\(\s*SELECT anonymous_id\s+FROM events\s+WHERE tool <> 'test_tool'\s+GROUP BY anonymous_id\s+HAVING COUNT\(\*\) >= 2\s*\)/s);
     assert.match(sql, /tool <> 'test_tool'/);
   }
+});
+
+test('dashboard caches each response for one hour', async () => {
+  installMemoryCache();
+  let queryCount = 0;
+  const env = {
+    DB: {
+      prepare() {
+        queryCount += 1;
+        return {
+          bind() { return this; },
+          async first() { return {}; },
+          async all() { return { results: [] }; },
+        };
+      },
+    },
+  };
+  const request = new Request('https://example.test/api/dashboard?days=30');
+
+  const firstResponse = await worker.fetch(request.clone(), env);
+  const secondResponse = await worker.fetch(request.clone(), env);
+
+  assert.equal(firstResponse.headers.get('Cache-Control'), 'public, max-age=3600');
+  assert.equal(secondResponse.headers.get('Cache-Control'), 'public, max-age=3600');
+  assert.equal(queryCount, 4);
 });
 
 test('error drilldown uses the same lifetime-id filter', async () => {

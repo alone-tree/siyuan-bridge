@@ -943,6 +943,7 @@ Worker 统计边界：
 
 - `/api/telemetry` 拒绝包含 `tool="test_tool"` 的请求，不写入 D1。
 - Dashboard 和错误下钻只统计在整个 `events` 表中累计至少有 2 条非 `test_tool` 调用的匿名 ID；时间窗口只限制返回的事件范围，不限制 ID 的累计调用次数判断。
+- Dashboard 成功响应按完整请求 URL 在 Worker Cache API 缓存 1 小时；公开看板不自动定时刷新。
 - 历史 `test_tool` 事件不参与任何 Dashboard 或错误统计。原始历史事件保留，不做物理删除。
 
 代理探测优先级：`telemetry.json` 显式 proxy → 环境变量 `HTTPS_PROXY` → 系统代理设置 → 直连。

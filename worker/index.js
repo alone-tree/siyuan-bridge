@@ -16,6 +16,8 @@ const ACTIVE_ID_FILTER = `anonymous_id IN (
   HAVING COUNT(*) >= 2
 )`;
 
+const DASHBOARD_CACHE_TTL_SECONDS = 60 * 60;
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -92,6 +94,12 @@ export default {
     // GET /api/dashboard — 遥测统计看板
     if (path === '/api/dashboard' && request.method === 'GET') {
       try {
+        const cache = globalThis.caches.default;
+        const cachedResponse = await cache.match(request);
+        if (cachedResponse) {
+          return cachedResponse;
+        }
+
         const days = Math.min(Math.max(parseInt(url.searchParams.get('days') || '30'), 1), 365);
         const since = new Date(Date.now() - days * 86400000).toISOString();
 
@@ -131,13 +139,16 @@ export default {
           ).bind(since).all(),
         ]);
 
-        return cors(JSON.stringify({
+        const response = cors(JSON.stringify({
           days,
           summary: summary || { active_users: 0, total_calls: 0, success_rate: 0, avg_dur_ms: 0 },
           daily: daily.results || [],
           by_tool: byTool.results || [],
           by_error: byError.results || [],
         }));
+        response.headers.set('Cache-Control', `public, max-age=${DASHBOARD_CACHE_TTL_SECONDS}`);
+        await cache.put(request, response.clone());
+        return response;
       } catch (e) {
         return cors(JSON.stringify({ error: 'query failed' }), 500);
       }
