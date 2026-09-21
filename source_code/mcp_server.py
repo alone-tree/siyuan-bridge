@@ -1745,7 +1745,7 @@ def _extract_tool_action(tool_name: str, args: dict[str, Any]) -> str | None:
 
 class McpServer:
     def __init__(self, root: Path):
-        self.root = root.resolve()
+        self.root = root.absolute()
         self._active_profile: Profile | None = None
         self._active_client: SiYuanClient | None = None
 

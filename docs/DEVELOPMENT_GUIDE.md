@@ -289,8 +289,9 @@ Error: invalid parameter
 - `AI 使用指南` / `AI Guide` 按原文档 ID 更名为 `用户个性化要求` / `User Preferences`，不删除重建。
 - 旧正文由用户修改时完整保留；只有和已知历史默认模板完全一致时才替换成新空模板。
 - 插件激活时合并 JSON 有效 ID、当前名称和历史名称匹配的全部文档；只有结果为空才创建。
-- `system_state.json` 每类记录多个文档条目；失效 ID 由插件激活清理，Python MCP 不写状态。
-- 两篇托管指南只有在当前正文仍等于上次记录的实际正文时才自动升级；用户修改后不得覆盖。
+- Privacy Rules 在其他系统文档前维护并立即保存登记表；任一可选文档维护失败后 Privacy Rules 登记仍有效，最后必须重新扫描并保存。
+- `system_state.json` 位于插件数据区，每类记录多个文档条目；失效 ID 由插件激活清理，Python MCP 不写状态。
+- 两篇托管指南只有在当前正文仍等于上次记录的实际正文时才自动升级；用户修改后不得覆盖；源文件 SHA-256 校验必须先统一 LF/CRLF。
 - 设置页重置指南必须保留文档 ID，并重写模板版本和导入后实际正文哈希。
 - About 用户修改标题或正文后仍按 JSON 记录的原 ID 恢复标准标题和开发者模板，不得创建重复文档。
 - Workspace Index 缺失时只创建一句占位内容，已有真实索引绝不覆盖。
@@ -463,7 +464,7 @@ python scripts/sync_siyuan_plugin_bridge.py
 - `siyuan-plugin/bridge/source_code/mcp_server.py` 存在。
 - `siyuan-plugin/bridge/scripts/run_mcp.py` 存在。
 - `siyuan-plugin/bridge/templates/system-docs/manifest.json` 和四个指南 Markdown 模板存在。
-- `siyuan-plugin/bridge/config.local.json` 不会被同步脚本覆盖。
+- 同步脚本不生成或覆盖 `config.local.json`、`telemetry.json`、`system_state.json`、`privacy_rules.json` 和 `stats/`；安装态持久数据位于 `data/storage/petal/siyuan-bridge/`。
 
 ## 插件导入测试流程
 
@@ -480,13 +481,13 @@ python scripts/sync_siyuan_plugin_bridge.py
 set SIYUAN_TEST_WORKSPACE=D:\siyuan2
 ```
 
-导入脚本默认保留测试工作空间已有的 `bridge/config.local.json` 和 `bridge/telemetry.json`。模拟新用户首次安装时加 `--fresh`，不会保留这些本地配置。
+普通导入会先把旧插件目录中的 `config.local.json`、`telemetry.json`、`knowledge_base/system_state.json`、`knowledge_base/privacy_rules.json` 和 `stats/` 只复制迁移到 `data/storage/petal/siyuan-bridge/`，目标已存在时不覆盖，旧文件不删除。模拟新用户首次安装时加 `--fresh`，脚本会同时删除目标插件目录和该插件数据目录。
 
 > 遥测与反馈的 Worker API、D1 表结构、运维操作详见 [反馈与遥测后端参考](./feedback-telemetry-backend.md)。用户常见问题写在 README。
 
 ### 首次安装（模拟新用户）
 
-模拟用户第一次从零安装插件的场景。预期：导入后没有 `config.local.json`，启用插件后自动创建。
+模拟用户第一次从零安装插件的场景。预期：导入后插件数据目录不存在，启用插件后自动创建其中的 `config.local.json`、`telemetry.json` 和 `system_state.json`。
 
 ```bat
 python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE% --fresh
@@ -501,13 +502,13 @@ python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE%
 验证清单：
 - [x] `bridge/source_code/mcp_server.py` 存在
 - [x] `bridge/scripts/run_mcp.py` 存在
-- [x] `bridge/config.local.json` **不存在**
-- [x] 思源 UI 启用插件后自动创建 `config.local.json`
+- [x] `data/storage/petal/siyuan-bridge/` **不存在**
+- [x] 思源 UI 启用插件后自动创建插件数据区 `config.local.json`、`telemetry.json` 和 `system_state.json`
 - [x] 用户没有点开设置页、没有点击保存的情况下，外部 MCP 客户端能正常启动并调用工具
 
-首次安装/启用插件的真实用户流程必须额外验证：删除测试插件目录中的 `bridge/config.local.json`，整体导入仓库 `siyuan-plugin/` 后，由用户在思源 UI 启用插件。插件启用后应自动创建 `bridge/config.local.json`，写入当前工作空间名称和 Token；在用户没有点开设置页、没有点击”保存配置”的情况下，外部 MCP 客户端也应能正常启动并调用工具。
+首次安装/启用插件的真实用户流程必须额外验证：使用 `--fresh` 同时清空测试插件目录与插件数据目录，整体导入仓库 `siyuan-plugin/` 后，由用户在思源 UI 启用插件。插件启用后应在 `data/storage/petal/siyuan-bridge/config.local.json` 写入当前工作空间名称和 Token；在用户没有点开设置页、没有点击“保存配置”的情况下，外部 MCP 客户端也应能正常启动并调用工具。
 
-跨设备 Token 合并改动还必须验证：准备一个已有其他设备 Token 的 `config.local.json`，启用插件后当前设备 Token 会追加到 profiles，原有 profile 的名称、Token 和顺序保持不变；重复启用不产生重复项；点击“刷新 JSON”也会合并并保存当前 Token。MCP 会话连接改动必须验证：未调用 `siyuan_start` 时普通工具明确要求先 start；一次成功 start 后多个工具不重复探测 profiles；连接或 401/403 鉴权失效后缓存被清空并要求重新 start。
+旧版升级必须验证：在插件程序目录准备旧配置、遥测、系统登记表、隐私缓存与 `stats/`，插件数据区为空时普通导入会完整复制；插件数据区预置不同内容时保持目标不变；插件启用后 Python Bridge 读到插件数据区内容。跨设备 Token 合并改动还必须验证：在插件数据区准备一个已有其他设备 Token 的 `config.local.json`，启用插件后当前设备 Token 会追加到 profiles，原有 profile 的名称、Token 和顺序保持不变；重复启用不产生重复项；点击“刷新 JSON”也会合并并保存当前 Token。MCP 会话连接改动必须验证：未调用 `siyuan_start` 时普通工具明确要求先 start；一次成功 start 后多个工具不重复探测 profiles；连接或 401/403 鉴权失效后缓存被清空并要求重新 start。
 
 ### 第一层：测试代码
 
@@ -666,16 +667,16 @@ git status --short
 # 导入到思源工作空间（写完后在思源集市 → 已下载启用插件）
 python scripts/import_siyuan_plugin.py --workspace "D:\SiYuan"
 
-# 首次导入 / 清空重装（删除旧插件目录，不留旧配置）
+# 首次导入 / 清空重装（删除旧插件目录和插件数据目录）
 python scripts/import_siyuan_plugin.py --workspace "D:\SiYuan" --fresh
 
 # 直接用插件目录路径
 python scripts/import_siyuan_plugin.py --plugin-dir "D:\SiYuan\data\plugins\siyuan-bridge"
 ```
 
-数据流：`sync` 生成 `bridge/` → 把 `siyuan-plugin/` 整个复制到 `{workspace}/data/plugins/siyuan-bridge/`。
+数据流：`sync` 生成 `bridge/` → 普通导入先把目标插件目录中的旧运行数据只复制迁入 `{workspace}/data/storage/petal/siyuan-bridge/` → 把 `siyuan-plugin/` 整体复制到 `{workspace}/data/plugins/siyuan-bridge/`。
 
-`--fresh` 会先删除目标目录再复制。不带 `--fresh` 时保留已有 `config.local.json` 和 `telemetry.json` 不动。
+`--fresh` 会删除目标插件目录和 `{workspace}/data/storage/petal/siyuan-bridge/` 后再复制，用于真正的首次安装测试。不带 `--fresh` 时持久数据优先，旧数据只补缺失文件，绝不覆盖或删除。`--plugin-dir --fresh` 只允许删除名为 `siyuan-bridge` 的目录，防止误删其他插件。
 
 ### 打包发布：`scripts/build_package.py`
 
@@ -687,7 +688,7 @@ python scripts/build_package.py
 
 输出：`dist/package.zip`。
 
-zip 包含：`plugin.json`、`icon.png`、`preview.png`、`index.js`、`index.css`、英文默认说明 `README.md`、中文说明 `README.zh-CN.md`、README 图片目录 `image/README/`、`bridge/`、`dist/`、`src/`。`bridge/` 由 sync 脚本生成，包含完整 Python 运行文件和系统文档模板；`knowledge_base/`、`ai_workspace/`、`stats/`、`config.local.json`、`telemetry.json` 等运行时数据必须从发布包排除。
+zip 包含：`plugin.json`、`icon.png`、`preview.png`、`index.js`、`index.css`、英文默认说明 `README.md`、中文说明 `README.zh-CN.md`、README 图片目录 `image/README/`、`bridge/`、`dist/`、`src/`。`bridge/` 由 sync 脚本生成，包含完整 Python 运行文件和系统文档模板；`knowledge_base/`、`ai_workspace/`、`stats/`、`config.local.json`、`telemetry.json`、`system_state.json`、`privacy_rules.json` 等运行时数据必须从发布包排除。
 
 根目录 `README.md` 是中文内容基准，根目录 `README.en-US.md` 是对应英文版。发布前将两者分别同步到 `siyuan-plugin/README.zh-CN.md` 和 `siyuan-plugin/README.md`。Package 内 README 的图片路径统一使用 `image/README/...`；构建脚本必须把仓库根目录同名图片目录映射到 Package 根目录，确保在线集市和安装后的本地详情页都能显示图片。
 

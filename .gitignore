@@ -34,9 +34,11 @@ Thumbs.db
 /siyuan-plugin/bridge
 /.codegraph
 
-# Telemetry local data (opt-in, never committed)
+# Durable local runtime data (development layout, never committed)
 /stats/
 /telemetry.json
+/system_state.json
+/privacy_rules.json
 
 # Wrangler local state
 worker/.wrangler/

@@ -20,19 +20,22 @@
 - 通知：GET Worker `/api/notifications`。
 - MCP 配置：展示 Python 命令、Bridge 路径、MCP JSON 和 profiles。
 - 反馈：POST Worker `/api/feedback`。
-- 用户体验改进：读写 `bridge/telemetry.json` 中的 `telemetry`。
-- 系统指南：读取 `bridge/knowledge_base/system_state.json`，显示两篇托管指南是否被用户修改，并提供保留文档 ID 的重置按钮。
+- 用户体验改进：通过 `Plugin.loadData/saveData` 读写插件数据区 `telemetry.json` 中的 `telemetry`。
+- 系统指南：读取插件数据区 `system_state.json`，显示两篇托管指南是否被用户修改，并提供保留文档 ID 的重置按钮。
 - 系统笔记本维护：插件每次激活时发现、创建和维护六类系统文档，并在发现重复文档时弹窗提示用户手动检查删除。
 
-## 配置文件
+## 插件数据
 
-- `bridge/config.local.json`：profiles、Token、语言。Token 不写入 MCP JSON。
-- `bridge/telemetry.json`：匿名 ID、遥测开关、端点、代理。
-- `bridge/knowledge_base/system_state.json`：插件维护的工作空间级注册表。schema v2 为每类文档保存多个 ID 和各自模板状态；Python Bridge 只读，不写此文件。
+以下文件通过 `Plugin.loadData/saveData` 保存在工作空间 `data/storage/petal/siyuan-bridge/`，不会随集市更新替换插件程序目录而丢失：
 
-首次启用插件时，前端从思源 `/api/system/getConf` 读取当前工作空间 Token，并在缺失配置时自动创建 `config.local.json`。
+- `config.local.json`：profiles、Token、内部语言配置。Token 不写入 MCP JSON。
+- `telemetry.json`：匿名 ID、遥测开关、本地副本开关、端点、代理。
+- `system_state.json`：插件维护的工作空间级注册表。schema v2 为每类文档保存多个 ID 和各自模板状态；Python Bridge 只读，不写此文件。
+- `block-index.json`：块序号显示开关。
 
-同一次插件激活还会维护系统笔记本：校验 JSON ID，合并当前名称和历史名称匹配的全部文档，清理失效 ID，并且只在某类完全不存在时创建。更新已启用插件、启动思源或重新启用插件都会触发；打开设置页不会触发维护。
+首次启用插件时，前端从思源 `/api/system/getConf` 读取当前工作空间 Token，并在缺失配置时自动创建插件数据区 `config.local.json`。旧版首次升级时，如果插件数据区对应文件不存在，前端会从 `bridge/` 或 `bridge/knowledge_base/` 只复制迁移旧文件；已有持久数据优先，旧文件不删除。`telemetry.json` 没有 `anonymous_id` 时，会先读取 petal 或旧插件目录里的 `stats/telemetry_id`，没有旧值才新建。
+
+同一次插件激活还会维护系统笔记本：先找到或创建 Privacy Rules 并立即保存登记表，再逐项独立维护其他系统文档；单篇指南维护失败不会使已登记的 Privacy Rules 失效。每个成功步骤都保存状态，最后重新扫描系统笔记本并重写登记表。更新已启用插件、启动思源或重新启用插件都会触发；打开设置页不会触发维护。
 
 通知区固定显示两条通知卡片的高度；第三条及后续通知保留在同一区域内，通过纵向滚动查看，不能继续撑高 Home Dialog。单条通知最多显示两行。
 
@@ -40,7 +43,7 @@
 
 工作空间绝对路径不写入配置文件。每次打开 MCP 配置页或点击“刷新 JSON”时，前端调用 `/api/system/getWorkspaces`，选择 `closed=false` 的当前工作空间，重新生成本机插件目录、Bridge 目录、`run_mcp.py` 绝对路径和 MCP JSON。这样插件整体同步到另一台电脑后，设置页仍会显示另一台电脑自己的路径。
 
-两篇托管指南的模板来自 `bridge/templates/system-docs/`，与 Python Bridge 使用同一份源文件和 manifest。重置流程：
+两篇托管指南的模板来自 `bridge/templates/system-docs/`，与 Python Bridge 使用同一份源文件和 manifest。校验 manifest 的源文件 SHA-256 前统一把 CRLF/CR 转成 LF，避免 Windows 检出换行符差异误报模板损坏。重置流程：
 
 1. 用户确认。
 2. 实时调用 `lsNotebooks` 找到当前系统笔记本，从以该笔记本 ID 分区的 JSON 记录中取得该类型的全部有效文档 ID。
@@ -78,8 +81,9 @@ python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE% --fre
 
 - 根 `index.js` 只有 `require("siyuan")`，没有 `import`，也没有 `require("./xxx.js")`。
 - 插件能启用，设置齿轮存在。
-- 首次启用能生成 `bridge/config.local.json`。
-- 首次启用能创建六类系统文档，并把每类文档记录为数组。
+- 首次启用能在 `data/storage/petal/siyuan-bridge/` 生成 `config.local.json`。
+- 旧版文件存在且插件数据区为空时只复制迁移；目标已有数据时不覆盖旧值。
+- 首次启用能创建六类系统文档，并把每类文档记录为数组；指南模板失败时 Privacy Rules 登记仍已保存。
 - 已有 JSON ID、当前名称和历史名称匹配结果会取并集；只要还有一篇就不新建。
 - 重复文档会全部登记并弹窗；用户删除后不重载插件，`siyuan_start` 仍能跳过失效 ID 正常读取剩余文档。
 - MCP JSON 不包含 Token。

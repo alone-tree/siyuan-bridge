@@ -4,13 +4,14 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .runtime_data import SYSTEM_STATE_FILE, runtime_read_path
+
 
 SYSTEM_STATE_SCHEMA_VERSION = 2
-SYSTEM_STATE_PATH = Path("knowledge_base") / "system_state.json"
 
 
 def load_system_state(root: Path) -> dict[str, Any]:
-    path = root / SYSTEM_STATE_PATH
+    path = runtime_read_path(root, SYSTEM_STATE_FILE)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):

@@ -21,6 +21,13 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 
 from source_code import __version__ as MCP_VERSION
+from source_code.runtime_data import (
+    TELEMETRY_FILE,
+    migrate_legacy_stats,
+    runtime_data_path,
+    runtime_read_path,
+    telemetry_stats_dir,
+)
 
 # ---------------------------------------------------------------------------
 # 常量
@@ -33,7 +40,7 @@ DEFAULT_TELEMETRY_CONFIG: dict[str, str] = {
     "proxy": "",
     "local_copy": "false",
 }
-_TELEMETRY_FILE = "telemetry.json"
+_TELEMETRY_FILE = TELEMETRY_FILE
 _STATS_DIR = "stats"
 _EVENTS_SUBDIR = "events"
 _TELEMETRY_ID_FILE = "telemetry_id"
@@ -78,8 +85,8 @@ class TelemetryEvent:
 
 
 def _read_anonymous_id_from_telemetry_json(root: Path) -> str | None:
-    """从 telemetry.json 读取 anonymous_id（优先来源，JS 端生成）。"""
-    config_file = root / _TELEMETRY_FILE
+    """从持久数据区的 telemetry.json 读取 anonymous_id。"""
+    config_file = runtime_read_path(root, _TELEMETRY_FILE)
     if not config_file.exists():
         return None
     try:
@@ -94,18 +101,20 @@ def _read_anonymous_id_from_telemetry_json(root: Path) -> str | None:
 
 
 def _write_anonymous_id_to_telemetry_json(root: Path, aid: str) -> None:
-    """回写 anonymous_id 到 telemetry.json（兼容 JS 未初始化的情况）。"""
-    config_file = root / _TELEMETRY_FILE
+    """回写 anonymous_id 到持久数据区，兼容 JS 未初始化的情况。"""
+    existing_file = runtime_read_path(root, _TELEMETRY_FILE)
+    config_file = runtime_data_path(root, _TELEMETRY_FILE)
     cfg: dict[str, Any] = {}
-    if config_file.exists():
+    if existing_file.exists():
         try:
-            cfg = json.loads(config_file.read_text(encoding="utf-8"))
+            cfg = json.loads(existing_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             cfg = {}
     if not isinstance(cfg, dict):
         cfg = {}
     cfg["anonymous_id"] = aid
     try:
+        config_file.parent.mkdir(parents=True, exist_ok=True)
         config_file.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     except OSError:
         pass
@@ -116,7 +125,7 @@ def generate_anonymous_id(root: Path) -> str:
     global _anonymous_id
     _anonymous_id = None
     aid = uuid.uuid4().hex
-    stats_dir = root / _STATS_DIR
+    stats_dir = telemetry_stats_dir(root)
     stats_dir.mkdir(parents=True, exist_ok=True)
     (stats_dir / _TELEMETRY_ID_FILE).write_text(aid, encoding="utf-8")
     _write_anonymous_id_to_telemetry_json(root, aid)
@@ -136,8 +145,15 @@ def load_anonymous_id(root: Path) -> str:
         _anonymous_id = aid
         return aid
 
-    # 2) stats/telemetry_id（旧版兼容）
-    id_file = root / _STATS_DIR / _TELEMETRY_ID_FILE
+    # 2) stats/telemetry_id（旧版兼容并迁入持久数据区）
+    try:
+        migrate_legacy_stats(root)
+    except OSError:
+        pass
+    id_file = telemetry_stats_dir(root) / _TELEMETRY_ID_FILE
+    legacy_id_file = root.absolute() / _STATS_DIR / _TELEMETRY_ID_FILE
+    if not id_file.exists() and legacy_id_file != id_file and legacy_id_file.exists():
+        id_file = legacy_id_file
     if id_file.exists():
         aid = id_file.read_text(encoding="utf-8").strip()
         if aid:
@@ -179,8 +195,8 @@ def set_siyuan_version(ver: str) -> None:
 
 
 def load_telemetry_config(root: Path) -> dict[str, str]:
-    """读取 telemetry.json，缺失或损坏返回默认。"""
-    config_file = root / _TELEMETRY_FILE
+    """读取持久数据区的 telemetry.json，缺失或损坏返回默认。"""
+    config_file = runtime_read_path(root, _TELEMETRY_FILE)
     if not config_file.exists():
         return dict(DEFAULT_TELEMETRY_CONFIG)
     try:
@@ -271,7 +287,7 @@ def record_event(root: Path, event: TelemetryEvent) -> None:
     try:
         now = datetime.now(timezone.utc)
         date_str = now.strftime("%Y-%m-%d")
-        events_dir = root / _STATS_DIR / _EVENTS_SUBDIR
+        events_dir = telemetry_stats_dir(root) / _EVENTS_SUBDIR
         events_dir.mkdir(parents=True, exist_ok=True)
         jsonl_path = events_dir / f"{date_str}.jsonl"
         line = json.dumps(asdict(event), ensure_ascii=False, separators=(",", ":"))

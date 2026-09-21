@@ -7,6 +7,8 @@ from dataclasses import field
 from pathlib import Path
 from typing import Any, Iterable
 
+from .runtime_data import PRIVACY_RULES_FILE, runtime_data_path, runtime_read_path
+
 
 @dataclass(frozen=True)
 class PrivacyRules:
@@ -18,12 +20,8 @@ class PrivacyRules:
 # ── Privacy Rules cache ────────────────────────────────────────────────
 
 def load_privacy_rules(root: Path) -> PrivacyRules:
-    """Load privacy rules from the cached knowledge_base/privacy_rules.json.
-
-    This cache is written by refresh_index / siyuan_start after parsing the
-    Privacy Rules document in the SiYuan system notebook.
-    """
-    path = root / "knowledge_base" / "privacy_rules.json"
+    """Load the persistent cache parsed from the Privacy Rules document."""
+    path = runtime_read_path(root, PRIVACY_RULES_FILE)
     if not path.exists():
         return PrivacyRules(ignore=[], allow=[])
     try:
@@ -36,11 +34,11 @@ def load_privacy_rules(root: Path) -> PrivacyRules:
 
 
 def write_privacy_rules_cache(root: Path, rules: PrivacyRules) -> None:
-    """Write parsed privacy rules to the cache file."""
-    cache_dir = root / "knowledge_base"
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    """Write parsed privacy rules to persistent plugin data."""
+    path = runtime_data_path(root, PRIVACY_RULES_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"ignore": rules.ignore, "allow": rules.allow, "permissions": rules.permissions}
-    cache_dir.joinpath("privacy_rules.json").write_text(
+    path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )

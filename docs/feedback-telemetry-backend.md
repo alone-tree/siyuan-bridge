@@ -368,15 +368,16 @@ LIMIT 20;
 ```javascript
 const DEFAULT_ENDPOINT = "https://siyuanbridgetelemetry.zingerplayground.top";
 
-async function getEffectiveEndpoint() {
-  try {
-    const text = await getFile(TELEMETRY_PATH);    // 读 telemetry.json
-    const cfg = JSON.parse(text);
-    if (cfg && cfg.telemetry_endpoint) return cfg.telemetry_endpoint;
-  } catch (_) {}
-  return DEFAULT_ENDPOINT;                          // 兜底
+async function getEffectiveEndpoint(plugin) {
+  const cfg = await loadPluginData(
+    plugin, TELEMETRY_STORAGE, LEGACY_TELEMETRY_PATH
+  );
+  if (cfg?.telemetry_endpoint) return String(cfg.telemetry_endpoint).trim();
+  return DEFAULT_ENDPOINT;  // 兜底
 }
 ```
+
+`telemetry.json` 通过 `Plugin.loadData/saveData` 保存在 `data/storage/petal/siyuan-bridge/`；旧插件目录文件只在目标缺失时迁移。
 
 - 通知：`fetch(GET ${endpoint}/api/notifications)`
 - 反馈：`fetch(POST ${endpoint}/api/feedback, {body: ...})`

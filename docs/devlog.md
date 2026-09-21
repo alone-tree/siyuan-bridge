@@ -2,6 +2,18 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-09-21：运行时数据迁入思源插件数据区（v1.8.4）
+
+- 症状：插件更新后 `system_state.json` 可随插件程序目录一起丢失，MCP 因缺少 Privacy Rules 文档登记而失败关闭；配置和遥测文件也依赖可替换的 `bridge/` 目录。
+- 根因：`config.local.json`、`telemetry.json`、`system_state.json` 和遥测本地副本未使用思源插件数据区。系统笔记本维护又在全部文档处理完成后才保存登记表；Windows CRLF 会使托管指南源文件哈希与 manifest 的 LF 哈希不一致，异常中断发生在保存之前。
+- 数据迁移：安装态统一写入 `data/storage/petal/siyuan-bridge/`。持久内容包括配置、遥测、系统登记表、Privacy Rules 解析缓存、`stats/` 与既有 `block-index.json`；`tree.md`、`docs.jsonl`、`notebooks.json` 和 `ai_workspace/` 仍可重建。开发仓库继续使用项目根目录。
+- 兼容策略：插件和 Python 均优先读取持久数据；目标缺失时只复制旧文件，不覆盖、不删除。普通测试导入先迁移，`--fresh` 同时删除插件程序目录和插件数据目录。
+- 系统登记：Privacy Rules 先维护并立即保存；其他系统文档逐项独立维护，每个成功步骤后保存，最后重新扫描并重写登记表。可选指南失败不再使 Privacy Rules 登记失效。
+- 模板校验：托管指南计算源文件 SHA-256 前统一 CRLF/CR 为 LF。
+- 安全与兼容补丁：`--plugin-dir --fresh` 只允许删除名为 `siyuan-bridge` 的插件目录；发布包排除根级 `system_state.json` 和 `privacy_rules.json`；开发仓库忽略这两份本地运行时文件；仅有旧 `stats/telemetry_id` 时沿用该匿名 ID；安装路径识别保留 junction/symlink 形状。
+- 测试：新增路径识别、只复制迁移、持久数据优先、隐私缓存、导入脚本、打包排除、匿名 ID 回退和插件 JS 迁移契约测试；全量测试 `363 passed, 1 skipped, 3 warnings`。
+- 测试工作空间：`--fresh` 导入后 petal 目录为空；启用插件后在 `D:\Siyuan2test\data\storage\petal\siyuan-bridge\` 生成 `config.local.json`、`telemetry.json`、`system_state.json`、`block-index.json`，六类系统文档全部登记。普通导入覆盖程序目录后这些文件仍在。发布包 `dist/package.zip` 含 `runtime_data.py`，不含运行时 JSON。未部署生产工作空间。
+
 ## 2026-09-19：遥测看板取消自动刷新并增加一小时缓存
 
 - 公开遥测看板删除每 5 分钟自动刷新，只保留页面首次加载和统计周期切换。

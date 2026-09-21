@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from .client import SiYuanApiError, SiYuanClient, SiYuanConnectionError
+from .runtime_data import CONFIG_FILE, runtime_read_path
 
-LOCAL_CONFIG = "config.local.json"
+LOCAL_CONFIG = CONFIG_FILE
 
 ENV_TOKEN = "SIYUAN_TOKEN"
 ENV_LANGUAGE = "SIYUAN_AGENT_LANGUAGE"
@@ -41,8 +42,8 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def load_config(root: Path | None = None) -> Config:
-    project_root = (root or Path.cwd()).resolve()
-    local = _read_json(project_root / LOCAL_CONFIG)
+    project_root = (root or Path.cwd()).absolute()
+    local = _read_json(runtime_read_path(project_root, LOCAL_CONFIG))
 
     env_lang = os.environ.get(ENV_LANGUAGE)
     language = env_lang if env_lang else str(local.get("language", "") or "")

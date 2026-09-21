@@ -5,7 +5,7 @@
 
 ## 整体架构
 
-思源桥的核心是一个本地 Python MCP Bridge。思源插件是安装和配置入口，外部 AI 客户端通过 MCP 调用 Python Bridge，Python Bridge 再调用思源本地 HTTP API。用户的长期规则放在思源系统笔记本，本地 `knowledge_base/` 只保存可重建的安全索引。
+思源桥的核心是一个本地 Python MCP Bridge。思源插件是安装和配置入口，外部 AI 客户端通过 MCP 调用 Python Bridge，Python Bridge 再调用思源本地 HTTP API。用户的长期规则放在思源系统笔记本；`knowledge_base/` 只保存可重建索引，跨插件更新保留的数据写入思源插件数据区 `data/storage/petal/siyuan-bridge/`。
 
 ```mermaid
 flowchart LR
@@ -18,6 +18,7 @@ flowchart LR
   SiYuan["思源本地 HTTP API\n127.0.0.1:6806"]
   SystemNotebook["思源系统笔记本\nMCP Guide / User Preferences / Index Guide\nWorkspace Index / About / Privacy Rules"]
   KB["knowledge_base/\ntree.md / docs.jsonl / notebooks.json"]
+  Petal["data/storage/petal/siyuan-bridge/\n配置 / 登记表 / 隐私缓存 / 遥测"]
   Workspace["ai_workspace/\nattachments / exports / 临时材料"]
   Worker["Worker + D1\n反馈 / 遥测 / 通知"]
 
@@ -29,6 +30,8 @@ flowchart LR
   MCP --> Client
   Client --> SiYuan
   SiYuan --> SystemNotebook
+  Plugin --> Petal
+  MCP --> Petal
   MCP --> KB
   MCP --> Workspace
   MCP --> Worker
@@ -52,8 +55,8 @@ flowchart LR
 
 | 场景 | 主调用链 |
 |---|---|
-| 首次使用 | 思源插件读取当前设备 Token → 合并写入 `bridge/config.local.json` 的 profiles → 用户复制 MCP JSON 到 AI 客户端 |
-| 插件激活 | 插件调用系统笔记本维护入口 → 校验并合并 JSON ID 与同名文档 → 必要时创建缺失类型 → 持久化状态并通知重复文档 |
+| 首次使用 | 思源插件读取当前设备 Token → 合并写入插件数据区 `config.local.json` 的 profiles → 用户复制 MCP JSON 到 AI 客户端 |
+| 插件激活 | 插件先迁移旧版运行时数据 → 确保 Privacy Rules 并立即持久化登记表 → 各自独立维护其他系统文档 → 最终重扫并持久化状态 |
 | 会话启动 | AI 调 `siyuan_start` → 探测 profile → 读取已维护的系统笔记本内容 → 解析 Privacy Rules → 刷新安全索引 → 返回启动包；不创建、更新或迁移系统文档 |
 | 搜索 | `siyuan_find` → 临时打开目标笔记本 → 思源搜索/SQL → 隐私过滤 → 按文档聚合结果 |
 | 阅读 | `siyuan_read` → 解析可见文档 → 路径 live 校验 → `getChildBlocks` → 块窗口 + 大纲 → 提取附件到 `ai_workspace/` |
@@ -103,6 +106,7 @@ flowchart LR
 source_code/
   client.py          思源 HTTP API 封装
   config.py          config.local.json / 环境变量 / profile 探测
+  runtime_data.py    安装态插件数据区定位与旧数据只复制迁移
   telemetry.py       遥测与反馈：事件收集、本地存储、代理上传、反馈提交
   ignore.py          Privacy Rules Markdown 表格解析与权限判断
   indexer.py         刷新本地安全索引与工作区 README
@@ -131,8 +135,8 @@ tests/               单元测试
 思源插件形态是新的低安装门槛入口，不替代 Python MCP Bridge 的核心实现。第一版插件职责：
 
 - 提供设置页。
-- 写入插件内 `bridge/config.local.json`。
-- 写入插件内 `bridge/telemetry.json`。
+- 通过 `Plugin.loadData/saveData` 读写插件数据区内的 `config.local.json`、`telemetry.json` 和 `system_state.json`。
+- 首次升级时从插件程序目录只复制迁移旧数据；持久数据已存在时绝不覆盖，旧文件不删除。
 - 生成可复制 MCP JSON。
 - 携带由同步脚本复制的 Python Bridge 运行文件。
 - 提供通知、反馈、用户体验改进开关，以及与引用阅读一致的实时块序号覆盖层。
@@ -152,9 +156,9 @@ siyuan-plugin/
 
 `siyuan-plugin/bridge/` 由 `python scripts/sync_siyuan_plugin_bridge.py` 生成，不提交 Git。同步脚本只复制必要 Python 运行文件和说明文件，不复制 `config.local.json`、`knowledge_base/`、`ai_workspace/`、`tests/`、`.mcp.json` 或 `dist/`。
 
-MCP JSON 只包含 Python 命令、`run_mcp.py` 绝对路径和 `PYTHONUTF8=1`。Token 只保存在 `bridge/config.local.json` 中，并继续使用现有 `profiles` 配置模型。绝对路径属于当前设备运行状态，不写入插件配置；插件每次打开 MCP 配置页或点击“刷新 JSON”时，都会通过 `/api/system/getWorkspaces` 重新识别当前打开的本机工作空间并生成路径。
+MCP JSON 只包含 Python 命令、`run_mcp.py` 绝对路径和 `PYTHONUTF8=1`。Token 只保存在插件数据区 `config.local.json` 中，并继续使用现有 `profiles` 配置模型。绝对路径属于当前设备运行状态，不写入插件配置；插件每次打开 MCP 配置页或点击“刷新 JSON”时，都会通过 `/api/system/getWorkspaces` 重新识别当前打开的本机工作空间并生成路径。
 
-插件启动和设置页通过思源本地 `/api/system/getConf` 获取当前设备 Token，通过 `/api/system/getWorkspaces` 获取当前设备实际打开的工作空间路径。插件每次启动时，如果当前 Token 尚未存在于 `bridge/config.local.json` 的 profiles 中，就以当前工作空间名称追加一个 profile；已有 profile 不覆盖、不删除、不重排。设置页点击“刷新 JSON”时同样合并当前 Token 并保存配置。这样同一插件目录跨设备同步时，各设备 Token 会逐步汇总到 profiles，MCP JSON 仍不包含 Token。Token 在设置页中允许明文显示，方便用户确认工作空间；用户也可以手动新增、改名或修改 profile。MCP 绝对路径仍必须在每台电脑上按当前工作空间重新生成。
+插件启动和设置页通过思源本地 `/api/system/getConf` 获取当前设备 Token，通过 `/api/system/getWorkspaces` 获取当前设备实际打开的工作空间路径。插件每次启动时，如果当前 Token 尚未存在于插件数据区 `config.local.json` 的 profiles 中，就以当前工作空间名称追加一个 profile；已有 profile 不覆盖、不删除、不重排。设置页点击“刷新 JSON”时同样合并当前 Token 并保存配置。这样同一工作空间经思源同步到另一台设备时，各设备 Token 会逐步汇总到 profiles，MCP JSON 仍不包含 Token。Token 在设置页中允许明文显示，方便用户确认工作空间；用户也可以手动新增、改名或修改 profile。MCP 绝对路径仍必须在每台电脑上按当前工作空间重新生成。
 
 插件前端的实现细节、CommonJS/ESM 加载坑、测试导入流程和 UI 数据流见 `docs/FRONTEND.md`。架构文档只记录它与 Python Bridge、配置文件和 Worker 后端的关系。
 
@@ -213,11 +217,12 @@ MCP JSON 只包含 Python 命令、`run_mcp.py` 绝对路径和 `PYTHONUTF8=1`�
 系统笔记本生命周期决策：
 
 1. **插件激活是唯一维护入口。** 插件激活时完成系统笔记本和六类系统文档的发现、创建、迁移、模板维护与状态持久化；不得等到 `siyuan_start` 才维护。
-2. **每类文档记录多个 ID。** 每次插件激活都合并：JSON 中仍然有效的全部 ID、当前名称匹配的全部文档、历史名称匹配的全部文档。被用户删除的 ID 从 JSON 移除。
-3. **只有合并结果为空才创建。** 只要某一类型仍找到至少一篇文档，就不得再为该类型创建新文档；新创建的 ID 立即写入 JSON。
-4. **多篇文档不自动修复。** 找到多篇时全部纳入该类型并继续正常使用；需要聚合的内容按类型合并。插件只通知用户存在重复文档，不自动删除、合并正文或提供一次性修复功能。用户手动删除后，下次激活自动清理失效 ID，同时继续保证每类至少一篇。
-5. **Privacy Rules 全量硬隔离。** 所有被识别为 Privacy Rules 的文档 ID 都不可被 AI 读取、搜索或编辑；规则表合并解析，空表不影响结果。
-6. **`siyuan_start` 是只读会话入口。** 它只探测 profile、获取已维护的系统笔记本内容、解析合并后的 Privacy Rules、刷新安全索引并组装启动包，不创建、更新、迁移系统文档，也不改写系统状态。这样既消除第二个写入入口，也降低每次 AI 会话启动的维护开销。
+2. **Privacy Rules 先登记。** 找到或创建 Privacy Rules 后立即保存 `system_state.json`；其他文档逐项独立维护并在每个成功步骤后保存，某篇指南的模板或哈希失败不能撤销 Privacy Rules 登记。最后重新扫描系统笔记本并重写登记表。
+3. **每类文档记录多个 ID。** 每次插件激活都合并：JSON 中仍然有效的全部 ID、当前名称匹配的全部文档、历史名称匹配的全部文档。被用户删除的 ID 从 JSON 移除。
+4. **只有合并结果为空才创建。** 只要某一类型仍找到至少一篇文档，就不得再为该类型创建新文档；新创建的 ID 立即写入 JSON。
+5. **多篇文档不自动修复。** 找到多篇时全部纳入该类型并继续正常使用；需要聚合的内容按类型合并。插件只通知用户存在重复文档，不自动删除、合并正文或提供一次性修复功能。用户手动删除后，下次激活自动清理失效 ID，同时继续保证每类至少一篇。
+6. **Privacy Rules 全量硬隔离。** 所有被识别为 Privacy Rules 的文档 ID 都不可被 AI 读取、搜索或编辑；规则表合并解析，空表不影响结果。
+7. **`siyuan_start` 是只读会话入口。** 它只探测 profile、获取已维护的系统笔记本内容、解析合并后的 Privacy Rules、刷新安全索引并组装启动包，不创建、更新、迁移系统文档，也不改写系统状态。这样既消除第二个写入入口，也降低每次 AI 会话启动的维护开销。
 
 `siyuan_start` 对 JSON 中的 ID 做实时只读校验。失效 ID 仅在本次运行中跳过，不写回 JSON；非 Privacy Rules 类型全部失效时，向思源推送 warning 并在启动包注入提示，但继续运行。Privacy Rules 只要仍有一篇有效文档就合并解析并继续；全部失效时失败关闭，提示用户禁用并重新启用插件后重试。
 
@@ -235,15 +240,26 @@ MCP JSON 只包含 Python 命令、`run_mcp.py` 绝对路径和 `PYTHONUTF8=1`�
 
 ## 本地缓存与运行时文件
 
-本地缓存位于 `knowledge_base/`：
+安装态的持久运行数据位于工作空间 `data/storage/petal/siyuan-bridge/`，由思源 `Plugin.loadData/saveData` 和 Python `runtime_data.py` 共同访问：
 
-| 文件                   | 来源                     | 用途                             |
-| ---------------------- | ------------------------ | -------------------------------- |
-| `tree.md`            | `refresh_index()` 生成 | 给人和 AI 看的客观树状索引       |
-| `docs.jsonl`         | `refresh_index()` 生成 | MCP 工具解析路径、补全文档元数据 |
-| `notebooks.json`     | `refresh_index()` 生成 | 可见笔记本列表                   |
-| `privacy_rules.json` | Privacy Rules 解析结果   | 工具执行时的权限缓存             |
-| `system_state.json`  | 系统笔记本协调结果       | 按工作空间记录系统笔记本/文档 ID、模板基线和用户修改状态 |
+| 文件或目录 | 来源 | 用途 |
+|---|---|---|
+| `config.local.json` | 插件设置与当前设备 Token | profiles、Token、内部语言配置 |
+| `telemetry.json` | 插件遥测设置与 Python 匿名 ID | 遥测选择、端点、代理、匿名 ID |
+| `system_state.json` | 插件系统笔记本维护 | 工作空间级文档 ID、模板基线和用户修改状态 |
+| `privacy_rules.json` | `siyuan_start` 解析 Privacy Rules | 工具执行时持续生效的权限缓存 |
+| `stats/` | Python 遥测模块 | 匿名 ID 兼容文件及用户选择保留的本地事件副本 |
+| `block-index.json` | 插件块序号设置 | 块序号开关 |
+
+首次升级按“持久数据优先、旧数据只复制、不覆盖、不删除”迁移插件程序目录中的旧文件。普通开发仓库不具备安装目录结构，仍在项目根目录读写这些文件，避免要求伪造思源工作空间。安装路径识别使用 `Path.absolute()`，不先 `resolve()`，以便 junction/symlink 安装仍能映射到同一工作空间的 petal 数据区。插件数据区会参与思源同步；卸载插件不会自动删除它，其中包含 Token，清理时必须由用户明确决定。回滚到尚不认识插件数据区的旧版时，旧版只能看到程序目录里的旧副本；新旧插件或 Python Bridge 混用时也可能短暂读取不同数据，必须保持整套版本一致。已在旧版集市更新中被删除的历史配置无法由首次新版本升级恢复，系统登记表只能根据思源中的现存文档重建。仅有旧 `stats/telemetry_id`、没有 `telemetry.json` 时，插件启用后会把该 ID 写入持久 `telemetry.json`，不再生成新的匿名 ID。
+
+可重建缓存位于 `knowledge_base/`：
+
+| 文件 | 来源 | 用途 |
+|---|---|---|
+| `tree.md` | `refresh_index()` 生成 | 给人和 AI 看的客观树状索引 |
+| `docs.jsonl` | `refresh_index()` 生成 | MCP 工具解析路径、补全文档元数据 |
+| `notebooks.json` | `refresh_index()` 生成 | 可见笔记本列表 |
 
 AI 工作区位于 `ai_workspace/`：
 
@@ -935,7 +951,7 @@ scope：
 数据流：
 1. `siyuan_start` 初始化会话 ID、匿名 ID、思源版本。
 2. 每次工具调用经 `_with_telemetry`：计时、捕获结果/异常。
-3. 本地写入 `stats/events/YYYY-MM-DD.jsonl`（local/upload 模式）。
+3. 用户启用本地副本时写入插件数据区 `stats/events/YYYY-MM-DD.jsonl`。
 4. upload 模式：后台线程 fire-and-forget POST 到 Worker `/api/telemetry`。
 5. 上传失败静默丢弃，不影响工具返回。
 
@@ -948,7 +964,7 @@ Worker 统计边界：
 
 代理探测优先级：`telemetry.json` 显式 proxy → 环境变量 `HTTPS_PROXY` → 系统代理设置 → 直连。
 
-遥测默认关闭（`telemetry.json` 缺失 = off），用户需主动创建配置文件开启。
+遥测默认关闭（`telemetry.json` 缺失 = off），用户通过插件 Home Dialog 主动开启。
 
 > 后端 API、D1 表结构、运维操作详见 [反馈与遥测后端参考](./feedback-telemetry-backend.md)。
 

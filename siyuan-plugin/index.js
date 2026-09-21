@@ -2,9 +2,14 @@
 const {Dialog, Plugin, showMessage, getAllEditor} = require("siyuan");
 
 const PLUGIN_NAME = "siyuan-bridge";
-const CONFIG_PATH = `/data/plugins/${PLUGIN_NAME}/bridge/config.local.json`;
-const TELEMETRY_PATH = `/data/plugins/${PLUGIN_NAME}/bridge/telemetry.json`;
-const SYSTEM_STATE_PATH = `/data/plugins/${PLUGIN_NAME}/bridge/knowledge_base/system_state.json`;
+const CONFIG_STORAGE = "config.local.json";
+const TELEMETRY_STORAGE = "telemetry.json";
+const SYSTEM_STATE_STORAGE = "system_state.json";
+const LEGACY_CONFIG_PATH = `/data/plugins/${PLUGIN_NAME}/bridge/config.local.json`;
+const LEGACY_TELEMETRY_PATH = `/data/plugins/${PLUGIN_NAME}/bridge/telemetry.json`;
+const TELEMETRY_ID_PATH = `/data/storage/petal/${PLUGIN_NAME}/stats/telemetry_id`;
+const LEGACY_TELEMETRY_ID_PATH = `/data/plugins/${PLUGIN_NAME}/bridge/stats/telemetry_id`;
+const LEGACY_SYSTEM_STATE_PATH = `/data/plugins/${PLUGIN_NAME}/bridge/knowledge_base/system_state.json`;
 const SYSTEM_TEMPLATE_ROOT = `/data/plugins/${PLUGIN_NAME}/bridge/templates/system-docs`;
 const DEFAULT_ENDPOINT = "https://siyuanbridgetelemetry.zingerplayground.top";
 const DEFAULT_CONFIG = {
@@ -624,13 +629,13 @@ class SiyuanBridgePlugin extends Plugin {
     });
     this.blockIndex.bind();
 
-    ensureDefaultBridgeConfig().catch((error) => {
+    ensureDefaultBridgeConfig(this).catch((error) => {
       console.warn("Siyuan Bridge config init failed", error);
     });
-    ensureTelemetryConfig().catch((error) => {
+    ensureTelemetryConfig(this).catch((error) => {
       console.warn("Siyuan Bridge telemetry init failed", error);
     });
-    this.systemNotebookMaintenance = ensureSystemNotebook().catch((error) => {
+    this.systemNotebookMaintenance = ensureSystemNotebook(this).catch((error) => {
       console.warn("Siyuan Bridge system notebook init failed", error);
       return null;
     });
@@ -671,14 +676,40 @@ class SiyuanBridgePlugin extends Plugin {
 
   async openMcpSettings() {
     const context = await getPluginContext();
-    const config = await loadBridgeConfig(context);
+    const config = await loadBridgeConfig(this, context);
     const dialog = new Dialog({
       title: "MCP 配置",
       content: renderSettings(config, context),
       width: "760px",
       height: "720px",
     });
-    bindSettings(dialog.element, config, context);
+    bindSettings(dialog.element, this, config, context);
+  }
+}
+
+async function loadPluginData(plugin, storageName, legacyPath) {
+  try {
+    const stored = await plugin.loadData(storageName);
+    if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+      return stored;
+    }
+  } catch (_error) {
+    // Fall through to the one-time legacy migration path.
+  }
+
+  try {
+    const parsed = JSON.parse(await getFile(legacyPath));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    try {
+      await plugin.saveData(storageName, parsed);
+    } catch (error) {
+      console.warn(`Failed to migrate ${storageName} to plugin storage`, error);
+    }
+    return parsed;
+  } catch (_error) {
+    return null;
   }
 }
 
@@ -778,9 +809,9 @@ function renderHome() {
 }
 
 function bindHome(root, plugin) {
-  loadAndRenderNotifications(root);
-  loadTelemetryConfig(root);
-  loadAndRenderSystemGuides(root);
+  loadAndRenderNotifications(root, plugin);
+  loadTelemetryConfig(root, plugin);
+  loadAndRenderSystemGuides(root, plugin);
   bindBlockIndexToggle(root, plugin);
 
   const telemetryCheckbox = root.querySelector("[data-telemetry='checkbox']");
@@ -797,7 +828,7 @@ function bindHome(root, plugin) {
     telemetryCheckbox.addEventListener("change", async () => {
       const mode = telemetryCheckbox.checked ? "upload" : "off";
       const localCopy = telemetryCheckbox.checked && localCopyCheckbox?.checked;
-      const ok = await saveTelemetryConfig(mode, localCopy);
+      const ok = await saveTelemetryConfig(plugin, mode, localCopy);
       if (!ok) {
         telemetryCheckbox.checked = !telemetryCheckbox.checked;
       }
@@ -808,7 +839,7 @@ function bindHome(root, plugin) {
   if (localCopyCheckbox) {
     localCopyCheckbox.addEventListener("change", async () => {
       if (!telemetryCheckbox?.checked) return;
-      await saveTelemetryConfig("upload", localCopyCheckbox.checked);
+      await saveTelemetryConfig(plugin, "upload", localCopyCheckbox.checked);
     });
   }
 
@@ -824,11 +855,11 @@ function bindHome(root, plugin) {
       await plugin.openMcpSettings();
     }
     if (action === "submit-feedback") {
-      await handleSubmitFeedback(root);
+      await handleSubmitFeedback(root, plugin);
     }
     if (action === "reset-system-guide") {
       const guideKey = target.getAttribute("data-guide-key") || "";
-      await resetSystemGuide(root, guideKey);
+      await resetSystemGuide(root, plugin, guideKey);
     }
   });
 }
@@ -848,11 +879,11 @@ function bindBlockIndexToggle(root, plugin) {
   });
 }
 
-async function loadAndRenderSystemGuides(root) {
+async function loadAndRenderSystemGuides(root, plugin) {
   const area = root.querySelector("[data-area='system-guides']");
   if (!area) return;
   try {
-    const {workspace} = await getCurrentSystemWorkspace();
+    const {workspace} = await getCurrentSystemWorkspace(plugin);
     if (!workspace) {
       area.innerHTML = `<p class="siyuan-bridge-home__hint">系统笔记本尚未初始化，请重新启用插件后重试。</p>`;
       return;
@@ -887,7 +918,7 @@ async function loadAndRenderSystemGuides(root) {
   }
 }
 
-async function resetSystemGuide(root, guideKey) {
+async function resetSystemGuide(root, plugin, guideKey) {
   const labels = {
     mcp_usage_guide: "MCP 使用指南",
     workspace_index_guide: "工作空间索引创建指南",
@@ -895,7 +926,7 @@ async function resetSystemGuide(root, guideKey) {
   const label = labels[guideKey];
   if (!label) return;
   try {
-    const {state, workspace} = await getCurrentSystemWorkspace();
+    const {state, workspace} = await getCurrentSystemWorkspace(plugin);
     const entries = registryEntries(workspace?.documents?.[guideKey]);
     if (entries.length === 0) {
       throw new Error("尚未找到系统文档 ID，请重新启用插件后重试");
@@ -903,7 +934,7 @@ async function resetSystemGuide(root, guideKey) {
     if (!window.confirm(
       `确定要把《${label}》的 ${entries.length} 篇已登记文档全部重置为当前默认内容吗？文档 ID 会保留。`
     )) return;
-    const bridgeConfig = await readBridgeConfig();
+    const bridgeConfig = await readBridgeConfig(plugin);
     const language = bridgeConfig.config?.language === "en" ? "en" : "zh-CN";
     const manifest = JSON.parse(await getFile(`${SYSTEM_TEMPLATE_ROOT}/manifest.json`));
     const templateInfo = manifest?.templates?.[guideKey];
@@ -925,8 +956,8 @@ async function resetSystemGuide(root, guideKey) {
       entry.user_modified = false;
     }
     workspace.documents[guideKey] = entries;
-    await putFile(SYSTEM_STATE_PATH, JSON.stringify(state, null, 2) + "\n");
-    await loadAndRenderSystemGuides(root);
+    await saveSystemState(plugin, state);
+    await loadAndRenderSystemGuides(root, plugin);
     showMessage(`《${label}》的 ${entries.length} 篇文档已重置，原文档 ID 保持不变`);
   } catch (error) {
     console.error("Failed to reset system guide:", error);
@@ -934,8 +965,8 @@ async function resetSystemGuide(root, guideKey) {
   }
 }
 
-async function getCurrentSystemWorkspace() {
-  const state = JSON.parse(await getFile(SYSTEM_STATE_PATH));
+async function getCurrentSystemWorkspace(plugin) {
+  const state = await loadSystemState(plugin);
   const data = await callSiyuanApi("/api/notebook/lsNotebooks", {});
   const notebooks = Array.isArray(data?.notebooks) ? data.notebooks : Array.isArray(data) ? data : [];
   const currentNames = new Set(["思源桥", "SiYuan Bridge"].map((name) => name.toLowerCase()));
@@ -949,11 +980,13 @@ async function getCurrentSystemWorkspace() {
   return {state, workspace};
 }
 
+function normalizeLineEndings(text) {
+  return String(text || "").replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+}
+
 function normalizeManagedMarkdown(markdown) {
-  const lines = String(markdown || "")
+  const lines = normalizeLineEndings(markdown)
     .replace(/^\uFEFF/, "")
-    .replaceAll("\r\n", "\n")
-    .replaceAll("\r", "\n")
     .split("\n")
     .map((line) => line.replace(/\s+$/, ""));
   return lines.join("\n").trim().replace(/\n{3,}/g, "\n\n");
@@ -971,10 +1004,10 @@ async function sha256Text(text) {
 // System notebook lifecycle
 // ---------------------------------------------------------------------------
 
-async function ensureSystemNotebook() {
-  const bridgeConfig = await readBridgeConfig();
+async function ensureSystemNotebook(plugin) {
+  const bridgeConfig = await readBridgeConfig(plugin);
   const language = bridgeConfig.config?.language === "en" ? "en" : "zh-CN";
-  const state = await loadSystemState();
+  const state = await loadSystemState(plugin);
   const notebooksData = await callSiyuanApi("/api/notebook/lsNotebooks", {});
   const notebooks = Array.isArray(notebooksData?.notebooks)
     ? notebooksData.notebooks
@@ -1029,26 +1062,70 @@ async function ensureSystemNotebook() {
       String(notebook?.name || SYSTEM_NOTEBOOK_NAMES[language])
     );
     const documentCache = workspace.documents;
+    const persistState = async () => {
+      workspace.refreshed_at = new Date().toISOString();
+      state.active_workspace_key = notebookId;
+      await saveSystemState(plugin, state);
+    };
 
-    await ensureAiPreferences(liveDocs, notebookId, language, documentCache);
-    await ensureAboutDocument(liveDocs, notebookId, language, documentCache);
+    // Privacy Rules is the safety boundary. Register it before optional guide
+    // maintenance so a template problem cannot take the whole bridge offline.
     await ensureSimpleSystemDocument(
       liveDocs, notebookId, language, documentCache, "privacy_rules"
     );
-    const manifest = JSON.parse(
-      await getFile(`${SYSTEM_TEMPLATE_ROOT}/manifest.json`)
-    );
-    await ensureManagedGuide(
-      liveDocs, notebookId, language, documentCache, manifest, "mcp_usage_guide"
-    );
-    await ensureManagedGuide(
-      liveDocs, notebookId, language, documentCache, manifest, "workspace_index_guide"
-    );
-    await ensureWorkspaceIndex(liveDocs, notebookId, language, documentCache);
+    await persistState();
 
-    workspace.refreshed_at = new Date().toISOString();
-    state.active_workspace_key = notebookId;
-    await putFile(SYSTEM_STATE_PATH, JSON.stringify(state, null, 2) + "\n");
+    let manifest = null;
+    const maintenanceSteps = [
+      ["用户个性化要求", () => ensureAiPreferences(
+        liveDocs, notebookId, language, documentCache
+      )],
+      ["关于思源桥", () => ensureAboutDocument(
+        liveDocs, notebookId, language, documentCache
+      )],
+      ["MCP 使用指南", async () => {
+        manifest ||= JSON.parse(await getFile(`${SYSTEM_TEMPLATE_ROOT}/manifest.json`));
+        await ensureManagedGuide(
+          liveDocs, notebookId, language, documentCache, manifest, "mcp_usage_guide"
+        );
+      }],
+      ["工作空间索引创建指南", async () => {
+        manifest ||= JSON.parse(await getFile(`${SYSTEM_TEMPLATE_ROOT}/manifest.json`));
+        await ensureManagedGuide(
+          liveDocs, notebookId, language, documentCache, manifest, "workspace_index_guide"
+        );
+      }],
+      ["工作空间索引", () => ensureWorkspaceIndex(
+        liveDocs, notebookId, language, documentCache
+      )],
+    ];
+    const failures = [];
+    for (const [label, maintain] of maintenanceSteps) {
+      try {
+        await maintain();
+        await persistState();
+      } catch (error) {
+        failures.push(label);
+        console.warn(`Siyuan Bridge failed to maintain ${label}`, error);
+      }
+    }
+    try {
+      const rescanned = await callSiyuanApi("/api/query/sql", {
+        stmt: "SELECT id, box, hpath, updated FROM blocks "
+          + `WHERE type='d' AND box='${safeNotebookId}'`,
+      });
+      if (!Array.isArray(rescanned)) {
+        throw new Error("系统文档扫描返回了无效数据");
+      }
+      reconcileSystemDocumentRegistry(documentCache, rescanned);
+      await persistState();
+    } catch (error) {
+      failures.push("系统文档登记表刷新");
+      console.warn("Siyuan Bridge failed to refresh the system document registry", error);
+    }
+    if (failures.length > 0) {
+      showMessage(`思源桥部分系统文档维护失败：${failures.join("、")}`, -1, "error");
+    }
     return documentCache;
   } finally {
     if (wasClosed) {
@@ -1057,22 +1134,24 @@ async function ensureSystemNotebook() {
   }
 }
 
-async function loadSystemState() {
-  try {
-    const parsed = JSON.parse(await getFile(SYSTEM_STATE_PATH));
-    if (parsed && typeof parsed === "object") {
-      return {
-        schema_version: SYSTEM_STATE_SCHEMA_VERSION,
-        active_workspace_key: String(parsed.active_workspace_key || ""),
-        workspaces: parsed.workspaces && typeof parsed.workspaces === "object"
-          ? parsed.workspaces
-          : {},
-      };
-    }
-  } catch (_error) {
-    // Missing state is normal for existing users upgrading to this version.
+async function loadSystemState(plugin) {
+  const parsed = await loadPluginData(
+    plugin, SYSTEM_STATE_STORAGE, LEGACY_SYSTEM_STATE_PATH
+  );
+  if (parsed && typeof parsed === "object") {
+    return {
+      schema_version: SYSTEM_STATE_SCHEMA_VERSION,
+      active_workspace_key: String(parsed.active_workspace_key || ""),
+      workspaces: parsed.workspaces && typeof parsed.workspaces === "object"
+        ? parsed.workspaces
+        : {},
+    };
   }
   return {schema_version: SYSTEM_STATE_SCHEMA_VERSION, active_workspace_key: "", workspaces: {}};
+}
+
+async function saveSystemState(plugin, state) {
+  await plugin.saveData(SYSTEM_STATE_STORAGE, state);
 }
 
 function ensureSystemWorkspaceState(state, notebookId, notebookName) {
@@ -1184,6 +1263,17 @@ function recordSystemDocuments(documentCache, key, records) {
   documentCache[key] = records.filter((entry) => entry?.id);
 }
 
+function reconcileSystemDocumentRegistry(documentCache, docs) {
+  for (const key of Object.keys(SYSTEM_DOC_NAMES)) {
+    const cached = cachedRecordsById(documentCache, key);
+    const records = findSystemDocs(docs, key, documentCache).map((doc) => ({
+      ...(cached.get(String(doc.id)) || {}),
+      ...systemDocumentRecord(doc),
+    }));
+    recordSystemDocuments(documentCache, key, records);
+  }
+}
+
 async function ensureAiPreferences(docs, notebookId, language, documentCache) {
   const key = "ai_guide";
   const template = await loadBootstrapTemplate(key, language);
@@ -1274,7 +1364,7 @@ async function ensureManagedGuide(
     || templateInfo?.files?.["zh-CN"];
   if (!filename) throw new Error(`内置指南模板缺失：${key}`);
   const template = await getFile(`${SYSTEM_TEMPLATE_ROOT}/${filename}`);
-  const sourceHash = await sha256Text(template);
+  const sourceHash = await sha256Text(normalizeLineEndings(template));
   const expectedSourceHash = String(
     templateInfo?.source_sha256?.[language]
       || templateInfo?.source_sha256?.["zh-CN"]
@@ -1401,12 +1491,12 @@ function showDuplicateSystemDocuments(documentCache) {
 // Notifications
 // ---------------------------------------------------------------------------
 
-async function loadAndRenderNotifications(root) {
+async function loadAndRenderNotifications(root, plugin) {
   const area = root.querySelector("[data-area='notifications']");
   if (!area) return;
 
   try {
-    const endpoint = await getEffectiveEndpoint();
+    const endpoint = await getEffectiveEndpoint(plugin);
     const response = await fetch(`${endpoint}/api/notifications`, {
       method: "GET",
       headers: {"Content-Type": "application/json"},
@@ -1438,10 +1528,9 @@ async function loadAndRenderNotifications(root) {
 // Telemetry config I/O
 // ---------------------------------------------------------------------------
 
-async function getEffectiveEndpoint() {
+async function getEffectiveEndpoint(plugin) {
   try {
-    const text = await getFile(TELEMETRY_PATH);
-    const cfg = JSON.parse(text);
+    const cfg = await loadPluginData(plugin, TELEMETRY_STORAGE, LEGACY_TELEMETRY_PATH);
     if (cfg && typeof cfg === "object" && cfg.telemetry_endpoint) {
       return String(cfg.telemetry_endpoint).trim();
     }
@@ -1451,75 +1540,53 @@ async function getEffectiveEndpoint() {
   return DEFAULT_ENDPOINT;
 }
 
-async function loadTelemetryConfig(root) {
+async function loadTelemetryConfig(root, plugin) {
   const telemetryCheckbox = root.querySelector("[data-telemetry='checkbox']");
   const localCopyCheckbox = root.querySelector("[data-telemetry='local-copy']");
-
-  try {
-    const text = await getFile(TELEMETRY_PATH);
-    const cfg = JSON.parse(text);
-    if (telemetryCheckbox) {
-      telemetryCheckbox.checked = cfg && cfg.telemetry === "upload";
-    }
-    if (localCopyCheckbox) {
-      localCopyCheckbox.checked = cfg && cfg.local_copy === true;
-    }
-  } catch (_error) {
-    if (telemetryCheckbox) telemetryCheckbox.checked = false;
-    if (localCopyCheckbox) localCopyCheckbox.checked = false;
+  const cfg = await loadPluginData(plugin, TELEMETRY_STORAGE, LEGACY_TELEMETRY_PATH);
+  if (telemetryCheckbox) {
+    telemetryCheckbox.checked = cfg?.telemetry === "upload";
+  }
+  if (localCopyCheckbox) {
+    localCopyCheckbox.checked = cfg?.local_copy === true;
   }
 }
 
-async function ensureTelemetryConfig() {
-  try {
-    const text = await getFile(TELEMETRY_PATH);
-    const cfg = JSON.parse(text);
-    if (cfg && typeof cfg === "object" && cfg.anonymous_id) {
-      return; // already initialized
+async function loadTelemetryIdFallback() {
+  for (const path of [TELEMETRY_ID_PATH, LEGACY_TELEMETRY_ID_PATH]) {
+    try {
+      const value = String(await getFile(path)).trim();
+      if (value) return value;
+    } catch (_error) {
+      // Try the next compatibility location.
     }
-  } catch (_error) {
-    // Missing or corrupt — initialize
   }
-
-  let existing = {};
-  try {
-    const text = await getFile(TELEMETRY_PATH);
-    const parsed = JSON.parse(text);
-    if (parsed && typeof parsed === "object") {
-      existing = parsed;
-    }
-  } catch (_error) { /* start fresh */ }
-
-  if (!existing.anonymous_id) {
-    existing.anonymous_id = crypto.randomUUID().replace(/-/g, "");
-  }
-
-  try {
-    await putFile(TELEMETRY_PATH, JSON.stringify(existing, null, 2) + "\n");
-  } catch (_error) {
-    console.error("Failed to save telemetry config:", _error);
-  }
+  return "";
 }
 
-async function saveTelemetryConfig(mode, localCopy) {
-  let existing = {};
-  try {
-    const text = await getFile(TELEMETRY_PATH);
-    const parsed = JSON.parse(text);
-    if (parsed && typeof parsed === "object") {
-      existing = parsed;
-    }
-  } catch (_error) {
-    // Missing file — start fresh
+async function ensureTelemetryConfig(plugin) {
+  const existing = await loadPluginData(
+    plugin, TELEMETRY_STORAGE, LEGACY_TELEMETRY_PATH
+  ) || {};
+  if (existing.anonymous_id) {
+    return;
   }
+  existing.anonymous_id = await loadTelemetryIdFallback()
+    || crypto.randomUUID().replace(/-/g, "");
+  await plugin.saveData(TELEMETRY_STORAGE, existing);
+}
 
+async function saveTelemetryConfig(plugin, mode, localCopy) {
+  const existing = await loadPluginData(
+    plugin, TELEMETRY_STORAGE, LEGACY_TELEMETRY_PATH
+  ) || {};
   existing.telemetry = mode;
   if (typeof localCopy === "boolean" && mode === "upload") {
     existing.local_copy = localCopy;
   }
 
   try {
-    await putFile(TELEMETRY_PATH, JSON.stringify(existing, null, 2) + "\n");
+    await plugin.saveData(TELEMETRY_STORAGE, existing);
     return true;
   } catch (_error) {
     console.error("Failed to save telemetry config:", _error);
@@ -1531,7 +1598,7 @@ async function saveTelemetryConfig(mode, localCopy) {
 // Feedback submission
 // ---------------------------------------------------------------------------
 
-async function handleSubmitFeedback(root) {
+async function handleSubmitFeedback(root, plugin) {
   const typeEl = root.querySelector("[data-feedback-field='type']");
   const titleEl = root.querySelector("[data-feedback-field='title']");
   const descEl = root.querySelector("[data-feedback-field='description']");
@@ -1557,7 +1624,7 @@ async function handleSubmitFeedback(root) {
   }
 
   try {
-    const endpoint = await getEffectiveEndpoint();
+    const endpoint = await getEffectiveEndpoint(plugin);
     const response = await fetch(`${endpoint}/api/feedback`, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
@@ -1602,21 +1669,16 @@ async function getPluginContext() {
   };
 }
 
-async function loadBridgeConfig(context) {
-  const existing = await readBridgeConfig();
+async function loadBridgeConfig(plugin, context) {
+  const existing = await readBridgeConfig(plugin);
   const config = existing.config || JSON.parse(JSON.stringify(DEFAULT_CONFIG));
   return applyCurrentWorkspaceDefaults(config, context);
 }
 
-async function readBridgeConfig() {
-  try {
-    const text = await getFile(CONFIG_PATH);
-    const parsed = JSON.parse(text);
-    if (parsed && typeof parsed === "object" && Array.isArray(parsed.profiles)) {
-      return {config: normalizeConfig(parsed), exists: true};
-    }
-  } catch (_error) {
-    // Missing config is normal for first-run setup.
+async function readBridgeConfig(plugin) {
+  const parsed = await loadPluginData(plugin, CONFIG_STORAGE, LEGACY_CONFIG_PATH);
+  if (parsed && typeof parsed === "object" && Array.isArray(parsed.profiles)) {
+    return {config: normalizeConfig(parsed), exists: true};
   }
   return {config: null, exists: false};
 }
@@ -1657,16 +1719,16 @@ function applyCurrentWorkspaceDefaults(config, context) {
   return normalized;
 }
 
-async function ensureDefaultBridgeConfig() {
+async function ensureDefaultBridgeConfig(plugin) {
   const context = await getPluginContext();
   if (!context.currentToken) {
     return;
   }
-  const existing = await readBridgeConfig();
+  const existing = await readBridgeConfig(plugin);
   const previous = normalizeConfig(existing.config || DEFAULT_CONFIG);
   const config = applyCurrentWorkspaceDefaults(existing.config || DEFAULT_CONFIG, context);
   if (!existing.exists || JSON.stringify(config) !== JSON.stringify(previous)) {
-    await saveBridgeConfig(config);
+    await saveBridgeConfig(plugin, config);
   }
 }
 
@@ -1741,7 +1803,7 @@ function renderProfiles(profiles) {
   `).join("");
 }
 
-function bindSettings(root, config, context) {
+function bindSettings(root, plugin, config, context) {
   const container = root.querySelector(".siyuan-bridge");
   const state = {
     config: normalizeConfig(config),
@@ -1797,7 +1859,7 @@ function bindSettings(root, config, context) {
       }
     }
     if (action === "refresh-json") {
-      await refreshDetectedPaths(container, state);
+      await refreshDetectedPaths(container, plugin, state);
       refreshJson();
       showMessage("已按当前电脑刷新 MCP 路径和 Token");
     }
@@ -1815,7 +1877,7 @@ function bindSettings(root, config, context) {
     }
     if (action === "save") {
       readContext(container, state);
-      await saveBridgeConfig(state.config);
+      await saveBridgeConfig(plugin, state.config);
       refreshJson();
       showMessage("思源桥配置已保存");
     }
@@ -1833,7 +1895,7 @@ function readContext(container, state) {
   }
 }
 
-async function refreshDetectedPaths(container, state) {
+async function refreshDetectedPaths(container, plugin, state) {
   const detected = await getPluginContext();
   for (const key of ["currentWorkspaceName", "currentToken", "workspaceDir", "pluginDir", "bridgeDir", "runMcpPath"]) {
     state.context[key] = detected[key];
@@ -1846,12 +1908,12 @@ async function refreshDetectedPaths(container, state) {
   }
   state.config = applyCurrentWorkspaceDefaults(state.config, state.context);
   container.querySelector("[data-profiles]").innerHTML = renderProfiles(state.config.profiles);
-  await saveBridgeConfig(state.config);
+  await saveBridgeConfig(plugin, state.config);
 }
 
-async function saveBridgeConfig(config) {
+async function saveBridgeConfig(plugin, config) {
   const normalized = normalizeConfig(config);
-  await putFile(CONFIG_PATH, JSON.stringify(normalized, null, 2) + "\n");
+  await plugin.saveData(CONFIG_STORAGE, normalized);
 }
 
 function buildMcpConfig(context) {

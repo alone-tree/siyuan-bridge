@@ -71,6 +71,7 @@ source_code/         Python 适配层
   i18n.py            多语言名称、系统文档名、默认模板
   agent_notebook.py  系统笔记本只读加载与多文档合并
   config.py          配置加载和 profile 探测
+  runtime_data.py    安装态插件数据区定位与旧数据迁移
   cli.py             开发诊断 CLI
 
 plugins/
@@ -78,12 +79,17 @@ plugins/
     skills/          给外部 AI 的 Skill 指令副本。
     scripts/         run_mcp.py，MCP stdio 启动脚本
 
-knowledge_base/      运行时缓存，Git 忽略，每次 refresh 可能覆盖
+knowledge_base/      可重建运行时缓存，Git 忽略，每次 refresh 可能覆盖
   tree.md            程序生成的客观文档树
   docs.jsonl         结构化文档元数据
   notebooks.json     可见笔记本索引
+
+data/storage/petal/siyuan-bridge/  安装态持久数据区
+  config.local.json  Profiles、Token、内部语言配置
+  telemetry.json     遥测选择、端点、代理、匿名 ID
+  system_state.json  系统笔记本/文档 ID 与模板状态注册表
   privacy_rules.json Privacy Rules 解析缓存
-  system_state.json  系统笔记本/文档 ID 与模板状态的本地注册表
+  stats/             遥测 ID 与用户选择保留的本地副本
 
 思源笔记工作空间       用户启动的工作空间（用MCP看到的内容）
   思源桥/SiYuan Bridge   思源桥MCP系统笔记本，跟随思源工作空间切换
@@ -111,7 +117,7 @@ docs/                架构、开发指南、前端、API、idea、devlog
 - 恢复要求：项目不提供 AI 自动回滚/checkout。写入后如需恢复，只能提示用户通过思源快照手动恢复；不要让 AI 调用高风险恢复接口。
 - 不自动启动思源：连接失败只提示用户手动打开思源，不鼓励AI查找程序路径。在开发时，务必保留错误返回信息中的相关说明，不要省略“让用户启动”等关键表述。
 - Privacy Rules 硬隔离：任何操作都需要在执行前经隐私规则过滤。源码写死隐藏Privacy Rules文档，AI 不可读取、搜索或编辑 Privacy Rules 文档。
-- 系统笔记本六篇固定文档按各自生命周期维护；旧 AI Guide 按原 ID 更名为 User Preferences；身份和模板状态记录在本地 `system_state.json`。
+- 系统笔记本六篇固定文档按各自生命周期维护；旧 AI Guide 按原 ID 更名为 User Preferences；身份和模板状态记录在插件数据区 `system_state.json`。
 - 关闭笔记本透明打开/关闭：索引、搜索和写入前可临时打开关闭的笔记本，完成后必须恢复。
 - 工作区可能有用户改动：不要回滚、删除或重置非本任务改动。
 - README 单一来源：根目录 `README.md`（中文）是唯一客观来源，`README.en-US.md` 根据它翻译；`siyuan-plugin/README*.md` 只能由 `scripts/build_package.py` 自动同步，禁止手动维护。
@@ -183,7 +189,7 @@ python -m pytest tests -q
 # 2. 杀残留 MCP 进程
 Get-Process python -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'run_mcp' } | Stop-Process -Force
 
-# 3. 导入（不加 --fresh，保留 config.local.json 和 telemetry.json）
+# 3. 导入（不加 --fresh，保留插件数据区全部持久数据）
 python scripts/import_siyuan_plugin.py --workspace D:/siyuan2
 
 # 4. 开思源

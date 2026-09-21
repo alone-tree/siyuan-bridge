@@ -118,8 +118,8 @@
       <text x="704" y="182" class="text">9 个高层 MCP 工具</text>
 
       <rect x="680" y="285" width="250" height="115" rx="8" class="node yellow"/>
-      <text x="704" y="321" class="title">本地配置与缓存</text>
-      <text x="704" y="349" class="text">config.local.json / telemetry.json</text>
+      <text x="704" y="321" class="title">持久数据与缓存</text>
+      <text x="704" y="349" class="text">storage/petal：配置 / 状态 / 隐私</text>
       <text x="704" y="373" class="text">knowledge_base/ / ai_workspace/</text>
 
       <rect x="1000" y="55" width="150" height="110" rx="8" class="node green"/>
@@ -251,9 +251,9 @@
       <text x="953" y="153" class="text">snapshot / export</text>
 
       <rect x="930" y="220" width="200" height="110" rx="8" class="node yellow"/>
-      <text x="953" y="256" class="title">本地文件</text>
-      <text x="953" y="284" class="text">config.local.json</text>
-      <text x="953" y="308" class="text">system_state.json / 安全索引</text>
+      <text x="953" y="256" class="title">插件数据与缓存</text>
+      <text x="953" y="284" class="text">storage/petal：配置 / 登记表</text>
+      <text x="953" y="308" class="text">隐私缓存 / 可重建安全索引</text>
 
       <rect x="930" y="380" width="200" height="120" rx="8" class="node purple"/>
       <text x="953" y="416" class="title">系统笔记本</text>
@@ -377,8 +377,8 @@ flowchart TD
   <table>
     <thead><tr><th>场景</th><th>调用关系</th></tr></thead>
     <tbody>
-      <tr><td>首次使用</td><td>思源插件读取工作空间 Token → 写入 <code>bridge/config.local.json</code> → 用户复制 MCP JSON 到 AI 客户端。</td></tr>
-      <tr><td>插件激活</td><td>校验 JSON 多 ID → 合并当前名和历史名匹配文档 → 仅在某类为空时创建 → 保存状态并提示重复文档。</td></tr>
+      <tr><td>首次使用</td><td>思源插件读取工作空间 Token → 写入 <code>data/storage/petal/siyuan-bridge/config.local.json</code> → 用户复制 MCP JSON 到 AI 客户端。</td></tr>
+      <tr><td>插件激活</td><td>迁移旧数据 → 先确保 Privacy Rules 并保存登记表 → 独立维护其他文档 → 最终重扫并保存。</td></tr>
       <tr><td>Skill 生效</td><td>仓库提供 Skill 副本 → 用户或 AI 客户端主动导入 → AI 才会按 Skill 约束调用工具。</td></tr>
       <tr><td>会话启动</td><td><code>siyuan_start</code> → 探测 profile → 只读系统状态 → 合并解析 Privacy Rules → 刷新安全索引 → 返回启动包。</td></tr>
       <tr><td>搜索</td><td><code>siyuan_find</code> → 临时打开笔记本 → 思源搜索/SQL → 隐私过滤 → 按文档聚合。</td></tr>
