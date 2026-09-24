@@ -14,6 +14,7 @@ const DEFAULT_ENDPOINT = "https://siyuanbridgetelemetry.zingerplayground.top";
 const DEFAULT_CONFIG = {
   profiles: [{name: "当前工作空间", token: ""}],
   language: "zh-CN",
+  read_inline_images: false,
 };
 const SYSTEM_NOTEBOOK_NAMES = {
   "zh-CN": "思源桥",
@@ -214,6 +215,17 @@ function renderHome() {
       </div>
 
       <div class="siyuan-bridge-home__section">
+        <div class="siyuan-bridge-home__section-title">读取图片</div>
+        <label class="siyuan-bridge-home__checkbox-row">
+          <input class="b3-switch" type="checkbox" data-inline-images="checkbox" />
+          <span class="siyuan-bridge-home__checkbox-label">读文档时默认返回图片</span>
+        </label>
+        <p class="siyuan-bridge-home__hint">
+          开启后 AI 读取文档时随文字一起返回图片内容。单张超过 20 MB 的图片仍需 AI 获得你的明确同意后才会返回。重新连接思源桥 MCP 后生效。
+        </p>
+      </div>
+
+      <div class="siyuan-bridge-home__section">
         <div class="siyuan-bridge-home__section-title">MCP 配置</div>
         <p class="siyuan-bridge-home__hint">配置 Python 路径、工作空间 Token 并生成 MCP JSON。</p>
         <button class="b3-button" data-action="open-mcp-settings">打开 MCP 配置</button>
@@ -268,6 +280,7 @@ function bindHome(root, plugin) {
   loadTelemetryConfig(root, plugin);
   loadAndRenderSystemGuides(root, plugin);
   bindBlockIndexToggle(root, plugin);
+  bindInlineImagesToggle(root, plugin);
 
   const telemetryCheckbox = root.querySelector("[data-telemetry='checkbox']");
   const localCopyArea = root.querySelector("[data-telemetry='local-copy-area']");
@@ -330,6 +343,32 @@ function bindBlockIndexToggle(root, plugin) {
     } catch (error) {
       checkbox.checked = plugin.blockIndex.isEnabled();
       console.warn("Siyuan Bridge block index toggle failed", error);
+    }
+  });
+}
+
+function bindInlineImagesToggle(root, plugin) {
+  const checkbox = root.querySelector("[data-inline-images='checkbox']");
+  if (!checkbox) return;
+  readBridgeConfig(plugin)
+    .then((result) => {
+      checkbox.checked = result.config?.read_inline_images === true;
+    })
+    .catch((error) => {
+      console.warn("Siyuan Bridge inline images toggle load failed", error);
+    });
+  checkbox.addEventListener("change", async () => {
+    const next = checkbox.checked;
+    try {
+      const result = await readBridgeConfig(plugin);
+      const config = result.config || JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+      config.read_inline_images = next;
+      await saveBridgeConfig(plugin, config);
+      showMessage(next ? "已开启读文档时返回图片，重新连接思源桥 MCP 后生效" : "已关闭读文档时返回图片，重新连接思源桥 MCP 后生效");
+    } catch (error) {
+      checkbox.checked = !next;
+      console.warn("Siyuan Bridge inline images toggle save failed", error);
+      showMessage(`保存失败：${error?.message || error}`, -1, "error");
     }
   });
 }
@@ -1148,6 +1187,7 @@ function normalizeConfig(config) {
       token: String(profile?.token || ""),
     })),
     language: String(config.language || "zh-CN"),
+    read_inline_images: config.read_inline_images === true,
   };
 }
 

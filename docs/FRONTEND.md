@@ -21,6 +21,7 @@
 - MCP 配置：展示 Python 命令、Bridge 路径、MCP JSON 和 profiles。
 - 反馈：POST Worker `/api/feedback`。
 - 用户体验改进：通过 `Plugin.loadData/saveData` 读写插件数据区 `telemetry.json` 中的 `telemetry`。
+- 读取图片：「读文档时默认返回图片」开关，写入插件数据区 `config.local.json` 的 `read_inline_images`，安装默认关闭，保存后提示重新连接 MCP 生效。
 - 系统指南：读取插件数据区 `system_state.json`，显示两篇托管指南是否被用户修改，并提供保留文档 ID 的重置按钮。
 - 系统笔记本维护：插件每次激活时发现、创建和维护六类系统文档，并在发现重复文档时弹窗提示用户手动检查删除。
 
@@ -28,7 +29,7 @@
 
 以下文件通过 `Plugin.loadData/saveData` 保存在工作空间 `data/storage/petal/siyuan-bridge/`，不会随集市更新替换插件程序目录而丢失：
 
-- `config.local.json`：profiles、Token、内部语言配置。Token 不写入 MCP JSON。
+- `config.local.json`：profiles、Token、内部语言配置、`read_inline_images` 图片内联开关。Token 不写入 MCP JSON。
 - `telemetry.json`：匿名 ID、遥测开关、本地副本开关、端点、代理。
 - `system_state.json`：插件维护的工作空间级注册表。schema v2 为每类文档保存多个 ID 和各自模板状态；Python Bridge 只读，不写此文件。
 - `block-index.json`：块序号显示开关。

@@ -318,6 +318,11 @@ Error: invalid parameter
 - 超级块普通阅读不重复渲染子块内容。
 - 引用阅读下超级块自身占号，并继续给内部块编号。
 - 插件块序号与 `include_block_ids=true` 的 `index/id/type` 一致；共享样例在 `tests/fixtures/display_block_index_cases.json`，Python 与 `siyuan-plugin/block-index.js` 都必须通过。
+- 图片内联关闭时，`siyuan_read` 返回行为与旧契约完全一致：单段文本，无内联标记。
+- 图片内联开启时，返回的 MCP content 数组按文档顺序交替包含文本块和图片块；每张成功内联的图片按 1,568 token 计入窗口预算并触发翻页。
+- 本地 assets 图片优先读已提取文件，缺失时回退 `get_asset`；网络 http/https 图片下载后内联。
+- 超过 20 MB 的单张图片默认原位声明（含原因和文件路径），`include_large_images=true` 时才内联；SVG 等平台不支持格式和读取失败的图片同样原位声明，不无声跳过。
+- 成功内联和声明处都保留原文件路径。
 
 已知真实问题：
 

@@ -244,7 +244,7 @@ MCP JSON 只包含 Python 命令、`run_mcp.py` 绝对路径和 `PYTHONUTF8=1`�
 
 | 文件或目录 | 来源 | 用途 |
 |---|---|---|
-| `config.local.json` | 插件设置与当前设备 Token | profiles、Token、内部语言配置 |
+| `config.local.json` | 插件设置与当前设备 Token | profiles、Token、内部语言配置、图片内联开关 |
 | `telemetry.json` | 插件遥测设置与 Python 匿名 ID | 遥测选择、端点、代理、匿名 ID |
 | `system_state.json` | 插件系统笔记本维护 | 工作空间级文档 ID、模板基线和用户修改状态 |
 | `privacy_rules.json` | `siyuan_start` 解析 Privacy Rules | 工具执行时持续生效的权限缓存 |
@@ -390,6 +390,15 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 - 这是编辑和跨文档块引用的定位模式。
 - 普通阅读不显示块 ID，保持 Markdown 干净。
 - 插件可在思源正文旁显示同一套实时序号。序号来自 `/api/block/getChildBlocks` 与 `build_display_blocks(include_block_ids=true)`，不是 DOM 顺序。文档结构变化后立即重算；AI 再次引用序号前必须重新读取。Python 与插件的 `index/id/type` 由 `tests/fixtures/display_block_index_cases.json` 锁死。
+
+图片内联（可选，由插件设置页开关控制，决策见 `docs/图片内联需求-2026-09-14.md`）：
+
+- 开关状态保存在插件数据区 `config.local.json` 的 `read_inline_images`。安装默认关闭，用户打开后持久保存；MCP 进程重启后生效。
+- 开启后 `siyuan_read` 返回 MCP 多模态 content 数组：文本块和图片块按文档顺序交替；图片是 base64 + MIME 类型，不采用 Markdown 嵌图。
+- 处理范围是思源认定的图片：本地图（`assets/...`，优先读附件提取结果，缺失时回退 `get_asset`）和网络图（http/https，下载后转 base64）。
+- 每张成功内联的图片按固定 1,568 token 计入窗口 `token_budget`；块数和 token 任意一个触发即翻页，不设张数上限。
+- 单张超过 20 MB（与 `insert_assets` 大文件阈值一致）默认不内联，在原位置声明；AI 获得用户明确同意后可用 `include_large_images=true` 强制内联。
+- 扩展名在思源图片清单内但平台通常不支持内联的格式（SVG、AVIF、BMP、TIFF、ICO 等）以及读取失败的图片，同样在原位置声明，不无声跳过；成功内联和声明处都保留原文件路径。
 
 块展示规则：
 
@@ -628,6 +637,7 @@ scope：
 | `block_limit`       | integer | 200   | 最大展示块数量                              |
 | `token_budget`      | integer | 10000 | 估算 token 预算                             |
 | `include_block_ids` | boolean | false | 启用引用阅读                                |
+| `include_large_images` | boolean | false | 用户明确同意后内联超过 20 MB 的单张图片；仅图片内联开启时相关 |
 
 数据流：
 
@@ -638,7 +648,8 @@ scope：
 5. 如果展示块为空，降级到 `exportMdContent`。
 6. 生成大纲和窗口预览。
 7. 提取附件并重写本地 asset 链接。
-8. 返回当前窗口。
+8. 图片内联开启时，把窗口正文中的图片引用替换为内联标记或原位声明，并随 content 数组返回图片。
+9. 返回当前窗口。
 
 返回内容：
 
@@ -651,6 +662,7 @@ scope：
 - 附件提取目录。
 - 全文大纲。
 - 当前窗口正文。
+- 图片内联开启时，正文窗口与图片按文档顺序交替返回（MCP 多模态 content）。
 
 编辑前要求：
 

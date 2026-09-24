@@ -29,6 +29,7 @@ class Config:
     profiles: tuple[Profile, ...]
     language: str
     root: Path
+    read_inline_images: bool = False
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -64,7 +65,12 @@ def load_config(root: Path | None = None) -> Config:
     else:
         profiles = ()
 
-    return Config(profiles=profiles, language=language, root=project_root)
+    return Config(
+        profiles=profiles,
+        language=language,
+        root=project_root,
+        read_inline_images=local.get("read_inline_images") is True,
+    )
 
 
 def detect_active_profile(config: Config) -> tuple[Profile, SiYuanClient]:

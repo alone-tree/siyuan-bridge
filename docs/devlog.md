@@ -2,6 +2,15 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-09-24：读文档时内联返回图片
+
+- 需求与已定决策见 `docs/图片内联需求-2026-09-14.md`。插件设置页新增「读文档时默认返回图片」开关：写入插件数据区 `config.local.json` 的 `read_inline_images`，安装默认关闭，用户打开后持久保存，MCP 重启生效。
+- `siyuan_read` 开启后返回 MCP 多模态 content 数组：文本块与图片块按文档顺序交替，图片为 base64 + MIME；每张按 1,568 token 计入窗口预算，块数与 token 任意一个触发即翻页，不设张数上限。
+- 范围：本地 `assets/`（优先读附件提取文件，缺失回退 `get_asset`）与网络 http/https 图（下载转 base64）；思源前端 17 个图片后缀为处理范围。
+- 限制与声明：单张超过 20 MB（与 `insert_assets` 阈值一致）默认原位声明，用户同意后 `include_large_images=true` 强制内联；SVG/AVIF/BMP/TIFF/ICO 等平台不支持格式与读取失败的图片原位声明；成功内联与声明处均保留原文件路径。
+- 前端：Home Dialog 新增「读取图片」开关，`src/index.js` 与根 `index.js` 同步修改；`normalizeConfig` 保留新键。
+- 测试：新增 16 项（content 数组混排、本地/网络内联、失败与格式声明、超限确认、计价翻页、带标题图片参数、无后缀网络图与本地文件魔数嗅探、schema、config 解析）；全量 `379 passed, 1 skipped`。分层验证：临时开发版 MCP 对真实工作空间实调 `siyuan_start`/`siyuan_find`/`siyuan_read`，并在测试空间 `D:\Siyuan2test` 端到端验证本地图与无后缀网络图同时内联成功。实测修复三个缺陷：思源导出图片带标题参数（`![a](assets/x.png "标题")`）被误判格式；网络图无文件后缀时误判不是图片（改为下载后按 PNG/JPEG/GIF/WebP 魔数识别，本地未知后缀同样嗅探）；网络图未按 1,568 token 计入窗口预算导致低估。文档同步：ARCHITECTURE、DEVELOPMENT_GUIDE、FRONTEND、SKILL、README 双语。
+
 ## 2026-09-21：运行时数据迁入思源插件数据区（v1.8.4）
 
 - 症状：插件更新后 `system_state.json` 可随插件程序目录一起丢失，MCP 因缺少 Privacy Rules 文档登记而失败关闭；配置和遥测文件也依赖可替换的 `bridge/` 目录。

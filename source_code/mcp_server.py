@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 import shutil
@@ -9,7 +10,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
+from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urlparse
+from urllib.request import Request, urlopen
 
 from .cli import load_live_docs
 from .client import SiYuanApiError, SiYuanClient, SiYuanConnectionError, SiYuanTimeoutError
@@ -70,6 +73,22 @@ SIYUAN_IMAGE_EXTENSIONS = frozenset({
     ".apng", ".ico", ".cur", ".jpg", ".jpe", ".jpeg", ".jfif", ".pjp",
     ".pjpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".avif", ".tiff", ".tif",
 })
+
+# 读文档时内联返回图片（docs/图片内联需求-2026-09-14.md 的已定决策）。
+# 单张计价 1,568 token 取主流厂商单图上限；单张上限与 insert_assets 的 20 MB 大文件阈值一致。
+INLINE_IMAGE_TOKEN_COST = 1568
+INLINE_IMAGE_MIME: dict[str, str] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpe": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".jfif": "image/jpeg",
+    ".pjp": "image/jpeg",
+    ".pjpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+IMAGE_MARKER_RE = re.compile(r"@@SIYUAN-IMAGE:(\d+)@@")
 
 
 def workspace_index_age_days(updated: str, now: datetime | None = None) -> int | None:
@@ -1832,7 +1851,13 @@ class McpServer:
                     self.root, name, action,
                     lambda: tools[name](args),
                 )
-            return make_result(request_id, {"content": [{"type": "text", "text": text}]})
+            content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+            if name == "siyuan_read":
+                pending = getattr(self, "_pending_read_images", None)
+                self._pending_read_images = None
+                if pending:
+                    content = build_read_content(text, pending)
+            return make_result(request_id, {"content": content})
         except SiYuanTimeoutError as exc:
             # 超时 ≠ 连接失效：思源可能只是忙（同步/索引/大数据量操作），
             # 不清缓存、不要求重新 start，避免频繁断开会话。
@@ -2767,13 +2792,29 @@ class McpServer:
         }
 
     def siyuan_read(self, args: dict[str, Any]) -> str:
+        self._pending_read_images = None
         doc = self.resolve_visible_document(args)
         client = self._require_active_client()
         include_block_ids = bool(args.get("include_block_ids"))
-        return self._read_document_block_window(doc, client, include_block_ids, args)
+        inline_images = load_config(self.root).read_inline_images
+        return self._read_document_block_window(
+            doc,
+            client,
+            include_block_ids,
+            args,
+            inline_images=inline_images,
+            allow_large=bool(args.get("include_large_images")),
+        )
 
     def _read_document_block_window(
-        self, doc: dict[str, Any], client: Any, include_block_ids: bool, args: dict[str, Any]
+        self,
+        doc: dict[str, Any],
+        client: Any,
+        include_block_ids: bool,
+        args: dict[str, Any],
+        *,
+        inline_images: bool = False,
+        allow_large: bool = False,
     ) -> str:
         """New block window reading path — uses getChildBlocks for display order."""
         doc_id = str(doc.get("id"))
@@ -2787,6 +2828,15 @@ class McpServer:
             with ensure_notebooks_open(client, [notebook_id]):
                 markdown = client.export_markdown(doc_id)
             attachment_count = extract_attachments(markdown, client, doc_id, self.root)
+            if inline_images:
+                markdown, images = inline_images_into_markdown(
+                    markdown,
+                    root=self.root,
+                    client=client,
+                    doc_id=doc_id,
+                    allow_large=allow_large,
+                )
+                self._pending_read_images = images or None
             markdown = rewrite_local_asset_links(markdown, doc_id, self.root)
             doc_path = display_document_path(doc)
             date = format_date(str(doc.get("updated", "")))
@@ -2822,10 +2872,13 @@ class McpServer:
         window_blocks: list[DisplayBlock] = []
         token_sum = 0
         for db in display_blocks[start_idx:end_idx]:
-            if window_blocks and token_sum + db.estimated_tokens > token_budget:
+            block_cost = db.estimated_tokens
+            if inline_images:
+                block_cost += INLINE_IMAGE_TOKEN_COST * count_inlineable_images(db.markdown)
+            if window_blocks and token_sum + block_cost > token_budget:
                 break
             window_blocks.append(db)
-            token_sum += db.estimated_tokens
+            token_sum += block_cost
 
         window_tokens = token_sum
         first_idx = window_blocks[0].index if window_blocks else start_idx + 1
@@ -2862,6 +2915,15 @@ class McpServer:
             if db.markdown.strip():
                 body_lines.append(db.markdown)
         body = "\n\n".join(body_lines)
+        if inline_images:
+            body, images = inline_images_into_markdown(
+                body,
+                root=self.root,
+                client=client,
+                doc_id=doc_id,
+                allow_large=allow_large,
+            )
+            self._pending_read_images = images or None
         body = rewrite_local_asset_links(body, doc_id, self.root)
 
         parts = [header, "", outline]
@@ -4573,7 +4635,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_read",
-            "description": "Read a visible SiYuan document as Markdown. Prefer document path including notebook name, e.g. /Notebook/Folder/Doc; use document_id only as fallback. Always returns the document outline and one complete block window. Set include_block_ids=true before any siyuan_edit call to get exact [index] id type targets. Normal reading keeps Markdown clean and hides block IDs.",
+            "description": "Read a visible SiYuan document as Markdown. Prefer document path including notebook name, e.g. /Notebook/Folder/Doc; use document_id only as fallback. Always returns the document outline and one complete block window. Set include_block_ids=true before any siyuan_edit call to get exact [index] id type targets. Normal reading keeps Markdown clean and hides block IDs. When inline image reading is enabled in the plugin settings, images in this window are returned as image content blocks interleaved with the text; oversized or unsupported images are reported at their position instead.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -4583,6 +4645,7 @@ def tool_specs() -> list[dict[str, Any]]:
                     "block_limit": {"type": "integer", "default": DEFAULT_BLOCK_LIMIT, "description": "Maximum display blocks to return in this window, 1–1000."},
                     "token_budget": {"type": "integer", "default": DEFAULT_TOKEN_BUDGET, "description": "Estimated token ceiling for this window. Blocks stop before exceeding budget (at least one block always returned)."},
                     "include_block_ids": {"type": "boolean", "default": False, "description": "Enable reference reading for editing: each block is shown as [index] id=... type=... followed by content. Use these exact values for siyuan_edit start_index/start_id."},
+                    "include_large_images": {"type": "boolean", "default": False, "description": "Set true only after the user explicitly agrees, to inline single images larger than 20 MB instead of reporting them at their position. Only relevant when inline image reading is enabled in the plugin settings."},
                 },
                 "additionalProperties": False,
             },
@@ -4724,8 +4787,165 @@ def clamp_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, number))
 
 
+# 标准行内图片：alt 任意，目标 URL 不含空白，可带可选的带引号标题。
+MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(\s*<?([^)\s]+)>?(?:\s+\"[^\"]*\")?\s*\)")
+
+
 def find_markdown_images(markdown: str) -> list[str]:
-    return re.findall(r"!\[[^\]]*\]\(([^)]+)\)", markdown)
+    return [match.group(1) for match in MARKDOWN_IMAGE_RE.finditer(markdown)]
+
+
+class InlineImageTooLarge(Exception):
+    """网络或本地图片超过单张内联体积上限。"""
+
+
+def read_image_extension(url: str) -> str:
+    """取图片引用的扩展名（小写），忽略网络地址的查询串并解码转义。"""
+    cleaned = url.strip().strip("<>")
+    path = urlparse(cleaned).path if "://" in cleaned else cleaned.split("?", 1)[0]
+    return Path(unquote(path)).suffix.casefold()
+
+
+def fetch_url_bytes(url: str, max_bytes: int) -> bytes:
+    """下载 http(s) 图片，字节量一超过 max_bytes 立即中止；max_bytes<=0 表示不限制。"""
+    request = Request(url, headers={"User-Agent": "siyuan-bridge", "Connection": "close"})
+    chunks: list[bytes] = []
+    total = 0
+    with urlopen(request, timeout=15) as response:
+        while True:
+            chunk = response.read(65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if max_bytes and total > max_bytes:
+                raise InlineImageTooLarge(f"下载超过 {max_bytes} 字节上限")
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def count_inlineable_images(markdown: str) -> int:
+    """统计 Markdown 中可内联图片引用的数量；网络图后缀不可靠，一律按候选计价。"""
+    count = 0
+    for url in find_markdown_images(markdown):
+        cleaned = url.strip().strip("<>")
+        if "://" in cleaned:
+            count += 1
+        elif read_image_extension(url) in INLINE_IMAGE_MIME:
+            count += 1
+    return count
+
+
+def sniff_image_mime(data: bytes) -> str | None:
+    """按文件魔数识别常见位图格式；识别不出返回 None。"""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def inline_images_into_markdown(
+    markdown: str,
+    *,
+    root: Path,
+    client: SiYuanClient,
+    doc_id: str,
+    allow_large: bool,
+    fetch_url: Callable[[str, int], bytes] | None = None,
+) -> tuple[str, list[dict[str, str]]]:
+    """把 Markdown 中的图片引用替换为内联标记或原位声明。
+
+    返回 (替换后的 Markdown, 图片块列表)。图片块列表按标记序号排列，
+    每项含 data（base64）、mimeType 和 source（原文件路径或 URL）。
+    本图提取失败、格式不支持或超限时，在原位置写入未返回声明，不无声跳过。
+    """
+    image_blocks: list[dict[str, str]] = []
+    threshold = ASSET_LARGE_FILE_THRESHOLD_BYTES
+    fetch = fetch_url or fetch_url_bytes
+
+    def too_large_note(display: str) -> str:
+        note = f"[图片未返回：超过 20 MB 单张上限"
+        if not allow_large:
+            note += "，用户明确同意后可用 include_large_images=true 强制内联"
+        return note + f"。文件：{display}]"
+
+    def replace(match: re.Match[str]) -> str:
+        url = match.group(1).strip().strip("<>")
+        scheme = urlparse(url).scheme
+        is_network = scheme in ("http", "https")
+        ext = read_image_extension(url)
+        known_mime = INLINE_IMAGE_MIME.get(ext)
+        if known_mime is None and not is_network and ext and ext in SIYUAN_IMAGE_EXTENSIONS:
+            # 本地图：思源清单内的明确格式但平台不支持，不必读文件。
+            return f"[图片未返回：格式 {ext} 平台通常不支持内联。文件：{url}]"
+        if known_mime is None and not is_network and ext and ext not in SIYUAN_IMAGE_EXTENSIONS:
+            return f"[图片未返回：格式 {ext} 不是可返回的图片。文件：{url}]"
+        mime = known_mime
+
+        display = url
+        try:
+            if is_network:
+                data = fetch(url, 0 if allow_large else threshold)
+                if mime is None:
+                    # 网络图后缀不可靠，下载后按文件魔数识别。
+                    mime = sniff_image_mime(data)
+                    if mime is None:
+                        if ext in SIYUAN_IMAGE_EXTENSIONS:
+                            return f"[图片未返回：格式 {ext} 平台通常不支持内联。文件：{display}]"
+                        return f"[图片未返回：无法识别图片格式（非常见 PNG/JPEG/GIF/WebP）。文件：{display}]"
+            else:
+                rel = unquote(url[len("assets/"):] if url.lower().startswith("assets/") else url.lstrip("/"))
+                local = attachment_root_dir(root, doc_id) / "assets" / rel
+                display = local.resolve().as_posix()
+                if local.exists():
+                    if local.stat().st_size > threshold and not allow_large:
+                        return too_large_note(display)
+                    data = local.read_bytes()
+                else:
+                    data = client.get_asset(url if url.lower().startswith("assets/") else f"assets/{rel}")
+                if mime is None:
+                    mime = sniff_image_mime(data)
+                    if mime is None:
+                        if ext in SIYUAN_IMAGE_EXTENSIONS:
+                            return f"[图片未返回：格式 {ext} 平台通常不支持内联。文件：{display}]"
+                        return f"[图片未返回：无法识别图片格式。文件：{display}]"
+            if len(data) > threshold and not allow_large:
+                return too_large_note(display)
+            index = len(image_blocks)
+            image_blocks.append({
+                "data": base64.b64encode(data).decode("ascii"),
+                "mimeType": mime,
+                "source": display,
+            })
+            return f"\n@@SIYUAN-IMAGE:{index}@@\n"
+        except InlineImageTooLarge:
+            return too_large_note(display)
+        except (HTTPError, URLError, OSError, SiYuanApiError, SiYuanConnectionError) as exc:
+            return f"[图片未返回：读取失败（{exc}）。文件：{display}]"
+
+    replaced = MARKDOWN_IMAGE_RE.sub(replace, markdown)
+    return replaced, image_blocks
+
+
+def build_read_content(text: str, images: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """把带内联标记的阅读文本拆成 MCP 多模态 content 数组（text 与 image 交替）。"""
+    segments = IMAGE_MARKER_RE.split(text)
+    parts: list[dict[str, Any]] = []
+    for i, segment in enumerate(segments):
+        if i % 2 == 0:
+            if segment:
+                parts.append({"type": "text", "text": segment})
+            continue
+        image = images[int(segment)]
+        parts.append({"type": "text", "text": f"[图片已内联：{image.get('source', '')}]"})
+        parts.append({"type": "image", "data": image["data"], "mimeType": image["mimeType"]})
+    if not parts:
+        parts.append({"type": "text", "text": text})
+    return parts
 
 
 def attachment_root_dir(workspace_root: Path, doc_id: str) -> Path:

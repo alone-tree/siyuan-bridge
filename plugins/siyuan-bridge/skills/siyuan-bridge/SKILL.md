@@ -15,7 +15,7 @@ description: Use when the user wants to read, search, or write their private SiY
 4. **以工作空间索引为导航主入口。** 快速导航表将用户意图映射到笔记本，笔记本详情是 AI 扫描后浓缩的结构摘要和判断——信任它来定位相关笔记本。
 5. 若启动包提示用户尚未创建或长期未更新工作空间索引，先询问用户是否需要创建或更新。具体方法见系统笔记本中的《工作空间索引创建指南》。
 6. 用 `siyuan_list`（带 `notebook_id`）查看单个笔记本的文档树，含有效权限、字数和更新时间。
-7. 用 `siyuan_read` 按需深读。始终按展示块窗口返回，不截断字符。始终返回大纲（标题→block 位置映射）。长文档用 `block_start=N` 翻页继续阅读，用 `block_limit` 和 `token_budget` 控制窗口大小。需要精确跨文档块引用或编辑定位时，开启 `include_block_ids=true`（引用阅读模式）。
+7. 用 `siyuan_read` 按需深读。始终按展示块窗口返回，不截断字符。始终返回大纲（标题→block 位置映射）。长文档用 `block_start=N` 翻页继续阅读，用 `block_limit` 和 `token_budget` 控制窗口大小。需要精确跨文档块引用或编辑定位时，开启 `include_block_ids=true`（引用阅读模式）。用户在插件设置开启「读文档时默认返回图片」后，`siyuan_read` 会随文字按文档顺序返回图片；单张超过 20 MB 的图片默认只给声明，先征得用户明确同意，再用 `include_large_images=true` 重试。
 8. 系统笔记本 `思源桥` / `SiYuan Bridge` 和普通笔记本一样可读写；只有 Privacy Rules 文档本身被硬隔离。
 
 若 MCP 工具不可用，告知用户思源桥 MCP 未注册或不可达。不要回退到扫描文件。

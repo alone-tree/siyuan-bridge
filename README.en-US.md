@@ -10,6 +10,7 @@ It focuses on documents and knowledge bases: writing, organizing, editing tables
 
 - "Find my notes on procrastination and attention, identify recurring ideas, and write a summary with inline citations from the original notes."
 - "Organize my course notes into a review framework with source references."
+- "Read this report and explain the architecture diagrams and screenshots in it."
 - "Section 3 of this article is confusing — keep the meaning but reorder the paragraphs."
 - "Update the dates in my travel itinerary and add a budget column."
 - "Insert the photos and itinerary files on my computer into this travel journal."
@@ -19,6 +20,8 @@ It focuses on documents and knowledge bases: writing, organizing, editing tables
 AI can search the entire knowledge base by keyword and browse notebook and document trees. For long documents, it sees the outline first, then reads in complete paragraphs — never splitting mid-sentence. When editing, it can rewrite single paragraphs, reorganize multiple paragraphs, insert before or after, delete ranges, and append.
 
 Tables support cell-level editing by row and column, including adding or removing rows and columns. Images and files can be uploaded to SiYuan assets; local folders are inserted as links. Local Markdown files can be imported directly as new documents, or their content inserted at a specific position in an existing document. Local image, file, and folder references in the Markdown are imported as SiYuan assets; network URLs are left unchanged. AI can also create notebooks and documents, and rename, move, copy, export, or delete existing ones.
+
+After enabling "Return images by default when reading documents" in the plugin settings, AI reads documents with screenshots and charts interleaved with the text in original order. A single image over 20 MB is returned only after your confirmation; unsupported formats are reported with a reason and the file path. This toggle is off by default. **Important:** If your model does not support image input, enabling this may cause an error when the tool is called. I have not actually verified this. Most models that previously could not view images, including DeepSeek and GLM, now support multimodal input. If you hit an error, please open an issue or report it in the community.
 
 SiYuan block references are fully supported. You can check what references a document or its blocks. When AI modifies or deletes content, Siyuan Bridge verifies whether any existing references would break.
 

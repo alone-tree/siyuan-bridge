@@ -9,7 +9,7 @@ from unittest import mock
 
 from source_code import mcp_server
 from source_code.client import SiYuanApiError, SiYuanConnectionError, SiYuanTimeoutError
-from source_code.config import Profile
+from source_code.config import Profile, load_config
 from source_code.ignore import PrivacyRules, write_privacy_rules_cache
 
 
@@ -4358,6 +4358,251 @@ class McpServerReadBlockIdTests(unittest.TestCase):
         self.assertIn("[1] id=block-h1 type=heading", result)
         self.assertIn("大纲", result)
         self.assertIn("Section One", result)
+
+
+class McpServerReadInlineImagesTests(unittest.TestCase):
+    """读文档时内联返回图片（docs/图片内联需求-2026-09-14.md 已定决策）。"""
+
+    def setUp(self):
+        self.root = Path.cwd() / ".test_tmp" / "mcp_inline_img"
+        shutil.rmtree(self.root, ignore_errors=True)
+        base = self.root / "knowledge_base"
+        base.mkdir(parents=True, exist_ok=True)
+        (base / "notebooks.json").write_text(
+            json.dumps([{"id": "nb1", "name": "Main"}], ensure_ascii=False),
+            encoding="utf-8",
+        )
+        write_privacy_rules_cache(self.root, PrivacyRules(ignore=[], allow=[]))
+        docs = [{
+            "id": "doc1", "notebook_id": "nb1", "notebook_name": "Main",
+            "hpath": "/Test Doc", "title": "Test Doc", "path": "/doc1.sy",
+            "tags": [], "word_count": 10, "block_count": 3, "updated": "20260501010101",
+        }]
+        (base / "docs.jsonl").write_text(
+            "".join(json.dumps(doc, ensure_ascii=False) + "\n" for doc in docs),
+            encoding="utf-8",
+        )
+        self.png_bytes = b"\x89PNG\r\n\x1a\n" + b"0" * 48
+        self.write_config({"profiles": [{"name": "t", "token": "t"}], "read_inline_images": True})
+
+    def write_config(self, data: dict[str, Any]) -> None:
+        (self.root / "config.local.json").write_text(json.dumps(data), encoding="utf-8")
+
+    def _blocks(self, items: list[tuple[str, str]]) -> dict[str, list[dict[str, Any]]]:
+        return {
+            "doc1": [
+                {"id": bid, "parent_id": "doc1", "type": "p", "markdown": md, "sort": sort}
+                for sort, (bid, md) in enumerate(items, start=1)
+            ]
+        }
+
+    def _make_server(self, blocks: dict[str, list[dict[str, Any]]], doc_md: str):
+        class InlineFakeClient(FakeSearchClient):
+            def __init__(self, bytes_payload: bytes):
+                super().__init__([])
+                self._bytes_payload = bytes_payload
+                self.asset_requests: list[str] = []
+
+            def get_child_blocks(self, block_id):
+                stored = self._blocks.get(block_id)
+                if isinstance(stored, list):
+                    return stored
+                children = []
+                for block_list in self._blocks.values():
+                    if isinstance(block_list, list):
+                        children.extend(b for b in block_list if str(b.get("parent_id", "")) == block_id)
+                children.sort(key=lambda b: int(b.get("sort", 0)))
+                return children
+
+            def get_asset(self, asset_path):
+                self.asset_requests.append(asset_path)
+                return self._bytes_payload
+
+        client = InlineFakeClient(self.png_bytes)
+        client._hpaths["doc1"] = "/Test Doc"
+        client._blocks = blocks
+        client._docs["doc1"] = doc_md
+        server = mcp_server.McpServer(self.root)
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = client
+        return server
+
+    def _text(self, content: list[dict[str, Any]]) -> str:
+        return "\n".join(item["text"] for item in content if item["type"] == "text")
+
+    def test_toggle_off_keeps_plain_text_read(self):
+        self.write_config({"profiles": [{"name": "t", "token": "t"}]})
+        blocks = self._blocks([("p1", "![chart](assets/chart.png)")])
+        server = self._make_server(blocks, "![chart](assets/chart.png)")
+        result = server.siyuan_read({"document_id": "doc1"})
+        self.assertIsInstance(result, str)
+        self.assertNotIn("@@SIYUAN-IMAGE:", result)
+        self.assertIsNone(getattr(server, "_pending_read_images", None))
+        expected = (self.root / "ai_workspace" / "attachments" / "doc1" / "assets" / "chart.png").resolve().as_posix()
+        self.assertIn(f"![chart]({expected})", result)
+
+    def test_toggle_on_inlines_local_asset_into_content_array(self):
+        blocks = self._blocks([("p1", "![chart](assets/chart.png)"), ("p2", "After the image.")])
+        server = self._make_server(blocks, "![chart](assets/chart.png)")
+        response = server.call_tool(1, "siyuan_read", {"document_id": "doc1"})
+        content = response["result"]["content"]
+        image_items = [item for item in content if item["type"] == "image"]
+        self.assertEqual(len(image_items), 1)
+        self.assertEqual(image_items[0]["mimeType"], "image/png")
+        self.assertEqual(
+            mcp_server.base64.b64decode(image_items[0]["data"]),
+            self.png_bytes,
+        )
+        text = self._text(content)
+        expected = (self.root / "ai_workspace" / "attachments" / "doc1" / "assets" / "chart.png").resolve().as_posix()
+        self.assertIn(f"[图片已内联：{expected}]", text)
+        self.assertNotIn("@@SIYUAN-IMAGE:", text)
+
+    def test_unsupported_format_is_declared_in_place(self):
+        blocks = self._blocks([("p1", "![logo](assets/logo.svg)")])
+        server = self._make_server(blocks, "![logo](assets/logo.svg)")
+        response = server.call_tool(1, "siyuan_read", {"document_id": "doc1"})
+        content = response["result"]["content"]
+        self.assertTrue(all(item["type"] == "text" for item in content))
+        self.assertIn("[图片未返回：格式 .svg 平台通常不支持内联", self._text(content))
+        self.assertIn("assets/logo.svg", self._text(content))
+
+    def test_oversized_image_declared_without_confirm(self):
+        blocks = self._blocks([("p1", "![chart](assets/chart.png)")])
+        server = self._make_server(blocks, "![chart](assets/chart.png)")
+        with mock.patch.object(mcp_server, "ASSET_LARGE_FILE_THRESHOLD_BYTES", 10):
+            response = server.call_tool(1, "siyuan_read", {"document_id": "doc1"})
+        content = response["result"]["content"]
+        self.assertTrue(all(item["type"] == "text" for item in content))
+        self.assertIn("[图片未返回：超过 20 MB 单张上限", self._text(content))
+        self.assertIn("include_large_images=true", self._text(content))
+
+    def test_oversized_image_inlined_after_confirm(self):
+        blocks = self._blocks([("p1", "![chart](assets/chart.png)")])
+        server = self._make_server(blocks, "![chart](assets/chart.png)")
+        with mock.patch.object(mcp_server, "ASSET_LARGE_FILE_THRESHOLD_BYTES", 10):
+            response = server.call_tool(
+                1, "siyuan_read", {"document_id": "doc1", "include_large_images": True}
+            )
+        image_items = [item for item in response["result"]["content"] if item["type"] == "image"]
+        self.assertEqual(len(image_items), 1)
+        self.assertEqual(image_items[0]["mimeType"], "image/png")
+
+    def test_network_image_inlined_with_declared_source(self):
+        blocks = self._blocks([("p1", "![remote](https://example.com/a.png)")])
+        server = self._make_server(blocks, "![remote](https://example.com/a.png)")
+        with mock.patch.object(mcp_server, "fetch_url_bytes", return_value=self.png_bytes) as fake_fetch:
+            response = server.call_tool(1, "siyuan_read", {"document_id": "doc1"})
+        image_items = [item for item in response["result"]["content"] if item["type"] == "image"]
+        self.assertEqual(len(image_items), 1)
+        self.assertEqual(image_items[0]["mimeType"], "image/png")
+        fake_fetch.assert_called_once()
+        self.assertEqual(fake_fetch.call_args[0][0], "https://example.com/a.png")
+        self.assertEqual(fake_fetch.call_args[0][1], 20 * 1024 * 1024)
+        self.assertIn("[图片已内联：https://example.com/a.png]", self._text(response["result"]["content"]))
+
+    def test_network_failure_declared_in_place(self):
+        blocks = self._blocks([("p1", "![remote](https://example.com/a.png)")])
+        server = self._make_server(blocks, "![remote](https://example.com/a.png)")
+        with mock.patch.object(mcp_server, "fetch_url_bytes", side_effect=mcp_server.URLError("boom")):
+            response = server.call_tool(1, "siyuan_read", {"document_id": "doc1"})
+        content = response["result"]["content"]
+        self.assertTrue(all(item["type"] == "text" for item in content))
+        self.assertIn("[图片未返回：读取失败", self._text(content))
+        self.assertIn("https://example.com/a.png", self._text(content))
+
+    def test_image_token_cost_counts_toward_window_budget(self):
+        items = [(f"p{i}", f"![img{i}](assets/img{i}.png)") for i in range(1, 4)]
+        blocks = self._blocks(items)
+        doc_md = "\n\n".join(md for _, md in items)
+        server = self._make_server(blocks, doc_md)
+        result = server.siyuan_read({"document_id": "doc1", "token_budget": 3000})
+        self.assertIn("展示块：1-1 / 3", result)
+        self.assertIn("继续阅读：`block_start=2", result)
+        self.assertIn("1,5", result.split("估算令牌数：", 1)[1][:12])
+
+    def test_build_read_content_interleaves_text_and_images(self):
+        images = [
+            {"data": "AAAA", "mimeType": "image/png", "source": "C:/a.png"},
+            {"data": "BBBB", "mimeType": "image/jpeg", "source": "https://x/b.jpg"},
+        ]
+        parts = mcp_server.build_read_content(
+            "Header\n\nA\n\n@@SIYUAN-IMAGE:0@@\n\nB\n\n@@SIYUAN-IMAGE:1@@\n\nTail",
+            images,
+        )
+        self.assertEqual(
+            [part["type"] for part in parts],
+            ["text", "text", "image", "text", "text", "image", "text"],
+        )
+        self.assertIn("[图片已内联：C:/a.png]", parts[1]["text"])
+        self.assertEqual(parts[2]["data"], "AAAA")
+        self.assertEqual(parts[2]["mimeType"], "image/png")
+        self.assertIn("B", parts[3]["text"])
+        self.assertIn("[图片已内联：https://x/b.jpg]", parts[4]["text"])
+        self.assertEqual(parts[5]["data"], "BBBB")
+
+    def test_image_with_title_argument_is_inlined(self):
+        blocks = self._blocks([("p1", '![chart](assets/chart.png "图片标题")')])
+        server = self._make_server(blocks, '![chart](assets/chart.png "图片标题")')
+        response = server.call_tool(1, "siyuan_read", {"document_id": "doc1"})
+        content = response["result"]["content"]
+        image_items = [item for item in content if item["type"] == "image"]
+        self.assertEqual(len(image_items), 1)
+        self.assertEqual(image_items[0]["mimeType"], "image/png")
+
+    def test_network_image_without_extension_is_sniffed_by_magic(self):
+        blocks = self._blocks([("p1", "![remote](https://th.example.com/id/R.064eabc?rik=1&r=0)")])
+        server = self._make_server(blocks, "![remote](https://th.example.com/id/R.064eabc?rik=1&r=0)")
+        with mock.patch.object(mcp_server, "fetch_url_bytes", return_value=self.png_bytes):
+            response = server.call_tool(1, "siyuan_read", {"document_id": "doc1"})
+        image_items = [item for item in response["result"]["content"] if item["type"] == "image"]
+        self.assertEqual(len(image_items), 1)
+        self.assertEqual(image_items[0]["mimeType"], "image/png")
+
+    def test_network_non_image_content_is_declared(self):
+        blocks = self._blocks([("p1", "![remote](https://example.com/page)")])
+        server = self._make_server(blocks, "![remote](https://example.com/page)")
+        with mock.patch.object(mcp_server, "fetch_url_bytes", return_value=b"<html>not an image</html>"):
+            response = server.call_tool(1, "siyuan_read", {"document_id": "doc1"})
+        content = response["result"]["content"]
+        self.assertTrue(all(item["type"] == "text" for item in content))
+        self.assertIn("无法识别图片格式", self._text(content))
+
+    def test_local_asset_without_extension_is_sniffed_by_magic(self):
+        blocks = self._blocks([("p1", "![pic](assets/noext)")])
+        server = self._make_server(blocks, "![pic](assets/noext)")
+        response = server.call_tool(1, "siyuan_read", {"document_id": "doc1"})
+        image_items = [item for item in response["result"]["content"] if item["type"] == "image"]
+        self.assertEqual(len(image_items), 1)
+        self.assertEqual(image_items[0]["mimeType"], "image/png")
+
+    def test_tool_spec_documents_large_image_confirm(self):
+        spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_read")
+        self.assertIn("include_large_images", spec["inputSchema"]["properties"])
+        self.assertIn("20 MB", spec["inputSchema"]["properties"]["include_large_images"]["description"])
+
+
+class LoadConfigInlineImagesTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path.cwd() / ".test_tmp" / "config_inline"
+        shutil.rmtree(self.root, ignore_errors=True)
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def test_defaults_to_false_when_key_missing(self):
+        (self.root / "config.local.json").write_text(
+            json.dumps({"profiles": []}), encoding="utf-8"
+        )
+        self.assertFalse(load_config(self.root).read_inline_images)
+
+    def test_true_only_when_explicitly_true(self):
+        (self.root / "config.local.json").write_text(
+            json.dumps({"profiles": [], "read_inline_images": True}), encoding="utf-8"
+        )
+        self.assertTrue(load_config(self.root).read_inline_images)
+        (self.root / "config.local.json").write_text(
+            json.dumps({"profiles": [], "read_inline_images": "yes"}), encoding="utf-8"
+        )
+        self.assertFalse(load_config(self.root).read_inline_images)
 
 
 if __name__ == "__main__":
