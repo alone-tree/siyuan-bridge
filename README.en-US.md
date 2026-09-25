@@ -87,6 +87,8 @@ Siyuan Bridge shows live block numbers on the left side of the editor by default
 
 - **No snapshot created before edit/write?** Auto-sync also creates snapshots. During sync, SiYuan may consider data unchanged and skip Siyuan Bridge's snapshot request. Set sync to manual, or sync only on startup and shutdown.
 
+- **Tags written by AI (#tag#) appear as plain text?** Whether SiYuan parses paired `#tag#` into real tags is controlled by an editor setting. Open SiYuan "Settings → Editor → Markdown inline syntax" and enable "#foo#" (tag syntax). Once enabled, tags written by AI become clickable real tags that show up in the tag panel; when disabled, all Markdown writes — including SiYuan's native API — leave them as plain text.
+
 - **Will snapshots keep growing?** SiYuan has built-in snapshot cleanup (typically keeps 2 per day, deletes after 180 days), but this requires cloud sync. For local-only workspaces without sync, periodically clean up manually via Settings → Data Repository → Cleanup.
 
 - **What can Siyuan Bridge do with documents?** Create notebooks and documents. Rename, copy, and export only affect the current document. Move and delete affect the entire document subtree (the document and all its children). Deleting entire notebooks is not currently supported.

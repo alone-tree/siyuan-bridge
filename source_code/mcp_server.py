@@ -1418,6 +1418,13 @@ def format_int(value: Any) -> str:
         return "0"
 
 
+def format_doc_tags(tags: Any) -> str:
+    """文档属性标签展示文本：#甲# #乙#；无标签返回空字符串。"""
+    if not isinstance(tags, list):
+        return ""
+    return " ".join(f"#{str(tag).strip()}#" for tag in tags if str(tag).strip())
+
+
 def estimate_token_count(text: str) -> int:
     """Heuristic token estimator. CJK ~1.0 tok/char, Latin ~1.3 tok/word, digits ~0.8 tok/item, punctuation ~0.4 tok/char."""
     if not text:
@@ -2516,11 +2523,11 @@ class McpServer:
         lines = [
             f"# {path}",
             "",
-            "| document | document_id | 权限 | 字数 | 块数 | 更新 | 子文档 |",
-            "|---|---|---|---:|---:|---|---:|",
+            "| document | document_id | 权限 | 字数 | 块数 | 更新 | 子文档 | 标签 |",
+            "|---|---|---|---:|---:|---|---:|---|",
         ]
         if not page:
-            lines.append("| (无可见子文档) |  |  |  |  |  |  |")
+            lines.append("| (无可见子文档) |  |  |  |  |  |  |  |")
         for doc in page:
             doc_path = display_document_path(doc)
             permission = document_permission(doc, privacy, docs)
@@ -2534,6 +2541,7 @@ class McpServer:
                     format_int(doc.get("block_count", 0)),
                     format_date(str(doc.get("updated", ""))),
                     format_int(descendant_count(doc, docs)),
+                    format_doc_tags(doc.get("tags")),
                 ])
                 + " |"
             )
@@ -2648,6 +2656,9 @@ class McpServer:
                 source = str(item.get("source") or "")
                 source_text = f" [{source}]" if source else ""
                 lines.append(f"- `{doc_id}` {hpath} {wc:,}字 {bc}块 {date}{source_text}".rstrip())
+                tags_text = format_doc_tags(item.get("tags"))
+                if tags_text:
+                    lines.append(f"  tag：{tags_text}")
                 snippets = item.get("snippets")
                 if isinstance(snippets, list):
                     shown_snippets = snippets[:max_snippets_per_doc]
@@ -2725,6 +2736,7 @@ class McpServer:
                     "word_count": doc.get("word_count", 0),
                     "block_count": doc.get("block_count", 0),
                     "updated": str(doc.get("updated", "")),
+                    "tags": [str(tag) for tag in (doc.get("tags") or []) if str(tag)],
                     "snippet": snippet,
                     "snippets": [],
                     "match_count": 0,
@@ -2783,6 +2795,7 @@ class McpServer:
                 "word_count": doc.get("word_count", 0),
                 "block_count": doc.get("block_count", 0),
                 "updated": str(doc.get("updated", "")),
+                "tags": [str(tag) for tag in (doc.get("tags") or []) if str(tag)],
                 "snippet": "",
                 "source": "sql",
             })
@@ -2869,6 +2882,9 @@ class McpServer:
                 f"更新：{date}",
                 "阅读模式：普通阅读（降级到导出 Markdown）",
             ]
+            tags_text = format_doc_tags(doc.get("tags"))
+            if tags_text:
+                header_lines.insert(3, f"tag：{tags_text}")
             if attachment_count:
                 header_lines.append(f"附件：{attachment_count} 个已提取到 {attachment_root_dir(self.root, doc_id).resolve()}")
             return "\n".join(["\n".join(header_lines), "", "---", "", markdown])
@@ -2919,6 +2935,9 @@ class McpServer:
             f"展示块：{first_idx}-{last_idx} / {total_blocks}",
             f"估算令牌数：{window_tokens:,} / {token_budget:,}",
         ]
+        tags_text = format_doc_tags(doc.get("tags"))
+        if tags_text:
+            header_lines.insert(3, f"tag：{tags_text}")
         if start_idx + block_limit < total_blocks:
             next_start = last_idx + 1
             header_lines.append(f"下一窗口：block_start={next_start}, block_limit={block_limit}")
@@ -4425,6 +4444,7 @@ def live_doc_from_block(
         "word_count": indexed.get("word_count", 0),
         "block_count": indexed.get("block_count", 0),
         "updated": str(block.get("updated") or indexed.get("updated") or ""),
+        "tags": [str(tag) for tag in (indexed.get("tags") or []) if str(tag)],
     }
 
 

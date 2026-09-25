@@ -14,7 +14,7 @@ description: Use when the user wants to read, search, or write their private SiY
 3. 遵循启动包中的 MCP 使用指南和用户个性化要求。
 4. **以工作空间索引为导航主入口。** 快速导航表将用户意图映射到笔记本，笔记本详情是 AI 扫描后浓缩的结构摘要和判断——信任它来定位相关笔记本。
 5. 若启动包提示用户尚未创建或长期未更新工作空间索引，先询问用户是否需要创建或更新。具体方法见系统笔记本中的《工作空间索引创建指南》。
-6. 用 `siyuan_list`（带 `notebook_id`）查看单个笔记本的文档树，含有效权限、字数和更新时间。
+6. 用 `siyuan_list`（带 `notebook_id`）查看单个笔记本的文档树，含有效权限、字数、更新时间和文档标签。
 7. 用 `siyuan_read` 按需深读。始终按展示块窗口返回，不截断字符。始终返回大纲（标题→block 位置映射）。长文档用 `block_start=N` 翻页继续阅读，用 `block_limit` 和 `token_budget` 控制窗口大小。需要精确跨文档块引用或编辑定位时，开启 `include_block_ids=true`（引用阅读模式）。用户在插件设置开启「读文档时默认返回图片」后，`siyuan_read` 会随文字按文档顺序返回图片；单张超过 20 MB 的图片默认只给声明，先征得用户明确同意，再用 `include_large_images=true` 重试。
 8. 系统笔记本 `思源桥` / `SiYuan Bridge` 和普通笔记本一样可读写；只有 Privacy Rules 文档本身被硬隔离。
 
@@ -32,7 +32,7 @@ description: Use when the user wants to read, search, or write their private SiY
 ## Tool Use Hints
 
 - `siyuan_start` —— 始终最先调用。返回运行状态、MCP Usage Guide、User Preferences、笔记本概览和 Workspace Index。
-- `siyuan_find` —— 搜索知识库，通过思源 API 实时搜索后经隐私规则过滤返回结果。搜索文本参数是 `query`。默认 `mode=query`，使用思源原生查询语法：空格表示 AND；探索主题、近义词或相关概念时显式使用 OR，例如 `GPU OR 光模块 OR NVLink`。含连字符等特殊字符的词会按 FTS5 规则自动加引号，例如 `Scale-out` 会按 `"Scale-out"` 发送。需要模式匹配或结构化查询时再使用 `regex` / `sql`。
+- `siyuan_find` —— 搜索知识库，通过思源 API 实时搜索后经隐私规则过滤返回结果。搜索文本参数是 `query`。默认 `mode=query`，使用思源原生查询语法：空格表示 AND；探索主题、近义词或相关概念时显式使用 OR，例如 `GPU OR 光模块 OR NVLink`。含连字符等特殊字符的词会按 FTS5 规则自动加引号，例如 `Scale-out` 会按 `"Scale-out"` 发送。需要模式匹配或结构化查询时再使用 `regex` / `sql`。命中文档带文档属性标签时会以 `tag：#名称#` 展示。
 - `siyuan_read` —— 只读取可见文档；隐藏文档和隐私规则文档即使已知 ID 也不会被读取。
 - `siyuan_read` / `siyuan_edit` / `siyuan_doc_manage` 使用路径定位时会校验思源当前真实路径。若提示路径已过期，先调用 `siyuan_operate(action="refresh")`，再用当前真实路径重试；或改用 `document_id`。
 - `siyuan_list` —— 无参数或 `path="/"` 时列出可见笔记本；其他路径列出直接子文档及有效权限。`read_write` 可写，`read_only` 只能读取、复制或导出；隐私规则文档和隐藏内容不会出现在列表中。

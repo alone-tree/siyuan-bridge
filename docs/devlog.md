@@ -2,6 +2,14 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-09-25：标签写入根因确认与文档标签展示
+
+- 关联 issue：<https://github.com/alone-tree/siyuan-bridge/issues/11>。需求与结论见 `docs/思源标签写入需求-2026-09-25.md`。
+- 根因实测：`siyuan_find`/直接调思源原生 `createDocWithMd`/`appendBlock` 写 `#标签#` 均落纯文本，桥嫌疑排除；根因是思源「标签语法」开关（`editor.markdown.inlineTag`）关闭。开关开启后行中、行首、相邻写法全部落成真标签。写入路径不做任何改动；README 常见问题（中英双语）新增开关指引。
+- 新功能：`siyuan_find`、`siyuan_read`、`siyuan_list` 展示文档属性标签（文档块 `tag` 列，本地索引 `docs.jsonl` 已有 `tags` 字段）。格式 `tag：#甲# #乙#`，仅在文档真有标签时出现。`live_doc_from_block()` 补传 `tags`；`_enrich_search_blocks()` / `_enrich_sql_results()` 结果带 `tags`；`siyuan_read` 在文档头「更新」之后插入标签行；`siyuan_list` 文档表新增「标签」列。
+- 测试：`python -m pytest tests -q` 为 `387 passed, 1 skipped`（新增 list 标签列、find 带/不带标签、read 头部标签 4 例）。开发版 MCP 实调验证：搜「问卷量表」命中文档展示 `tag：#商业# #问卷量表# #参考#`；read `/创作与商业/屡"试"不爽，网易云的「人格主导色」又刷屏` 头部出现标签行；list `/创作与商业` 标签列有值/留空正确。
+- 版本仍为 1.9.0，尚未发布。
+
 ## 2026-09-25：正向与反向引用查询
 
 - 关联 issue：<https://github.com/alone-tree/siyuan-bridge/issues/10>。未采用 issue 草案中的方向参数；公开 action 改为 `check_forward_references` 和 `check_backward_references`，旧名不保留。版本仍为 1.9.0，尚未发布。

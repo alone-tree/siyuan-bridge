@@ -1052,6 +1052,98 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("还有 1 项未显示。", result)
         self.assertIn('siyuan_list(path="/Main/Projects", offset=1, limit=1)', result)
 
+    def test_list_documents_shows_document_tags(self):
+        base = self.root / "knowledge_base"
+        docs = [
+            {
+                "id": "doc1",
+                "notebook_id": "nb1",
+                "notebook_name": "Main",
+                "hpath": "/Projects/Doc One",
+                "title": "Doc One",
+                "path": "/doc1.sy",
+                "tags": ["参考", "商业"],
+                "word_count": 123,
+                "block_count": 4,
+                "updated": "20260501010101",
+            },
+            {
+                "id": "doc3",
+                "notebook_id": "nb1",
+                "notebook_name": "Main",
+                "hpath": "/Projects/Doc Two",
+                "title": "Doc Two",
+                "path": "/doc3.sy",
+                "tags": [],
+                "word_count": 30,
+                "block_count": 1,
+                "updated": "20260501010103",
+            },
+        ]
+        (base / "docs.jsonl").write_text(
+            "".join(json.dumps(doc, ensure_ascii=False) + "\n" for doc in docs),
+            encoding="utf-8",
+        )
+        server = mcp_server.McpServer(self.root)
+        result = server.siyuan_list({"path": "/Main/Projects"})
+        self.assertIn("| /Main/Projects/Doc One | `doc1` | read_write | 123 | 4 | 2026-05-01 | 0 | #参考# #商业# |", result)
+        self.assertIn("| /Main/Projects/Doc Two | `doc3` | read_write | 30 | 1 | 2026-05-01 | 0 |  |", result)
+        self.assertNotIn("tag：无", result)
+
+    def test_find_documents_shows_document_tags(self):
+        base = self.root / "knowledge_base"
+        docs = [
+            {
+                "id": "doc1",
+                "notebook_id": "nb1",
+                "notebook_name": "Main",
+                "hpath": "/Projects/Doc One",
+                "title": "Doc One",
+                "path": "/doc1.sy",
+                "tags": ["参考", "商业"],
+                "word_count": 123,
+                "block_count": 4,
+                "updated": "20260501010101",
+            },
+        ]
+        (base / "docs.jsonl").write_text(
+            "".join(json.dumps(doc, ensure_ascii=False) + "\n" for doc in docs),
+            encoding="utf-8",
+        )
+        client = FakeSearchClient([
+            {
+                "id": "block1",
+                "rootID": "doc1",
+                "box": "nb1",
+                "type": "NodeParagraph",
+                "markdown": "正文里有机器人这个词。",
+                "content": "正文里有机器人这个词。",
+                "hPath": "/Projects/Doc One",
+                "path": "/doc1.sy",
+            }
+        ])
+        output = self.run_find(client, {"query": "机器人", "scope": "full"})
+
+        self.assertIn("tag：#参考# #商业#", output)
+
+    def test_find_documents_omits_tag_line_without_tags(self):
+        client = FakeSearchClient([
+            {
+                "id": "block1",
+                "rootID": "doc3",
+                "box": "nb1",
+                "type": "NodeParagraph",
+                "markdown": "正文里有机器人这个词。",
+                "content": "正文里有机器人这个词。",
+                "hPath": "/Projects/Doc One/Child",
+                "path": "/doc3.sy",
+            }
+        ])
+        output = self.run_find(client, {"query": "机器人", "scope": "full"})
+
+        self.assertIn("`doc3`", output)
+        self.assertNotIn("tag：", output)
+
     def test_find_documents_uses_live_full_text_blocks(self):
         client = FakeSearchClient([
             {
@@ -4255,6 +4347,37 @@ class McpServerReadBlockWindowTests(unittest.TestCase):
         self.assertIn("Body text here.", result)
         # Should NOT contain old chunk header
         self.assertNotIn("Chunk ", result)
+
+    def test_read_header_shows_document_tags(self):
+        base = self.root / "knowledge_base"
+        docs = [
+            {
+                "id": "doc1",
+                "notebook_id": "nb1",
+                "notebook_name": "Main",
+                "hpath": "/Test Doc",
+                "title": "Test Doc",
+                "path": "/doc1.sy",
+                "tags": ["参考", "商业"],
+                "word_count": 10,
+                "block_count": 3,
+                "updated": "20260501010101",
+            },
+        ]
+        (base / "docs.jsonl").write_text(
+            "".join(json.dumps(doc, ensure_ascii=False) + "\n" for doc in docs),
+            encoding="utf-8",
+        )
+        blocks = {
+            "doc1": [
+                {"id": "p1", "parent_id": "doc1", "type": "p", "markdown": "Body text here.", "sort": 1},
+            ]
+        }
+        result = self._read({"document_id": "doc1"}, blocks_for_doc=blocks)
+
+        self.assertIn("tag：#参考# #商业#", result)
+        self.assertGreater(result.index("tag：#参考# #商业#"), result.index("更新：2026-05-01"))
+        self.assertLess(result.index("tag：#参考# #商业#"), result.index("阅读模式："))
 
     def test_read_accepts_document_path(self):
         blocks = {
