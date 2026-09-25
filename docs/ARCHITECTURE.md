@@ -502,11 +502,11 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 
 | 参数     | 类型   | 默认 | 含义                         |
 | -------- | ------ | ---- | ---------------------------- |
-| `action` | string | 必填 | `refresh` / `sync` / `check_references` |
+| `action` | string | 必填 | `refresh` / `sync` / `check_forward_references` / `check_backward_references` |
 | `timeout_seconds` | integer | 10 | 仅 `action=sync` 使用，等待思源内置同步返回的秒数，范围 5-120 |
-| `document` | string | 空 | 仅 `action=check_references` 使用；优先传包含笔记本名称的文档路径 |
-| `document_id` | string | 空 | 仅 `action=check_references` 使用；路径歧义或不可用时的文档 ID 兜底 |
-| `limit` | integer / `"none"` | 10 | 仅 `action=check_references` 使用；分别限制可见来源文档和可见被引用子文档的展示数量；整数最小 1、无最大值 |
+| `document` | string | 空 | 仅两个引用查询 action 使用；优先传包含笔记本名称的文档路径 |
+| `document_id` | string | 空 | 仅两个引用查询 action 使用；路径歧义或不可用时的文档 ID 兜底 |
+| `limit` | integer / `"none"` | 10 | 仅两个引用查询 action 使用；分别限制可见对端文档和有引用关系的可见子文档的展示数量，不限制关系总数；整数最小 1、无最大值 |
 
 `action=refresh` 数据流：
 
@@ -525,22 +525,28 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 
 如果 `performSync` 超过等待时间未返回，工具返回 `api:sync_timeout` 错误，提示用户稍后检查同步状态、手动延长 `timeout_seconds` 或检查网络/同步服务。如果同步调用已经开始但网络连接失败，工具返回 `api:sync_connection`。连接探测阶段失败仍按普通思源未启动/API 不可达处理。
 
-`action=check_references` 数据流：
+引用查询公开入口：
+
+- `action=check_forward_references`：查询本文档引用了哪些块，按目标文档分组展示目标块。
+- `action=check_backward_references`：查询哪些块引用了本文档，按来源文档分组展示来源块；保留原反向查询行为。
+- 方向由 action 选择，不增加公开 `direction` 参数。
+
+两个 action 的对称契约：
 
 1. 复用 `siyuan_read` / `siyuan_edit` / `siyuan_doc_manage` 的现有文档定位器；公开用法优先完整路径，歧义时改用 `document_id`。空值、`/`、笔记本名称、笔记本 ID 和正文块 ID 均拒绝。
-2. 打开相关关闭笔记本并读取 live 文档树。当前文档的检测集合包含文档块 ID 和 `blocks.root_id=<document_id>` 的全部真实正文块 ID，因此覆盖列表子项等不一定单独出现在引用阅读视图中的块。
-3. 递归收集所有子文档及其真实正文块 ID。当前目标文档返回完整详情；子文档只返回每篇可见文档的引用次数汇总。
-4. 底层 `list_block_references()` 合并两路只读关系：`refs` 表中的标准块引用与可识别嵌入块，以及 `spans.markdown` 中的 `siyuan://blocks/<ID>` 块链接/Markdown 块链接。
-5. 所有关系统一按 `(目标 ID, 来源块 ID)` 去重。同一来源块多次引用同一目标只计 1 次；同一来源块分别引用文档及其内部块则分别计数。
-6. 当前文档的结果按来源文档汇总，按引用次数降序、完整路径升序排列。每篇最多展示 3 个唯一来源块；同一来源块包含多个目标关系时只展示一次并标注关系数；原始来源块 Markdown 最多保留前 2000 字符。
-7. 当前文档总数和子文档总数均不受 `limit` 影响。隐藏来源计入总数但只在末尾汇总引用次数；不返回隐藏来源的文档数、路径、ID 或内容。
-8. 子文档总数包含隐藏子文档，但子文档明细经过隐私过滤，不展示隐藏子文档的数量、路径、ID 或单篇次数。无子文档时省略该段；有子文档但引用为 0 时仍显示汇总。
-9. `limit` 分别作用于可见来源文档和被引用的可见子文档；`limit="none"` 展示全部。该 action 只读，不要求 `confirmed`，不创建快照。
+2. 打开相关关闭笔记本并读取 live 文档树。当前文档的检测集合包含文档块 ID 和 `blocks.root_id=<document_id>` 的全部真实正文块 ID，因此覆盖列表子项等不一定单独出现在引用阅读视图中的块。正向按来源属于该集合查询，反向按目标属于该集合查询。
+3. 递归收集所有子文档及其真实正文块 ID。本文档返回详情；子文档只返回每篇可见文档在所选方向上的引用关系次数汇总。
+4. 合并两路只读关系：`refs` 表中的标准块引用与可识别嵌入块，以及 `spans.markdown` 中的 `siyuan://blocks/<ID>` 块链接/Markdown 块链接。
+5. 所有关系统一按 `(目标 ID, 来源块 ID)` 去重。同一来源块多次引用同一目标只计 1 次；同一来源块分别引用文档及其内部块则分别计数。本文档内部引用也计入，不套用删除保护的内部关系排除规则。
+6. 本文档的结果按对端文档汇总：正向对端是目标文档，反向对端是来源文档。按关系数降序、完整路径升序排列；每篇最多展示 3 个唯一对端块，同一对端块对应多个关系时只展示一次并标注关系数；每块原始 Markdown 最多保留前 2000 字符。
+7. 本文档和子文档的关系总数均不受 `limit` 影响。隐藏对端计入总关系数但只汇总关系次数；不返回隐藏对端的文档数、路径、ID 或内容。
+8. 子文档关系总数包含隐藏子文档，但子文档明细经过隐私过滤，不展示隐藏子文档的数量、路径、ID 或单篇次数。无子文档时省略该段；有子文档但引用为 0 时仍显示汇总。
+9. `limit` 默认 10，分别作用于可见对端文档和有引用关系的可见子文档；`limit="none"` 展示全部。两个 action 均只读，不要求 `confirmed`，不创建快照。写前删除反链保护及其 `reference_policy` 行为不变。
 
 当前实现差距：
 
 - 当前设计已明确：只有 `siyuan_start` 会清理 `ai_workspace`，`siyuan_operate(action=refresh)` 不清理。refresh 可能发生在 AI 工作途中，中途清理 workspace 会误删附件、导出文件或临时工作材料。旧 devlog 和旧说明文档中仍可能保留相反历史表述，迁移时需要剔除，避免继续暗示 refresh 会清理 workspace。
-- 文档定位器在同时传入 `document` 与 `document_id` 时静默优先 `document`，不会校验二者是否指向同一文档。`check_references` 为保持工具一致性暂时复用该行为；后续应统一增加冲突校验。
+- 文档定位器在同时传入 `document` 与 `document_id` 时静默优先 `document`，不会校验二者是否指向同一文档。两个引用查询 action 为保持工具一致性暂时复用该行为；后续应统一增加冲突校验。
 
 ## `siyuan_list`
 

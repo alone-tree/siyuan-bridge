@@ -36,7 +36,7 @@
 | 属性 | `/api/attr/getBlockAttrs`, `/api/attr/setBlockAttrs` | 读取或设置块属性 | 暂不开放。后续可用于 AI 修改标记 |
 | 搜索 | `/api/search/fullTextSearchBlock` | 全文搜索正文、标题和块 | 已作为 `siyuan_find` 的召回源 |
 | SQL | `/api/query/sql` | 结构化读取 blocks 表、诊断、定位 | 内部使用，不开放任意 SQL |
-| 反链 | `/api/query/sql` 查询 `refs` 并关联 `blocks` | 写前检查即将消失的文档/块 ID 是否仍被引用 | 仅由写入保护内部使用 |
+| 引用关系 | `/api/query/sql` 查询 `refs`、`spans` 并关联 `blocks` | 正向查询文档引用哪些块，反向查询文档被哪些块引用；写前检查即将消失的 ID 是否仍被引用 | 只读查询通过 `siyuan_operate` 的 `check_forward_references` / `check_backward_references` 暴露；写入保护仍内部执行 |
 | 导出 | `/api/export/exportMdContent` 等 | 读取文档 Markdown、导出资源 | 已用于阅读；不作为写入主路径 |
 | 资源 | `/api/asset/insertLocalAssets` | 按目标文档处理本地文件/文件夹并返回资源路径 | 仅由 `siyuan_edit(action=insert_assets)` 内部使用 |
 | 仓库快照 | `/api/repo/createSnapshot`, `/api/repo/getRepoSnapshots` | 写入前备份；必要时帮助用户找到恢复点 | `createSnapshot` 内部强制使用；查询可后续做只读诊断 |
@@ -94,6 +94,16 @@ markdown
 if_exists（可选：reject / overwrite / create_new）
 confirmed
 ```
+
+## 正向与反向引用查询
+
+`siyuan_operate` 用 `check_forward_references` 查询本文档引用哪些块，用 `check_backward_references` 查询哪些块引用本文档，不提供公开 `direction` 参数。查询集合包含文档 ID 和 live `blocks.root_id` 下的全部正文块 ID，不能用引用阅读展示块代替。
+
+关系同时覆盖 `refs` 中的标准块引用、可识别嵌入块，以及 `spans.markdown` 中的 `siyuan://blocks/<ID>` 链接，统一按 `(目标 ID, 来源块 ID)` 去重；本篇内部引用也计入。正向以本文档块为来源筛选，反向以本文档块为目标筛选。
+
+本文档返回详情：正向按目标文档展示目标块，反向按来源文档展示来源块；每篇最多 3 个唯一对端块，每块原始 Markdown 最多 2000 字符，文档按关系数降序、完整路径升序排列。子文档递归查询，只展示次数汇总。`limit` 默认 10，`"none"` 不限，仅限制文档展示，不限制关系总数。隐藏对端只计关系次数，不泄露路径、ID、内容或文档数；隐藏子文档仍遵循既有隐私过滤规则。完整参数与返回契约见 `ARCHITECTURE.md` 的 `siyuan_operate` 章节。
+
+两个查询均只读，不创建快照。写前删除反链保护不变：仍排除同一删除集合内部的关系，并由既有 `reference_policy` 控制拒绝或经确认破坏引用。
 
 ## 块树读取与块 ID 诊断视图
 

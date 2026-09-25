@@ -232,6 +232,66 @@ class SiYuanClient:
                 deduplicated.setdefault((target_id, source_block_id), row)
         return list(deduplicated.values())
 
+    def list_forward_block_references(self, block_ids: list[str]) -> list[dict[str, Any]]:
+        """Return refs and block links originating in *block_ids*, with target blocks."""
+        normalized = list(dict.fromkeys(str(block_id).strip() for block_id in block_ids if str(block_id).strip()))
+        if not normalized:
+            return []
+
+        source_ids = set(normalized)
+        rows: list[dict[str, Any]] = []
+        for start in range(0, len(normalized), 200):
+            chunk = normalized[start:start + 200]
+            quoted = ", ".join("'" + block_id.replace("'", "''") + "'" for block_id in chunk)
+            rows.extend(self.query_sql(
+                "SELECT r.def_block_id, r.block_id, r.root_id, r.type "
+                f"FROM refs r WHERE r.block_id IN ({quoted})"
+            ))
+            for row in self.query_sql(
+                "SELECT s.block_id, s.root_id, s.markdown AS span_markdown "
+                f"FROM spans s WHERE s.block_id IN ({quoted}) "
+                "AND instr(lower(s.markdown), 'siyuan://blocks/') > 0"
+            ):
+                for match in re.finditer(
+                    r"siyuan://blocks/([0-9A-Za-z-]+)",
+                    str(row.get("span_markdown") or ""),
+                    re.IGNORECASE,
+                ):
+                    rows.append({
+                        "def_block_id": match.group(1),
+                        "block_id": str(row.get("block_id") or ""),
+                        "root_id": str(row.get("root_id") or ""),
+                        "type": "block-link",
+                    })
+
+        deduplicated: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in rows:
+            target_id = str(row.get("def_block_id") or "")
+            source_block_id = str(row.get("block_id") or "")
+            if target_id and source_block_id in source_ids:
+                deduplicated.setdefault((target_id, source_block_id), row)
+
+        # Resolve both standard refs and links through live blocks. Missing targets
+        # remain in totals, but have no visible document or content to disclose.
+        targets: dict[str, dict[str, Any]] = {}
+        target_ids = list(dict.fromkeys(key[0] for key in deduplicated))
+        for start in range(0, len(target_ids), 200):
+            chunk = target_ids[start:start + 200]
+            quoted = ", ".join("'" + block_id.replace("'", "''") + "'" for block_id in chunk)
+            for block in self.query_sql(
+                f"SELECT id, root_id, content, markdown, type FROM blocks WHERE id IN ({quoted})"
+            ):
+                targets[str(block.get("id") or "")] = block
+        for row in deduplicated.values():
+            target = targets.get(str(row.get("def_block_id") or ""), {})
+            row.update({
+                "target_root_id": target.get("root_id") or "",
+                "target_content": target.get("content"),
+                "target_markdown": target.get("markdown"),
+                "target_block_type": target.get("type"),
+            })
+        return list(deduplicated.values())
+
     def get_child_blocks(self, block_id: str) -> list[dict[str, Any]]:
         data = self._post("/api/block/getChildBlocks", {"id": block_id})
         if not isinstance(data, list):

@@ -2,6 +2,13 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-09-25：正向与反向引用查询
+
+- 关联 issue：<https://github.com/alone-tree/siyuan-bridge/issues/10>。未采用 issue 草案中的方向参数；公开 action 改为 `check_forward_references` 和 `check_backward_references`，旧名不保留。版本仍为 1.9.0，尚未发布。
+- 已确认：反向只改 action 名称；正向按目标文档展示目标块，并与反向在子文档汇总、排序、数量限制、去重和隐私保护上保持对称。本文档内部引用计入主动查询，不改变写前删除保护。
+- 实现：`list_forward_block_references()` 按来源块查询 `refs` 和 `siyuan://` 块链接，再解析目标块；`_check_references()` 复用原输出结构并按方向切换归属与展示字段。
+- 测试：`python -m pytest tests -q` 为 `383 passed, 1 skipped`。临时开发版 MCP 实调 `/投资实践/净值记录`：正向 1 次、子文档 1 次并展示目标块；反向 2 次，其中隐藏来源只计次数；旧 action 被拒绝。验证注册已禁用。本次提交并推送，不升版本、不发版。
+
 ## 2026-09-24：读文档时内联返回图片
 
 - 需求与已定决策见 `docs/图片内联需求-2026-09-14.md`。插件设置页新增「读文档时默认返回图片」开关：写入插件数据区 `config.local.json` 的 `read_inline_images`，安装默认关闭，用户打开后持久保存，MCP 重启生效。

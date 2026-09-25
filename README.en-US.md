@@ -23,7 +23,7 @@ Tables support cell-level editing by row and column, including adding or removin
 
 After enabling "Return images by default when reading documents" in the plugin settings, AI reads documents with screenshots and charts interleaved with the text in original order. A single image over 20 MB is returned only after your confirmation; unsupported formats are reported with a reason and the file path. This toggle is off by default. **Important:** If your model does not support image input, enabling this may cause an error when the tool is called. I have not actually verified this. Most models that previously could not view images, including DeepSeek and GLM, now support multimodal input. If you hit an error, please open an issue or report it in the community.
 
-SiYuan block references are fully supported. You can check what references a document or its blocks. When AI modifies or deletes content, Siyuan Bridge verifies whether any existing references would break.
+SiYuan block references are supported. You can ask which blocks a document references, or which blocks reference that document. Both queries cover the document and all its blocks, and recursively summarize reference counts for child documents. When AI modifies or deletes content, Siyuan Bridge verifies whether any existing references would break.
 
 ## How Siyuan Bridge Protects Your Notes
 
@@ -91,7 +91,7 @@ Siyuan Bridge shows live block numbers on the left side of the editor by default
 
 - **What can Siyuan Bridge do with documents?** Create notebooks and documents. Rename, copy, and export only affect the current document. Move and delete affect the entire document subtree (the document and all its children). Deleting entire notebooks is not currently supported.
 
-- **How to check what references a document?** Tell AI: "Check references for this document." Siyuan Bridge checks the document and all its blocks, summarizing by reference source and showing visible reference content. References from hidden documents are counted but not revealed.
+- **How do I check forward and backward references?** Ask "Which blocks does this document reference?" for `siyuan_operate(action="check_forward_references")`, which shows referenced blocks grouped by target document. Ask "Which blocks reference this document?" for `action="check_backward_references"`, which shows referring blocks grouped by source document. Both include references within the same document and recursively summarize counts for child documents. By default, each list shows up to 10 visible counterpart or child documents; use `limit="none"` to show all. Display limits do not change relationship totals. Hidden counterparts contribute only to relationship counts; their paths, IDs, content, and document counts are not disclosed.
 
 - **Will delete or overwrite break block references?** Any operation that would make existing document or block IDs disappear first checks for references. When references exist, Siyuan Bridge defaults to rejecting the operation and shows visible reference sources. The AI can only proceed after you've reviewed the impact and explicitly allowed it.
 

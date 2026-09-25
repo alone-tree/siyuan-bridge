@@ -2167,12 +2167,15 @@ class McpServer:
 
     def siyuan_operate(self, args: dict[str, Any]) -> str:
         action = str(args.get("action") or "").strip().casefold()
-        if action not in {"refresh", "sync", "check_references"}:
-            raise tool_error(_ERR_INVALID_ENUM, "action 必须是 refresh、sync 或 check_references。")
+        if action not in {"refresh", "sync", "check_forward_references", "check_backward_references"}:
+            raise tool_error(
+                _ERR_INVALID_ENUM,
+                "action 必须是 refresh、sync、check_forward_references 或 check_backward_references。",
+            )
         if action == "refresh":
             return self._refresh_safe_index()
-        if action == "check_references":
-            return self._check_references(args)
+        if action in {"check_forward_references", "check_backward_references"}:
+            return self._check_references(args, forward=action == "check_forward_references")
 
         timeout_seconds = clamp_int(args.get("timeout_seconds"), 10, 5, 120)
         client = self._require_active_client()
@@ -2200,7 +2203,12 @@ class McpServer:
             lines.append(f"同步时间：{synced}")
         return "\n".join(lines)
 
-    def _check_references(self, args: dict[str, Any]) -> str:
+    def _check_references(self, args: dict[str, Any], *, forward: bool = False) -> str:
+        reference_verb = "引用" if forward else "被引用"
+        peer_label = "目标" if forward else "来源"
+        owner_key = "block_id" if forward else "def_block_id"
+        peer_root_key = "target_root_id" if forward else "root_id"
+        peer_block_key = "def_block_id" if forward else "block_id"
         limit = parse_reference_limit(args.get("limit"))
         client = self._require_active_client()
         target_doc = self._resolve_reference_document(args, client)
@@ -2228,7 +2236,10 @@ class McpServer:
                     block_id = str(block.get("id") or "")
                     if block_id:
                         target_owner[block_id] = subtree_doc_id
-            references = client.list_block_references(sorted(target_owner))
+            references = (
+                client.list_forward_block_references(sorted(target_owner))
+                if forward else client.list_block_references(sorted(target_owner))
+            )
 
         references_by_doc: dict[str, list[dict[str, Any]]] = {
             str(doc.get("id") or ""): []
@@ -2236,7 +2247,7 @@ class McpServer:
             if str(doc.get("id") or "")
         }
         for row in references:
-            owner_id = target_owner.get(str(row.get("def_block_id") or ""))
+            owner_id = target_owner.get(str(row.get(owner_key) or ""))
             if owner_id:
                 references_by_doc.setdefault(owner_id, []).append(row)
 
@@ -2252,17 +2263,17 @@ class McpServer:
         )
 
         lines = [
-            "# 文档引用检测",
+            "# 文档正向引用检测" if forward else "# 文档引用检测",
             "",
             f"文档：{display_document_path(live_target)}（`{target_doc_id}`）",
-            f"本文档总共被引用 {len(current_references)} 次。",
+            f"本文档总共{reference_verb} {len(current_references)} 次。",
         ]
 
         if child_docs:
             lines.extend([
                 "",
-                f"其所有子文档（不含本文档）总共被引用 {child_reference_total} 次，"
-                "子文档的被引用情况如下（不包括被隐藏的文档）：",
+                f"其所有子文档（不含本文档）总共{reference_verb} {child_reference_total} 次，"
+                f"子文档的{reference_verb}情况如下（不包括被隐藏的文档）：",
             ])
             visible_referenced_children = [
                 (
@@ -2290,7 +2301,7 @@ class McpServer:
                 for child_doc, count in shown_children:
                     lines.append(
                         f"- {display_document_path(child_doc)}"
-                        f"（`{child_doc.get('id', '')}`）被引用 {count} 次"
+                        f"（`{child_doc.get('id', '')}`）{reference_verb} {count} 次"
                     )
             else:
                 lines.append("无可展示的子文档。")
@@ -2301,23 +2312,23 @@ class McpServer:
                     '请使用 limit="none" 查看全部引用。'
                 )
 
-        source_permission_cache: dict[str, str] = {}
+        peer_permission_cache: dict[str, str] = {}
 
-        def source_permission(root_id: str) -> str:
-            if root_id not in source_permission_cache:
-                source_doc = docs_by_id.get(root_id)
-                source_permission_cache[root_id] = (
-                    document_permission(source_doc, privacy, live_docs)
-                    if source_doc is not None
+        def peer_permission(root_id: str) -> str:
+            if root_id not in peer_permission_cache:
+                peer_doc = docs_by_id.get(root_id)
+                peer_permission_cache[root_id] = (
+                    document_permission(peer_doc, privacy, live_docs)
+                    if peer_doc is not None
                     else "hidden"
                 )
-            return source_permission_cache[root_id]
+            return peer_permission_cache[root_id]
 
         visible_groups: dict[str, list[dict[str, Any]]] = {}
         hidden_reference_count = 0
         for row in current_references:
-            root_id = str(row.get("root_id") or "")
-            if source_permission(root_id) == "hidden":
+            root_id = str(row.get(peer_root_key) or "")
+            if peer_permission(root_id) == "hidden":
                 hidden_reference_count += 1
             else:
                 visible_groups.setdefault(root_id, []).append(row)
@@ -2333,24 +2344,31 @@ class McpServer:
         )
         shown_groups = ordered_groups if limit is None else ordered_groups[:limit]
         if shown_groups:
-            lines.extend(["", "## 引用来源"])
-            for source_doc_id, source_rows in shown_groups:
-                source_doc = docs_by_id[source_doc_id]
+            lines.extend(["", f"## 引用{peer_label}"])
+            for peer_doc_id, peer_rows in shown_groups:
+                peer_doc = docs_by_id[peer_doc_id]
+                peer_verb = "被引用了" if forward else "引用了"
                 lines.extend([
                     "",
-                    f"### {display_document_path(source_doc)}"
-                    f"（`{source_doc_id}`）引用了 {len(source_rows)} 次",
+                    f"### {display_document_path(peer_doc)}"
+                    f"（`{peer_doc_id}`）{peer_verb} {len(peer_rows)} 次",
                 ])
                 rows_by_block: dict[str, list[dict[str, Any]]] = {}
-                for row in source_rows:
-                    source_block_id = str(row.get("block_id") or "")
-                    rows_by_block.setdefault(source_block_id, []).append(row)
+                for row in peer_rows:
+                    peer_block_id = str(row.get(peer_block_key) or "")
+                    rows_by_block.setdefault(peer_block_id, []).append(row)
                 shown_blocks = list(rows_by_block.items())[:MAX_REFERENCE_BLOCKS_PER_DOCUMENT]
-                for index, (_source_block_id, block_rows) in enumerate(shown_blocks, start=1):
+                for index, (_peer_block_id, block_rows) in enumerate(shown_blocks, start=1):
                     label = f"引用{index}"
                     if len(block_rows) > 1:
-                        label += f"（本块包含 {len(block_rows)} 次引用）"
-                    lines.extend(["", f"{label}：", reference_block_markdown(block_rows[0])])
+                        label += (
+                            f"（本块被引用 {len(block_rows)} 次）" if forward
+                            else f"（本块包含 {len(block_rows)} 次引用）"
+                        )
+                    block = block_rows[0]
+                    if forward:
+                        block = {"markdown": block.get("target_markdown"), "content": block.get("target_content")}
+                    lines.extend(["", f"{label}：", reference_block_markdown(block)])
                 remaining_blocks = len(rows_by_block) - len(shown_blocks)
                 if remaining_blocks > 0:
                     lines.extend([
@@ -2359,23 +2377,28 @@ class McpServer:
                     ])
 
         if hidden_reference_count:
-            lines.extend(["", f"隐藏文档中引用了 {hidden_reference_count} 次。"])
+            hidden_message = (
+                f"引用了隐藏或无法定位文档中的块 {hidden_reference_count} 次。" if forward
+                else f"隐藏文档中引用了 {hidden_reference_count} 次。"
+            )
+            lines.extend(["", hidden_message])
 
         remaining_groups = len(ordered_groups) - len(shown_groups)
         if remaining_groups > 0:
             lines.extend([
                 "",
-                f"另有 {remaining_groups} 篇可见来源文档未展示，"
+                f"另有 {remaining_groups} 篇可见{peer_label}文档未展示，"
                 '请使用 limit="none" 查看全部引用。',
             ])
         return "\n".join(lines)
 
     def _resolve_reference_document(self, args: dict[str, Any], client: Any) -> dict[str, Any]:
+        action = str(args.get("action") or "").strip().casefold()
         locator = str(args.get("document") or args.get("document_id") or "").strip()
         if not locator:
-            raise tool_error(_ERR_MISSING_PARAM, "action=check_references 需要 document 或 document_id。")
+            raise tool_error(_ERR_MISSING_PARAM, f"action={action} 需要 document 或 document_id。")
         if locator == "/":
-            raise tool_error(_ERR_WRONG_TARGET, "action=check_references 只接受文档，不能使用 /。")
+            raise tool_error(_ERR_WRONG_TARGET, f"action={action} 只接受文档，不能使用 /。")
 
         locator_key = locator.strip("/").casefold()
         for notebook in client.list_notebooks():
@@ -2384,7 +2407,7 @@ class McpServer:
             if locator == notebook_id or (notebook_name and locator_key == notebook_name.casefold()):
                 raise tool_error(
                     _ERR_WRONG_TARGET,
-                    "action=check_references 只接受文档，输入不能是笔记本名称或笔记本 ID。",
+                    f"action={action} 只接受文档，输入不能是笔记本名称或笔记本 ID。",
                 )
 
         try:
@@ -4584,17 +4607,17 @@ def tool_specs() -> list[dict[str, Any]]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["refresh", "sync", "check_references"], "description": "refresh: update the local safe index without cleaning ai_workspace. sync: trigger SiYuan built-in default sync. check_references: read-only reference detection for one visible document; the target document is detailed and descendant documents are summarized."},
+                    "action": {"type": "string", "enum": ["refresh", "sync", "check_forward_references", "check_backward_references"], "description": "refresh: update the local safe index without cleaning ai_workspace. sync: trigger SiYuan built-in default sync. check_forward_references: show which blocks this document references, grouped by target document. check_backward_references: show which blocks reference this document or its blocks, grouped by source document. Both reference queries detail the selected document, summarize descendants, and include references within the same document."},
                     "timeout_seconds": {"type": "integer", "default": 10, "description": "For action=sync only. How long to wait for SiYuan built-in sync to return, 5-120 seconds. Does not change SiYuan sync behavior."},
-                    "document": {"type": "string", "description": "For action=check_references. Preferred document path including notebook name. Existing unique-title and unique-partial locator compatibility is preserved."},
-                    "document_id": {"type": "string", "description": "For action=check_references. Document ID fallback when the path is ambiguous or unavailable. A body block ID is rejected."},
+                    "document": {"type": "string", "description": "For either reference query. Preferred document path including notebook name. Existing unique-title and unique-partial locator compatibility is preserved."},
+                    "document_id": {"type": "string", "description": "For either reference query. Document ID fallback when the path is ambiguous or unavailable. A body block ID is rejected."},
                     "limit": {
                         "anyOf": [
                             {"type": "integer", "minimum": 1},
                             {"type": "string", "enum": ["none"]},
                         ],
                         "default": 10,
-                        "description": "For action=check_references. Maximum visible source documents and visible referenced descendant documents to display. No integer maximum; use \"none\" for all. Totals are never limited.",
+                        "description": "For either reference query. Maximum visible target documents (forward) or source documents (backward), and visible descendants with references, to display. No integer maximum; use \"none\" for all. Totals are never limited.",
                     },
                 },
                 "required": ["action"],

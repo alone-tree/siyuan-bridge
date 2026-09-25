@@ -419,6 +419,54 @@ class ClientTests(unittest.TestCase):
         )
         self.assertEqual(rows[1]["type"], "block-link")
 
+    def test_list_forward_block_references_queries_sources_and_resolves_targets(self):
+        seen = []
+
+        def transport(req, timeout):
+            stmt = json.loads(req.data.decode("utf-8"))["stmt"]
+            seen.append(stmt)
+            if "FROM refs" in stmt:
+                data = [{
+                    "def_block_id": "target1",
+                    "block_id": "source1",
+                    "root_id": "doc1",
+                    "type": "textmark",
+                }]
+            elif "FROM spans" in stmt:
+                data = [{
+                    "block_id": "source1",
+                    "root_id": "doc1",
+                    "span_markdown": "[link](siyuan://blocks/target1) [other](siyuan://blocks/missing)",
+                }]
+            else:
+                data = [{
+                    "id": "target1",
+                    "root_id": "doc2",
+                    "content": "Target paragraph",
+                    "markdown": "Target paragraph",
+                    "type": "p",
+                }]
+            return FakeResponse({"code": 0, "data": data})
+
+        client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
+        rows = client.list_forward_block_references(["source1", "source1"])
+
+        self.assertEqual(len(seen), 3)
+        self.assertIn("FROM refs r WHERE r.block_id IN", seen[0])
+        self.assertIn("'source1'", seen[0])
+        self.assertNotIn("def_block_id IN", seen[0])
+        self.assertIn("FROM spans s WHERE s.block_id IN", seen[1])
+        self.assertIn("siyuan://blocks/", seen[1].casefold())
+        self.assertIn("WHERE id IN", seen[2])
+        self.assertIn("'target1'", seen[2])
+        self.assertIn("'missing'", seen[2])
+        resolved = {row["def_block_id"]: row for row in rows}
+        self.assertEqual(set(resolved), {"target1", "missing"})
+        self.assertEqual(resolved["target1"]["target_root_id"], "doc2")
+        self.assertEqual(resolved["target1"]["target_markdown"], "Target paragraph")
+        self.assertEqual(resolved["missing"]["target_root_id"], "")
+        self.assertEqual(resolved["target1"]["type"], "textmark")
+
     def test_get_child_blocks_posts_parent_id(self):
         seen = {}
 

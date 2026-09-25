@@ -380,15 +380,18 @@ Error: invalid parameter
 
 ## 修改主动引用检测时必须验证
 
-涉及 `siyuan_operate(action=check_references)` 或底层 `list_block_references()` 的改动，必须验证：
+涉及 `siyuan_operate` 的 `check_forward_references` / `check_backward_references` 或底层引用关系查询的改动，必须验证：
 
 - 文档检测集合来自 live `blocks` 表，包含文档 ID 和全部 `root_id` 属于该文档的正文块 ID；不得依赖 `siyuan_read` 的展示块 ID 推断。
 - `refs` 与 `spans` 两路关系合并后按 `(目标 ID, 来源块 ID)` 去重；同一来源块对同一目标的不同引用形式仍只计一次。
 - 标准块引用、简单查询嵌入块、块超链接和 Markdown 块链接均有覆盖。
-- 当前文档按来源文档汇总；每篇最多展示 3 个唯一来源块，单块原始 Markdown 最多 2000 字符。
-- 当前文档总数、子文档总数、隐藏来源总数不受 `limit` 影响；整数 `limit` 最小 1、无最大值，`"none"` 展示全部。
-- 子文档递归统计；可见子文档只展示引用次数，隐藏子文档计入总数但不得暴露名称、路径、ID、数量或单篇次数。
-- 隐藏来源计入总数，但只返回总引用次数，不得返回隐藏来源文档数、路径、标题、块 ID 或内容。
+- 公开 action 仅以 `check_forward_references` 和 `check_backward_references` 区分方向，不增加公开 `direction` 参数；公开 schema、Skill、返回和报错不出现旧 action 名。
+- 正向按本文档的来源块查关系，按目标文档展示目标块；反向保留既有查询行为，按来源文档展示来源块。本文档返回详情，子文档递归统计所选方向的关系次数。
+- 每篇最多展示 3 个唯一对端块，单块原始 Markdown 最多 2000 字符；同一对端块对应多个关系时只展示一次并标注关系数。文档按关系数降序、完整路径升序排列。
+- 本篇内部引用也计入主动查询，不套用删除集合内部关系排除规则。
+- 本文档、子文档和隐藏对端的关系总数不受 `limit` 影响；默认 10，整数最小 1、无最大值，`"none"` 展示全部；分别限制可见对端文档和有引用关系的可见子文档展示。
+- 可见子文档只展示引用次数，隐藏子文档计入关系总数但不得暴露名称、路径、ID、数量或单篇次数；无子文档时省略该段，有子文档但引用为 0 时仍显示汇总。
+- 隐藏对端计入关系总数，但只返回总关系次数，不得返回隐藏对端文档数、路径、标题、块 ID 或内容；正向隐藏目标和反向隐藏来源均须覆盖。
 - 空值、`/`、笔记本名称/ID、正文块 ID 必须拒绝；文档路径/ID 解析继续复用公共定位器。
 - action 只读，不要求 `confirmed`，不创建快照。
 - 删除保护仍复用同一底层关系查询，并继续排除同一删除集合内部的关系；不得因主动查询格式改造而改变 `reference_policy` 上层逻辑。
@@ -423,7 +426,8 @@ Error: invalid parameter
 | `siyuan_start` | 否 | 否 | 否 | 只读系统状态；Privacy Rules 缺失时失败关闭 |
 | `siyuan_operate:refresh` | 否 | 否 | 否 | 只读系统状态并刷新安全索引 |
 | `siyuan_operate:sync` | 否，触发思源内置同步 | 否 | 否 | 思源同步配置 |
-| `siyuan_operate:check_references` | 否 | 否 | 否 | 目标可见；来源和子文档经隐私过滤 |
+| `siyuan_operate:check_forward_references` | 否 | 否 | 否 | 本文档可见；目标对端和子文档经隐私过滤 |
+| `siyuan_operate:check_backward_references` | 否 | 否 | 否 | 本文档可见；来源对端和子文档经隐私过滤 |
 | `siyuan_list` | 否 | 否 | 否 | 只返回可见索引 |
 | `siyuan_find` | 否 | 否 | 否 | 返回前隐私过滤 |
 | `siyuan_read` | 否 | 否 | 否 | hidden 不可读 |

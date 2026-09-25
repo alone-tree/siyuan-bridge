@@ -238,6 +238,31 @@ class FakeSearchClient:
             if str(row.get("def_block_id", "")) in wanted
         ]
 
+    def list_forward_block_references(self, block_ids):
+        wanted = set(block_ids)
+        targets = {
+            str(block["id"]): {"root_id": doc_id, **block}
+            for doc_id, blocks in self._blocks.items()
+            if isinstance(blocks, list)
+            for block in blocks
+        }
+        targets.update({
+            doc_id: {"root_id": doc_id, "markdown": path, "content": path, "type": "d"}
+            for doc_id, path in self._hpaths.items()
+        })
+        rows = []
+        for row in self._refs:
+            if row.get("block_id") not in wanted:
+                continue
+            target = targets.get(row.get("def_block_id"), {})
+            rows.append({
+                **row,
+                "target_root_id": target.get("root_id", ""),
+                "target_markdown": target.get("markdown"),
+                "target_content": target.get("content"),
+            })
+        return rows
+
     def get_child_blocks(self, block_id):
         if self.force_empty_child_reads > 0:
             self.force_empty_child_reads -= 1
@@ -521,7 +546,14 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("does not create or edit documents", operate["description"])
         self.assertNotIn("markdown_file", operate["description"])
         properties = operate["inputSchema"]["properties"]
-        self.assertIn("check_references", properties["action"]["enum"])
+        self.assertEqual(properties["action"]["enum"], [
+            "refresh", "sync", "check_forward_references", "check_backward_references",
+        ])
+        self.assertNotIn("check_references", json.dumps(operate))
+        self.assertNotIn("direction", properties)
+        self.assertIn("grouped by target document", properties["action"]["description"])
+        self.assertIn("grouped by source document", properties["action"]["description"])
+        self.assertIn("within the same document", properties["action"]["description"])
         self.assertIn("without cleaning ai_workspace", properties["action"]["description"])
         self.assertIn("document", properties)
         self.assertIn("document_id", properties)
@@ -693,7 +725,7 @@ class McpServerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             server.siyuan_operate({"action": "bad"})
 
-    def test_operate_check_references_groups_sources_and_summarizes_children(self):
+    def test_operate_check_backward_references_groups_sources_and_summarizes_children(self):
         client = FakeSearchClient([])
         client._blocks["doc1"] = [{
             "id": "target-block",
@@ -751,7 +783,7 @@ class McpServerTests(unittest.TestCase):
 
         result = self.run_operate(
             client,
-            {"action": "check_references", "document": "/Main/Projects/Doc One"},
+            {"action": "check_backward_references", "document": "/Main/Projects/Doc One"},
         )
 
         self.assertIn("本文档总共被引用 3 次。", result)
@@ -762,7 +794,7 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("引用2：", result)
         self.assertIn("内容超过 2000 字符，已截断", result)
 
-    def test_operate_check_references_aggregates_hidden_sources_and_targets(self):
+    def test_operate_check_backward_references_aggregates_hidden_sources_and_targets(self):
         write_privacy_rules_cache(
             self.root,
             PrivacyRules(
@@ -795,7 +827,7 @@ class McpServerTests(unittest.TestCase):
 
         result = self.run_operate(
             client,
-            {"action": "check_references", "document_id": "doc1"},
+            {"action": "check_backward_references", "document_id": "doc1"},
         )
 
         self.assertIn("本文档总共被引用 1 次。", result)
@@ -806,28 +838,28 @@ class McpServerTests(unittest.TestCase):
         self.assertNotIn("/Main/Projects/Doc One/Child", result)
         self.assertNotIn("Hidden source content", result)
 
-    def test_operate_check_references_reports_zero_without_error(self):
+    def test_operate_check_backward_references_reports_zero_without_error(self):
         result = self.run_operate(
             FakeSearchClient([]),
-            {"action": "check_references", "document_id": "doc2"},
+            {"action": "check_backward_references", "document_id": "doc2"},
         )
 
         self.assertIn("本文档总共被引用 0 次。", result)
         self.assertNotIn("## 引用来源", result)
 
-    def test_operate_check_references_validates_limit_and_target_type(self):
+    def test_operate_check_backward_references_validates_limit_and_target_type(self):
         client = FakeSearchClient([])
         with self.assertRaises(ValueError) as limit_error:
             self.run_operate(
                 client,
-                {"action": "check_references", "document_id": "doc1", "limit": 0},
+                {"action": "check_backward_references", "document_id": "doc1", "limit": 0},
             )
         self.assertEqual(getattr(limit_error.exception, "error_code", None), "validation:out_of_range")
 
         with self.assertRaises(ValueError) as notebook_error:
             self.run_operate(
                 client,
-                {"action": "check_references", "document": "/Main"},
+                {"action": "check_backward_references", "document": "/Main"},
             )
         self.assertEqual(getattr(notebook_error.exception, "error_code", None), "validation:wrong_target_type")
 
@@ -841,10 +873,137 @@ class McpServerTests(unittest.TestCase):
         with self.assertRaises(ValueError) as block_error:
             self.run_operate(
                 client,
-                {"action": "check_references", "document_id": block_id},
+                {"action": "check_backward_references", "document_id": block_id},
             )
         self.assertEqual(getattr(block_error.exception, "error_code", None), "validation:wrong_target_type")
         self.assertIn("指向文档内块", str(block_error.exception))
+
+    def test_operate_rejects_old_reference_action_name(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.run_operate(FakeSearchClient([]), {"action": "check_references", "document_id": "doc1"})
+        self.assertEqual(getattr(ctx.exception, "error_code", None), "validation:invalid_enum")
+        self.assertNotIn("check_references", str(ctx.exception))
+
+    def test_operate_check_forward_references_groups_targets_and_counts_internal(self):
+        client = FakeSearchClient([])
+        long_markdown = "B" * 2100
+        client._blocks["doc1"] = [
+            {
+                "id": "source-block",
+                "root_id": "doc1",
+                "parent_id": "doc1",
+                "type": "p",
+                "markdown": "Source text that must not be shown",
+                "content": "Source text that must not be shown",
+                "sort": 1,
+            },
+            {
+                "id": "internal-target",
+                "root_id": "doc1",
+                "parent_id": "doc1",
+                "type": "p",
+                "markdown": "Internal target",
+                "content": "Internal target",
+                "sort": 2,
+            },
+        ]
+        client._blocks["doc2"] = [
+            {
+                "id": "external-target",
+                "root_id": "doc2",
+                "parent_id": "doc2",
+                "type": "p",
+                "markdown": long_markdown,
+                "content": long_markdown,
+                "sort": 1,
+            },
+            {
+                "id": "external-target-2",
+                "root_id": "doc2",
+                "parent_id": "doc2",
+                "type": "p",
+                "markdown": "Second target",
+                "content": "Second target",
+                "sort": 2,
+            },
+        ]
+        client._blocks["doc3"] = [{
+            "id": "child-source",
+            "root_id": "doc3",
+            "parent_id": "doc3",
+            "type": "p",
+            "markdown": "Child source",
+            "content": "Child source",
+            "sort": 1,
+        }]
+        client._refs = [
+            {"def_block_id": "internal-target", "block_id": "source-block", "root_id": "doc1"},
+            {"def_block_id": "external-target", "block_id": "source-block", "root_id": "doc1"},
+            {"def_block_id": "external-target-2", "block_id": "source-block", "root_id": "doc1"},
+            {"def_block_id": "external-target", "block_id": "child-source", "root_id": "doc3"},
+            {"def_block_id": "doc1", "block_id": "outside-source", "root_id": "doc2"},
+        ]
+
+        result = self.run_operate(
+            client,
+            {"action": "check_forward_references", "document": "/Main/Projects/Doc One"},
+        )
+
+        self.assertIn("# 文档正向引用检测", result)
+        self.assertIn("本文档总共引用 3 次。", result)
+        self.assertIn("其所有子文档（不含本文档）总共引用 1 次", result)
+        self.assertIn("/Main/Projects/Doc One/Child（`doc3`）引用 1 次", result)
+        self.assertLess(
+            result.index("/Main/Projects/Hidden（`doc2`）被引用了 2 次"),
+            result.index("/Main/Projects/Doc One（`doc1`）被引用了 1 次"),
+        )
+        self.assertIn("Internal target", result)
+        self.assertIn("Second target", result)
+        self.assertIn("内容超过 2000 字符，已截断", result)
+        self.assertNotIn("Source text that must not be shown", result)
+        self.assertNotIn("outside-source", result)
+
+    def test_operate_check_forward_references_hides_target_documents(self):
+        write_privacy_rules_cache(
+            self.root,
+            PrivacyRules(ignore=[{"scope": "document", "id": "doc2"}], allow=[]),
+        )
+        client = FakeSearchClient([])
+        client._blocks["doc1"] = [{
+            "id": "source-block",
+            "root_id": "doc1",
+            "parent_id": "doc1",
+            "type": "p",
+            "markdown": "Source",
+            "content": "Source",
+            "sort": 1,
+        }]
+        client._blocks["doc2"] = [{
+            "id": "hidden-target",
+            "root_id": "doc2",
+            "parent_id": "doc2",
+            "type": "p",
+            "markdown": "Hidden target content",
+            "content": "Hidden target content",
+            "sort": 1,
+        }]
+        client._refs = [
+            {"def_block_id": "hidden-target", "block_id": "source-block", "root_id": "doc1"},
+            {"def_block_id": "missing-target", "block_id": "doc1", "root_id": "doc1"},
+        ]
+
+        result = self.run_operate(
+            client,
+            {"action": "check_forward_references", "document_id": "doc1"},
+        )
+
+        self.assertIn("本文档总共引用 2 次。", result)
+        self.assertIn("引用了隐藏或无法定位文档中的块 2 次。", result)
+        self.assertNotIn("/Main/Projects/Hidden", result)
+        self.assertNotIn("hidden-target", result)
+        self.assertNotIn("Hidden target content", result)
+        self.assertNotIn("missing-target", result)
+        self.assertNotIn("## 引用目标", result)
 
     def test_list_path_returns_direct_children_with_full_paths(self):
         server = mcp_server.McpServer(self.root)
