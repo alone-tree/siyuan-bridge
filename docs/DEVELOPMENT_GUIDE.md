@@ -519,6 +519,20 @@ python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE%
 
 旧版升级必须验证：在插件程序目录准备旧配置、遥测、系统登记表、隐私缓存与 `stats/`，插件数据区为空时普通导入会完整复制；插件数据区预置不同内容时保持目标不变；插件启用后 Python Bridge 读到插件数据区内容。跨设备 Token 合并改动还必须验证：在插件数据区准备一个已有其他设备 Token 的 `config.local.json`，启用插件后当前设备 Token 会追加到 profiles，原有 profile 的名称、Token 和顺序保持不变；重复启用不产生重复项；点击“刷新 JSON”也会合并并保存当前 Token。MCP 会话连接改动必须验证：未调用 `siyuan_start` 时普通工具明确要求先 start；一次成功 start 后多个工具不重复探测 profiles；连接或 401/403 鉴权失效后缓存被清空并要求重新 start。
 
+### DSH 能力库中的三个思源桥
+
+DSH 能力库注册表（`~/.dsh/skill-mcp-manager/registry.json`，用 `mcp_register`/`mcp_load` 管理）里有三个思源桥注册项，服务端代码来源不同：
+
+| 注册名 | 指向 | 用途 |
+|---|---|---|
+| `siyuan-bridge` | 用户版安装副本 `D:\SiYuan\data\plugins\siyuan-bridge\bridge\scripts\run_mcp.py` | 正常版，日用。真实笔记的读写搜走它；禁止用它做开发验证 |
+| `siyuan-bridge-dev` | GitHub 仓库源码：cwd `D:\Github\siyuan-agent-bridge`，`python -m source_code.mcp_server` | 开发版，开发时真实调用测试。可用于用户工作空间和测试空间 |
+| `siyuan-bridge-test` | 测试工作空间安装副本 `D:\Siyuan2test\data\plugins\siyuan-bridge\bridge\scripts\run_mcp.py` | 测试版，通常只在需要单独验证插件前端实际效果时才用：先把当前源码导入测试空间，再由人类手动打开测试库思源并在 UI 中验收 |
+
+三个桥都连接正在运行的思源（`127.0.0.1:6806`），区别只在桥服务端代码来自哪里。开发版跟随思源当前打开的工作空间：思源开用户工作空间就连用户空间，开测试空间就连测试空间。大部分开发验证用开发版即可；只有必须在思源本体 UI 观察的功能才动用测试版，并由人类验收。
+
+`siyuan-bridge-dev` 和 `siyuan-bridge-test` 平时是 `disabled`，开发时用 `mcp_register` 把档位临时改成 `on-demand` 再 `mcp_load`，验证结束后改回 `disabled`，避免与用户版混淆。
+
 ### 第一层：测试代码
 
 运行单元测试，覆盖修改后的代码分支和回归场景。需要写入的单元测试使用 Fake Client，不接触思源工作空间。
