@@ -38,6 +38,7 @@ class FakeSearchClient:
         self._removed_docs: list[str] = []
         self._moved_docs: list[tuple[list[str], str]] = []
         self._duplicated_docs: list[str] = []
+        self._set_attrs_calls: list[tuple[str, dict[str, str]]] = []
         self._hpaths: dict[str, str] = {"doc1": "/Projects/Doc One", "doc2": "/Projects/Hidden", "doc3": "/Projects/Doc One/Child"}
         self._sync_performed = False
         self._sync_timeout = None
@@ -210,7 +211,7 @@ class FakeSearchClient:
                 block_list[:] = [block for block in block_list if str(block.get("id", "")) != block_id]
 
     def set_block_attrs(self, block_id, attrs):
-        pass
+        self._set_attrs_calls.append((block_id, dict(attrs)))
 
     def get_attribute_view(self, av_id):
         return {}
@@ -1425,6 +1426,55 @@ class McpServerTests(unittest.TestCase):
         return server.siyuan_find(args)
 
 
+class ParseTagsInputTests(unittest.TestCase):
+    def test_parses_pairs_with_various_separators(self):
+        cases = {
+            "#甲# #乙#": ["甲", "乙"],
+            "#甲#，#乙#": ["甲", "乙"],
+            "#甲#、#乙#": ["甲", "乙"],
+            "#甲#;#乙#": ["甲", "乙"],
+            "#甲#；#乙#": ["甲", "乙"],
+            "#甲#,#乙#": ["甲", "乙"],
+            "#甲##乙#": ["甲", "乙"],
+            "#甲#  #乙#": ["甲", "乙"],
+            "# 甲 #": ["甲"],
+            "#标签 名称#": ["标签 名称"],
+            "#甲＃乙#": ["甲＃乙"],
+            "#A/B/C#": ["A/B/C"],
+            "#甲# #甲# #乙#": ["甲", "乙"],
+            "": [],
+            "，、 ": [],
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(mcp_server.parse_tags_input(raw), expected)
+
+    def test_rejects_unrecognized_input(self):
+        for raw in ["#甲", "甲#", "##甲#", "#甲#乙#", "甲,乙", "甲", "＃甲＃"]:
+            with self.subTest(raw=raw):
+                with self.assertRaises(ValueError):
+                    mcp_server.parse_tags_input(raw)
+
+    def test_rejects_empty_tag_name(self):
+        with self.assertRaises(ValueError) as ctx:
+            mcp_server.parse_tags_input("# #")
+        self.assertIn("空标签", str(ctx.exception))
+
+    def test_rejects_forbidden_characters_and_lists_them(self):
+        with self.assertRaises(ValueError) as ctx:
+            mcp_server.parse_tags_input("#甲(1)#")
+        message = str(ctx.exception)
+        self.assertIn("包含禁止字符", message)
+        self.assertIn("「(」", message)
+        self.assertIn("完整禁止字符清单", message)
+        self.assertIn("无法全局搜索", message)
+
+    def test_rejects_comma_inside_tag_name(self):
+        with self.assertRaises(ValueError) as ctx:
+            mcp_server.parse_tags_input("#甲,乙#")
+        self.assertIn("「,」", str(ctx.exception))
+
+
 class Fts5QueryTokenQuoteTests(unittest.TestCase):
     def test_quote_fts5_query_tokens(self):
         cases = [
@@ -2101,6 +2151,95 @@ class McpServerWriteTests(unittest.TestCase):
             self.assertEqual(len(client._snapshots), 1)
             self.assertIn("siyuan_doc_manage", client._snapshots[0]["memo"])
             self.assertIn("已重命名为", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_doc_manage_set_tags_writes_comma_separated_names(self):
+        server, client, original = self._server_and_client()
+        try:
+            result = server.siyuan_doc_manage({
+                "document": "/Main/Projects/Doc One",
+                "action": "set_tags",
+                "tags": "#甲#，#乙# #A/B#",
+                "confirmed": True,
+            })
+            self.assertEqual(client._set_attrs_calls, [("doc1", {"tags": "甲,乙,A/B"})])
+            self.assertEqual(len(client._snapshots), 1)
+            self.assertIn("设置成功：共 3 个标签", result)
+            self.assertIn("1. #甲#", result)
+            self.assertIn("2. #乙#", result)
+            self.assertIn("3. #A/B#", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_doc_manage_set_tags_empty_clears_all(self):
+        server, client, original = self._server_and_client()
+        try:
+            result = server.siyuan_doc_manage({
+                "document": "/Main/Projects/Doc One",
+                "action": "set_tags",
+                "tags": "",
+                "confirmed": True,
+            })
+            self.assertEqual(client._set_attrs_calls, [("doc1", {"tags": ""})])
+            self.assertIn("已清除全部文档标签（0 个）", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_doc_manage_set_tags_requires_tags_param(self):
+        server, client, original = self._server_and_client()
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_doc_manage({
+                    "document": "/Main/Projects/Doc One",
+                    "action": "set_tags",
+                    "confirmed": True,
+                })
+            self.assertIn("需要 tags 参数", str(ctx.exception))
+            self.assertEqual(client._set_attrs_calls, [])
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_doc_manage_set_tags_rejects_forbidden_before_snapshot(self):
+        server, client, original = self._server_and_client()
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_doc_manage({
+                    "document": "/Main/Projects/Doc One",
+                    "action": "set_tags",
+                    "tags": "#甲(1)#",
+                    "confirmed": True,
+                })
+            message = str(ctx.exception)
+            self.assertIn("包含禁止字符", message)
+            self.assertIn("「(」", message)
+            self.assertIn("完整禁止字符清单", message)
+            self.assertFalse(client._snapshots)
+            self.assertEqual(client._set_attrs_calls, [])
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_siyuan_doc_manage_set_tags_requires_read_write(self):
+        write_privacy_rules_cache(
+            self.root,
+            PrivacyRules(
+                ignore=[],
+                allow=[],
+                permissions=[{"scope": "document", "id": "doc1", "permission": "read_only"}],
+            ),
+        )
+        server, client, original = self._server_and_client()
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_doc_manage({
+                    "document": "/Main/Projects/Doc One",
+                    "action": "set_tags",
+                    "tags": "#甲#",
+                    "confirmed": True,
+                })
+            self.assertIn("不允许 set_tags", str(ctx.exception))
+            self.assertIn("read_only", str(ctx.exception))
+            self.assertEqual(client._set_attrs_calls, [])
         finally:
             mcp_server.detect_active_profile = original
 

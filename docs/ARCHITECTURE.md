@@ -889,18 +889,20 @@ scope：
 | ----------------- | ------- | ---------------- | ---------------------------------------------------------- |
 | `document`      | string  | 可选             | 源文档完整路径                                             |
 | `document_id`   | string  | 可选             | 源文档 ID fallback                                         |
-| `action`        | enum    | 必填             | `create_notebook` / `rename` / `move` / `delete` / `copy` / `export` |
+| `action`        | enum    | 必填             | `create_notebook` / `rename` / `move` / `delete` / `copy` / `export` / `set_tags` |
 | `notebook_name` | string  | create_notebook 必填 | 新笔记本名称                                            |
 | `new_title`     | string  | rename 必填      | 新标题                                                     |
 | `target_parent` | string  | move 必填        | 目标笔记本或父文档路径                                     |
 | `target_path`   | string  | copy 必填        | 复制目标完整路径                                           |
+| `tags`          | string  | set_tags 必填    | 文档标签，成对 `#名称#` 空格分隔（如 `#甲# #乙#`）；空串清除全部；名称含官方特殊符号或半角逗号时报错 |
 | `reference_policy` | enum | `reject` | delete 的引用策略：`reject` / `break` |
-| `confirmed`     | boolean | 部分 action 必填 | create_notebook/rename/move/delete/copy 需要               |
+| `confirmed`     | boolean | 部分 action 必填 | create_notebook/rename/move/delete/copy/set_tags 需要               |
 
 权限：
 
 | action     | 源文档权限                      | 目标权限       | 快照 | 写思源 |
 | ---------- | ------------------------------- | -------------- | ---- | ------ |
+| `set_tags` | `read_write`                  | -              | 是   | 是     |
 | `create_notebook` | -                         | 新名称须为 `read_write` | 是 | 是 |
 | `rename` | `read_write`                  | -              | 是   | 是     |
 | `move`   | 源文档和祖先链 `read_write`   | 目标父路径 `read_write` | 是   | 是     |
@@ -924,6 +926,7 @@ scope：
    - `removeDocByID`
    - `duplicateDoc` + `renameDocByID` + `moveDocsByID`
    - `exportMdContent`
+   - `setBlockAttrs`（set_tags：文档块 `tags` 属性，值为半角逗号分隔的裸名；输入按成对 `#名称#` 严格解析，官方特殊符号与半角逗号拒绝）
 9. 尝试 pushMsg。
 10. 文档写入 action 用文档 ID 短轮询确认路径变化：rename/move/copy 等目标 hpath 可见，delete 等源 ID 不再可见。
 11. 除 export 外，带系统笔记本 ID 和 Privacy Rules 文档 ID 安全刷新索引。

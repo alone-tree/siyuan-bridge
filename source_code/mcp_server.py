@@ -1425,6 +1425,59 @@ def format_doc_tags(tags: Any) -> str:
     return " ".join(f"#{str(tag).strip()}#" for tag in tags if str(tag).strip())
 
 
+# set_tags 名称内禁止字符：思源官方特殊符号清单（用户指南「标签」章节）+ 半角逗号（存储分隔符）
+DOC_TAG_FORBIDDEN_CHARS = "#*_[]!\\`<>&~$(){}=,"
+# 标签之间的分隔符白名单：空白 + 常见中西文分隔符号
+_DOC_TAG_SEPARATOR_CHARS = ",，、;；"
+
+
+def parse_tags_input(raw: str) -> list[str]:
+    """严格解析 set_tags 的 tags 输入：成对半角 # 定界，模糊输入直接报错。
+
+    返回去重保序的标签名列表（不含 #）；空串或纯分隔符返回 []（清除全部）。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return []
+
+    found = re.findall(r"#([^#]+)#", text)
+    remainder = re.sub(r"#([^#]+)#", "", text)
+    leftover = [
+        ch for ch in remainder
+        if not ch.isspace() and ch not in _DOC_TAG_SEPARATOR_CHARS
+    ]
+    if leftover:
+        raise tool_error(
+            _ERR_INVALID_TYPE,
+            "tags 参数无法识别。标签必须用成对半角井号包裹并用空格分隔，"
+            '例如：tags="#标签1# #标签2#"。标签名称本身请勿使用半角井号。',
+        )
+
+    tags: list[str] = []
+    for item in found:
+        name = item.strip()
+        if not name:
+            raise tool_error(
+                _ERR_INVALID_TYPE,
+                'tags 中存在空标签（两个井号之间没有名称），例如 "# #"。',
+            )
+        forbidden = [ch for ch in dict.fromkeys(name) if ch in DOC_TAG_FORBIDDEN_CHARS]
+        if forbidden:
+            shown = "、".join(f"「{ch}」" for ch in forbidden)
+            raise tool_error(
+                _ERR_INVALID_TYPE,
+                f"标签名称「{name}」包含禁止字符：{shown}。\n"
+                "完整禁止字符清单：# * _ [ ] ! \\ ` < > & ~ $ ( ) { } = ,\n"
+                "其中半角井号（#）是标签定界符；其余符号属于思源官方不建议用于标签的符号"
+                "（会导致无法全局搜索、且无法在标签面板重命名或删除）；"
+                "半角逗号（,）是思源存储多个标签的分隔符。\n"
+                '请改用其他名称，例如：tags="#标签1# #标签2#"。',
+            )
+        if name not in tags:
+            tags.append(name)
+    return tags
+
+
 def estimate_token_count(text: str) -> int:
     """Heuristic token estimator. CJK ~1.0 tok/char, Latin ~1.3 tok/word, digits ~0.8 tok/item, punctuation ~0.4 tok/char."""
     if not text:
@@ -3984,9 +4037,9 @@ class McpServer:
 
     def siyuan_doc_manage(self, args: dict[str, Any]) -> str:
         action = str(args.get("action") or "").strip().casefold()
-        allowed_actions = {"create_notebook", "rename", "move", "delete", "copy", "export"}
+        allowed_actions = {"create_notebook", "rename", "move", "delete", "copy", "export", "set_tags"}
         if action not in allowed_actions:
-            raise tool_error(_ERR_INVALID_ENUM, "action 只支持 create_notebook、rename、move、delete、copy、export。")
+            raise tool_error(_ERR_INVALID_ENUM, "action 只支持 create_notebook、rename、move、delete、copy、export、set_tags。")
 
         if action == "create_notebook":
             notebook_name = str(args.get("notebook_name") or "").strip()
@@ -4085,7 +4138,7 @@ class McpServer:
         if permission == "hidden":
             raise tool_error(_ERR_DOC_NOT_FOUND, "未找到匹配的可见文档。文档可能已被隐藏、尚未索引，或定位符有误。")
 
-        write_actions = {"rename", "move", "delete"}
+        write_actions = {"rename", "move", "delete", "set_tags"}
         if action in write_actions and permission != "read_write":
             raise tool_error(_ERR_NOT_READ_WRITE, f"当前文档权限为 {permission}，不允许 {action}。")
         if action in write_actions | {"copy"} and not bool(args.get("confirmed")):
@@ -4137,6 +4190,13 @@ class McpServer:
             new_title = str(args.get("new_title") or "").strip()
             if not new_title:
                 raise tool_error(_ERR_MISSING_PARAM, "action=rename 需要 new_title。")
+        elif action == "set_tags":
+            if "tags" not in args:
+                raise tool_error(
+                    _ERR_MISSING_PARAM,
+                    'action=set_tags 需要 tags 参数；清除全部标签时传空字符串 tags=""。',
+                )
+            set_tags_list = parse_tags_input(str(args.get("tags") or ""))
         elif action == "move":
             target_parent = str(args.get("target_parent") or "").strip()
             if not target_parent:
@@ -4213,6 +4273,17 @@ class McpServer:
                 client.remove_doc_by_id(doc_id)
             result_line = "已删除文档。可通过思源快照手动恢复。"
             sync_status = self._wait_for_deleted_doc(client, doc_id)
+
+        elif action == "set_tags":
+            with ensure_notebooks_open(client, [notebook_id]):
+                client.set_block_attrs(doc_id, {"tags": ",".join(set_tags_list)})
+            if set_tags_list:
+                tag_lines = "\n".join(
+                    f"{index}. #{name}#" for index, name in enumerate(set_tags_list, 1)
+                )
+                result_line = f"设置成功：共 {len(set_tags_list)} 个标签\n{tag_lines}"
+            else:
+                result_line = "设置成功：已清除全部文档标签（0 个）。"
 
         elif action == "copy":
             assert copy_target is not None
@@ -4769,19 +4840,20 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_doc_manage",
-            "description": "Manage SiYuan notebooks and visible documents at the document-tree level, not document body editing. Requires action. create_notebook/rename/move/delete/copy require confirmed=true and create a workspace snapshot; export does not. After writes, refreshes the safe index.",
+            "description": "Manage SiYuan notebooks and visible documents at the document-tree level, not document body editing. Requires action. create_notebook/rename/move/delete/copy/set_tags require confirmed=true and create a workspace snapshot; export does not. After writes, refreshes the safe index.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "document": {"type": "string", "description": "Document path including notebook name, e.g. /Notebook/Folder/Doc. Preferred."},
                     "document_id": {"type": "string", "description": "Document id fallback when path is ambiguous or unavailable."},
-                    "action": {"type": "string", "enum": ["create_notebook", "rename", "move", "delete", "copy", "export"], "description": "create_notebook: create an empty notebook; requires notebook_name; does not create a document; rejects duplicate names. rename: rename a document; requires new_title and read_write. move: move a document subtree; requires target_parent and read_write; rejected if the source inherits non-read_write restrictions or the target parent is not read_write. delete: delete a document subtree, not a notebook; every descendant must be read_write; checks backlinks. copy: duplicate the source document only, not children; requires target_path; allowed for readable documents. export: write Markdown to ai_workspace/exports; does not modify SiYuan; allowed for readable documents."},
+                    "action": {"type": "string", "enum": ["create_notebook", "rename", "move", "delete", "copy", "export", "set_tags"], "description": "create_notebook: create an empty notebook; requires notebook_name; does not create a document; rejects duplicate names. rename: rename a document; requires new_title and read_write. move: move a document subtree; requires target_parent and read_write; rejected if the source inherits non-read_write restrictions or the target parent is not read_write. delete: delete a document subtree, not a notebook; every descendant must be read_write; checks backlinks. copy: duplicate the source document only, not children; requires target_path; allowed for readable documents. export: write Markdown to ai_workspace/exports; does not modify SiYuan; allowed for readable documents. set_tags: replace the document's tags entirely; requires tags and read_write."},
                     "notebook_name": {"type": "string", "description": "Required for action=create_notebook. Exact name of the new notebook."},
                     "new_title": {"type": "string", "description": "Required for action=rename."},
                     "target_parent": {"type": "string", "description": "Required for action=move. Visible target notebook or parent document path, e.g. /Notebook or /Notebook/Folder."},
                     "target_path": {"type": "string", "description": "Required for action=copy. Full readable target path /Notebook/Folder/New Doc. The target path must not already exist and must be read_write."},
+                    "tags": {"type": "string", "description": "Required for action=set_tags. Document tags in paired #tag# form separated by spaces, e.g. \"#tag1# #tag2#\"; each tag becomes a real SiYuan tag shown in the tag panel. An empty string clears all tags. Tag names must not contain half-width # or commas or other special symbols."},
                     "reference_policy": {"type": "string", "enum": ["reject", "break"], "default": "reject", "description": "For action=delete only. reject refuses when any disappearing document/block ID is referenced. Use break only after the user explicitly confirms that those reported references may be broken."},
-                    "confirmed": {"type": "boolean", "description": "Required for create_notebook/rename/move/delete/copy. Not required for export."},
+                    "confirmed": {"type": "boolean", "description": "Required for create_notebook/rename/move/delete/copy/set_tags. Not required for export."},
                 },
                 "required": ["action"],
                 "additionalProperties": False,
