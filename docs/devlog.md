@@ -2,6 +2,15 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-09-28：读文档图片单笔总量闸门（修复多图文档断连）
+
+- 事故与根因：2026-09-26 读《W5 营销》时 `siyuan_read` 连续 4 次 `MCP error -32000: Connection closed`。根因是图片内联无单笔总量上限——5 张截图 base64 后约 14.2 MB，超出 MCP SDK 客户端默认 10 MB 单消息读缓冲，客户端掐断连接；`token_budget`/`block_limit` 无效（每图按 1,568 token 名义计价，与实际字节无关）。能力库与 DSH 均按 SDK 默认行为工作，无缺陷。行业调研（Codex/Claude Code/ChatGPT/DeepSeek/chrome-devtools-mcp）确认全行业都做「预处理缩放 + 降级声明，绝不让单条大响应杀死会话」。定稿方案见 `docs/图片总量闸门方案-2026-09-28.md`。
+- 实现：新增读侧常量 `INLINE_RESPONSE_BUDGET_BYTES = 9 MB`（低于 SDK 默认 10 MB 留文本与协议余量）。`inline_images_into_markdown()` 改为按 base64 后字节前缀装填：逐图累计，碰到装不下的图即停止装填，该图及其后所有图原位声明；本地图先 `stat` 预判不读内容，网络图下载以剩余预算换算的原始字节上限（`(remaining//4)*3`）为流式中止线；返回值新增统计 `stats`（total/inlined/inlined_bytes/over_budget）。`_read_document_block_window()` 把图片内联移到头部组装之前，超限时头部追加统计提示行（正常返回不 isError，不丢已读文本）；导出降级路径同步处理。声明文案区分本地图（提取后本地路径 + 平台读图指引）与网络图（原地址 + 网页获取指引），均附逃生门提示。
+- 契约变化：`include_large_images=true` 语义从「强制内联超 20 MB 单图」重定义为「无视 9 MB 预算全量内联」（逃生门；超 10 MB 响应在默认配置客户端会断开，schema 描述如实写明）。读侧与 `ASSET_LARGE_FILE_THRESHOLD_BYTES`（20 MB）解耦，该常量仅剩写入侧 `insert_assets` 使用、行为不变。`token_budget`/`block_limit`/每图 1,568 token 计价全部不变。
+- 测试：`test_mcp_server.py` 4 个旧用例改 mock 新常量/断言新文案，新增前缀装填、首张即超全声明、逃生门全量内联 3 例；图片内联相关 21 例全绿。全量 `389 passed, 1 skipped`，另有 11 例失败均为 DSH 沙箱禁止写 `%TEMP%\dsh-keKhmc` 临时目录的 `PermissionError`（test_agent_notebook/test_indexer/test_startup 的 `TemporaryDirectory` 用例，与本次改动无关的环境性失败）。
+- 第二层实调验证：能力库开发版 MCP 读 `/商业实践/5 原始课程笔记/创造营/W5 营销`（`block_limit=60`，即当时出事的参数）：头部提示「图片：共 5 张，已内联 4 张（合计 8.6 MB）；1 张超出单笔 9 MB 图片总量安全范围未返回」，4 张截图真实内联、第 5 张原位声明含路径与逃生门提示，连接未断开。同一文档此前 4 次调用全部 `Connection closed`。
+- 文档同步：ARCHITECTURE（阅读模型图片内联小节、siyuan_read 参数表、数据流、返回内容）、DEVELOPMENT_GUIDE（读取模型验证清单）、SKILL、README。需求文档 `docs/图片内联需求-2026-09-14.md` 追加修订记录。版本尚未提升，待发布时定级（读侧行为变化 + 参数语义重定义，倾向 PATCH）。
+
 ## 2026-09-25：标签写入根因确认与文档标签展示
 
 - 关联 issue：<https://github.com/alone-tree/siyuan-bridge/issues/11>。需求与结论见 `docs/思源标签写入需求-2026-09-25.md`。

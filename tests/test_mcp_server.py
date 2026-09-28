@@ -4891,17 +4891,18 @@ class McpServerReadInlineImagesTests(unittest.TestCase):
     def test_oversized_image_declared_without_confirm(self):
         blocks = self._blocks([("p1", "![chart](assets/chart.png)")])
         server = self._make_server(blocks, "![chart](assets/chart.png)")
-        with mock.patch.object(mcp_server, "ASSET_LARGE_FILE_THRESHOLD_BYTES", 10):
+        with mock.patch.object(mcp_server, "INLINE_RESPONSE_BUDGET_BYTES", 10):
             response = server.call_tool(1, "siyuan_read", {"document_id": "doc1"})
         content = response["result"]["content"]
         self.assertTrue(all(item["type"] == "text" for item in content))
-        self.assertIn("[图片未返回：超过 20 MB 单张上限", self._text(content))
+        self.assertIn("[图片未返回：超出单笔", self._text(content))
         self.assertIn("include_large_images=true", self._text(content))
+        self.assertIn("chart.png", self._text(content))
 
     def test_oversized_image_inlined_after_confirm(self):
         blocks = self._blocks([("p1", "![chart](assets/chart.png)")])
         server = self._make_server(blocks, "![chart](assets/chart.png)")
-        with mock.patch.object(mcp_server, "ASSET_LARGE_FILE_THRESHOLD_BYTES", 10):
+        with mock.patch.object(mcp_server, "INLINE_RESPONSE_BUDGET_BYTES", 10):
             response = server.call_tool(
                 1, "siyuan_read", {"document_id": "doc1", "include_large_images": True}
             )
@@ -4919,7 +4920,7 @@ class McpServerReadInlineImagesTests(unittest.TestCase):
         self.assertEqual(image_items[0]["mimeType"], "image/png")
         fake_fetch.assert_called_once()
         self.assertEqual(fake_fetch.call_args[0][0], "https://example.com/a.png")
-        self.assertEqual(fake_fetch.call_args[0][1], 20 * 1024 * 1024)
+        self.assertEqual(fake_fetch.call_args[0][1], (9 * 1024 * 1024 // 4) * 3)
         self.assertIn("[图片已内联：https://example.com/a.png]", self._text(response["result"]["content"]))
 
     def test_network_failure_declared_in_place(self):
@@ -4997,10 +4998,65 @@ class McpServerReadInlineImagesTests(unittest.TestCase):
         self.assertEqual(len(image_items), 1)
         self.assertEqual(image_items[0]["mimeType"], "image/png")
 
+    def test_budget_prefix_filling_stops_and_declares_rest(self):
+        items = [
+            ("p1", "![a](assets/a.png)"),
+            ("p2", "![b](assets/b.png)"),
+            ("p3", "![c](assets/c.png)"),
+            ("p4", "![d](assets/d.png)"),
+        ]
+        blocks = self._blocks(items)
+        doc_md = "\n\n".join(md for _, md in items)
+        server = self._make_server(blocks, doc_md)
+        # png_bytes base64 后 76 字节：预算 100 只装得下第 1 张，
+        # 第 2 张触发停止，第 2-4 张全部声明（前缀装填）。
+        with mock.patch.object(mcp_server, "INLINE_RESPONSE_BUDGET_BYTES", 100):
+            response = server.call_tool(1, "siyuan_read", {"document_id": "doc1"})
+        content = response["result"]["content"]
+        image_items = [item for item in content if item["type"] == "image"]
+        self.assertEqual(len(image_items), 1)
+        text = self._text(content)
+        self.assertIn("[图片已内联：", text)
+        self.assertIn("[图片未返回：超出单笔", text)
+        self.assertIn("预算已被前面的图片占满", text)
+        self.assertIn("b.png", text)
+        self.assertIn("d.png", text)
+        self.assertIn("超出单笔 100 字节 图片总量安全范围未返回", text)
+
+    def test_first_image_over_budget_declares_all_without_inlining(self):
+        items = [("p1", "![a](assets/a.png)"), ("p2", "![b](assets/b.png)")]
+        blocks = self._blocks(items)
+        doc_md = "\n\n".join(md for _, md in items)
+        server = self._make_server(blocks, doc_md)
+        with mock.patch.object(mcp_server, "INLINE_RESPONSE_BUDGET_BYTES", 10):
+            response = server.call_tool(1, "siyuan_read", {"document_id": "doc1"})
+        content = response["result"]["content"]
+        self.assertTrue(all(item["type"] == "text" for item in content))
+        text = self._text(content)
+        self.assertEqual(text.count("[图片未返回：超出单笔"), 1)
+        self.assertEqual(text.count("预算已被前面的图片占满"), 1)
+        self.assertIn("超出单笔 10 字节 图片总量安全范围未返回", text)
+
+    def test_large_images_flag_inlines_beyond_budget(self):
+        items = [("p1", "![a](assets/a.png)"), ("p2", "![b](assets/b.png)")]
+        blocks = self._blocks(items)
+        doc_md = "\n\n".join(md for _, md in items)
+        server = self._make_server(blocks, doc_md)
+        with mock.patch.object(mcp_server, "INLINE_RESPONSE_BUDGET_BYTES", 10):
+            response = server.call_tool(
+                1, "siyuan_read", {"document_id": "doc1", "include_large_images": True}
+            )
+        content = response["result"]["content"]
+        image_items = [item for item in content if item["type"] == "image"]
+        self.assertEqual(len(image_items), 2)
+        self.assertNotIn("图片总量安全范围", self._text(content))
+
     def test_tool_spec_documents_large_image_confirm(self):
         spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_read")
         self.assertIn("include_large_images", spec["inputSchema"]["properties"])
-        self.assertIn("20 MB", spec["inputSchema"]["properties"]["include_large_images"]["description"])
+        description = spec["inputSchema"]["properties"]["include_large_images"]["description"]
+        self.assertIn("9 MB per-call image budget", description)
+        self.assertIn("10 MB", description)
 
 
 class LoadConfigInlineImagesTests(unittest.TestCase):

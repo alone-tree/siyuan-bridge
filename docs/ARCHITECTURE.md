@@ -396,8 +396,9 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 - 开关状态保存在插件数据区 `config.local.json` 的 `read_inline_images`。安装默认关闭，用户打开后持久保存；MCP 进程重启后生效。
 - 开启后 `siyuan_read` 返回 MCP 多模态 content 数组：文本块和图片块按文档顺序交替；图片是 base64 + MIME 类型，不采用 Markdown 嵌图。
 - 处理范围是思源认定的图片：本地图（`assets/...`，优先读附件提取结果，缺失时回退 `get_asset`）和网络图（http/https，下载后转 base64）。
-- 每张成功内联的图片按固定 1,568 token 计入窗口 `token_budget`；块数和 token 任意一个触发即翻页，不设张数上限。
-- 单张超过 20 MB（与 `insert_assets` 大文件阈值一致）默认不内联，在原位置声明；AI 获得用户明确同意后可用 `include_large_images=true` 强制内联。
+- 每张成功内联的图片按固定 1,568 token 计入窗口 `token_budget`；块数和 token 任意一个触发即翻页。
+- 单笔响应图片累计 base64 字节不超过 9 MB（`INLINE_RESPONSE_BUDGET_BYTES`，低于 MCP SDK 客户端默认 10 MB 单消息读缓冲）：按文档顺序前缀装填，碰到装不下的图即停止装填，该图及其后所有图在原位置声明；声明含本地路径（本地图，附件已提取到 `ai_workspace/`）或原地址（网络图）与单独读取指引，响应头部追加图片统计提示行。本地图先 `stat` 预判不读内容，网络图下载以剩余预算为流式中止线。决策与行为规格见 `docs/图片总量闸门方案-2026-09-28.md`。
+- `include_large_images=true`（AI 获得用户明确同意后）无视 9 MB 预算全量内联；响应超过 10 MB 时默认配置的客户端会断开连接，属明知风险的自担选项。
 - 扩展名在思源图片清单内但平台通常不支持内联的格式（SVG、AVIF、BMP、TIFF、ICO 等）以及读取失败的图片，同样在原位置声明，不无声跳过；成功内联和声明处都保留原文件路径。
 
 块展示规则：
@@ -643,7 +644,7 @@ scope：
 | `block_limit`       | integer | 200   | 最大展示块数量                              |
 | `token_budget`      | integer | 10000 | 估算 token 预算                             |
 | `include_block_ids` | boolean | false | 启用引用阅读                                |
-| `include_large_images` | boolean | false | 用户明确同意后内联超过 20 MB 的单张图片；仅图片内联开启时相关 |
+| `include_large_images` | boolean | false | 用户明确同意后无视单笔 9 MB 图片总量预算，全量内联窗口内图片；仅图片内联开启时相关 |
 
 数据流：
 
@@ -654,7 +655,7 @@ scope：
 5. 如果展示块为空，降级到 `exportMdContent`。
 6. 生成大纲和窗口预览。
 7. 提取附件并重写本地 asset 链接。
-8. 图片内联开启时，把窗口正文中的图片引用替换为内联标记或原位声明，并随 content 数组返回图片。
+8. 图片内联开启时，把窗口正文中的图片引用替换为内联标记或原位声明（受单笔 9 MB 图片总量预算约束，前缀装填），并随 content 数组返回图片。
 9. 返回当前窗口。
 
 返回内容：
@@ -669,7 +670,7 @@ scope：
 - 附件提取目录。
 - 全文大纲。
 - 当前窗口正文。
-- 图片内联开启时，正文窗口与图片按文档顺序交替返回（MCP 多模态 content）。
+- 图片内联开启时，正文窗口与图片按文档顺序交替返回（MCP 多模态 content）；超出单笔 9 MB 图片预算时，头部附图片统计提示行。
 
 编辑前要求：
 

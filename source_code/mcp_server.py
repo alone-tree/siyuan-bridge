@@ -69,6 +69,10 @@ MAX_REFERENCE_BLOCK_CHARACTERS = 2000
 POST_WRITE_SYNC_TIMEOUT = 5.0
 POST_WRITE_SYNC_INTERVAL = 0.25
 ASSET_LARGE_FILE_THRESHOLD_BYTES = 20 * 1024 * 1024
+# 读侧单笔响应图片总量预算：逐图累计 base64 字节上限（docs/图片总量闸门方案-2026-09-28.md）。
+# 只约束 siyuan_read 的图片内联；写入侧 insert_assets 的 20 MB 阈值与此无关。
+# MCP SDK 客户端默认单消息读缓冲 10 MB（10,485,760 字节），9 MB 留出文本与协议开销余量。
+INLINE_RESPONSE_BUDGET_BYTES = 9 * 1024 * 1024
 SIYUAN_IMAGE_EXTENSIONS = frozenset({
     ".apng", ".ico", ".cur", ".jpg", ".jpe", ".jpeg", ".jfif", ".pjp",
     ".pjpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".avif", ".tiff", ".tif",
@@ -2917,13 +2921,15 @@ class McpServer:
             with ensure_notebooks_open(client, [notebook_id]):
                 markdown = client.export_markdown(doc_id)
             attachment_count = extract_attachments(markdown, client, doc_id, self.root)
+            image_stats: dict[str, int] | None = None
             if inline_images:
-                markdown, images = inline_images_into_markdown(
+                markdown, images, image_stats = inline_images_into_markdown(
                     markdown,
                     root=self.root,
                     client=client,
                     doc_id=doc_id,
                     allow_large=allow_large,
+                    budget_bytes=INLINE_RESPONSE_BUDGET_BYTES,
                 )
                 self._pending_read_images = images or None
             markdown = rewrite_local_asset_links(markdown, doc_id, self.root)
@@ -2940,6 +2946,8 @@ class McpServer:
                 header_lines.insert(3, f"tag：{tags_text}")
             if attachment_count:
                 header_lines.append(f"附件：{attachment_count} 个已提取到 {attachment_root_dir(self.root, doc_id).resolve()}")
+            if image_stats and image_stats.get("over_budget"):
+                header_lines.append(build_inline_image_budget_note(image_stats, INLINE_RESPONSE_BUDGET_BYTES))
             return "\n".join(["\n".join(header_lines), "", "---", "", markdown])
 
         # Compute stats
@@ -2976,6 +2984,25 @@ class McpServer:
         first_idx = window_blocks[0].index if window_blocks else start_idx + 1
         last_idx = window_blocks[-1].index if window_blocks else start_idx
 
+        # Build block text for current window（图片内联先于头部组装，供头部提示行使用）
+        body_lines: list[str] = []
+        for db in window_blocks:
+            if db.markdown.strip():
+                body_lines.append(db.markdown)
+        body = "\n\n".join(body_lines)
+        image_stats: dict[str, int] | None = None
+        if inline_images:
+            body, images, image_stats = inline_images_into_markdown(
+                body,
+                root=self.root,
+                client=client,
+                doc_id=doc_id,
+                allow_large=allow_large,
+                budget_bytes=INLINE_RESPONSE_BUDGET_BYTES,
+            )
+            self._pending_read_images = images or None
+        body = rewrite_local_asset_links(body, doc_id, self.root)
+
         # Build header
         doc_path = display_document_path(doc)
         date = format_date(str(doc.get("updated", "")))
@@ -2996,6 +3023,8 @@ class McpServer:
             header_lines.append(f"下一窗口：block_start={next_start}, block_limit={block_limit}")
         if attachment_count:
             header_lines.append(f"附件：{attachment_count} 个已提取到 {attachment_root_dir(self.root, doc_id).resolve()}")
+        if image_stats and image_stats.get("over_budget"):
+            header_lines.append(build_inline_image_budget_note(image_stats, INLINE_RESPONSE_BUDGET_BYTES))
         header = "\n".join(header_lines)
 
         # Build outline (always full document outline with block positions)
@@ -3003,23 +3032,6 @@ class McpServer:
 
         # Build window preview (only when headings < 5 AND total blocks > 100)
         window_preview = build_window_preview(display_blocks)
-
-        # Build block text for current window
-        body_lines: list[str] = []
-        for db in window_blocks:
-            if db.markdown.strip():
-                body_lines.append(db.markdown)
-        body = "\n\n".join(body_lines)
-        if inline_images:
-            body, images = inline_images_into_markdown(
-                body,
-                root=self.root,
-                client=client,
-                doc_id=doc_id,
-                allow_large=allow_large,
-            )
-            self._pending_read_images = images or None
-        body = rewrite_local_asset_links(body, doc_id, self.root)
 
         parts = [header, "", outline]
         if window_preview:
@@ -4749,7 +4761,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_read",
-            "description": "Read a visible SiYuan document as Markdown. Prefer document path including notebook name, e.g. /Notebook/Folder/Doc; use document_id only as fallback. Always returns the document outline and one complete block window. Set include_block_ids=true before any siyuan_edit call to get exact [index] id type targets. Normal reading keeps Markdown clean and hides block IDs. When inline image reading is enabled in the plugin settings, images in this window are returned as image content blocks interleaved with the text; oversized or unsupported images are reported at their position instead.",
+            "description": "Read a visible SiYuan document as Markdown. Prefer document path including notebook name, e.g. /Notebook/Folder/Doc; use document_id only as fallback. Always returns the document outline and one complete block window. Set include_block_ids=true before any siyuan_edit call to get exact [index] id type targets. Normal reading keeps Markdown clean and hides block IDs. When inline image reading is enabled in the plugin settings, images in this window are returned as image content blocks interleaved with the text, up to a 9 MB per-call image budget; images beyond the budget and unsupported images are reported at their position with their location.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -4759,7 +4771,7 @@ def tool_specs() -> list[dict[str, Any]]:
                     "block_limit": {"type": "integer", "default": DEFAULT_BLOCK_LIMIT, "description": "Maximum display blocks to return in this window, 1–1000."},
                     "token_budget": {"type": "integer", "default": DEFAULT_TOKEN_BUDGET, "description": "Estimated token ceiling for this window. Blocks stop before exceeding budget (at least one block always returned)."},
                     "include_block_ids": {"type": "boolean", "default": False, "description": "Enable reference reading for editing: each block is shown as [index] id=... type=... followed by content. Use these exact values for siyuan_edit start_index/start_id."},
-                    "include_large_images": {"type": "boolean", "default": False, "description": "Set true only after the user explicitly agrees, to inline single images larger than 20 MB instead of reporting them at their position. Only relevant when inline image reading is enabled in the plugin settings."},
+                    "include_large_images": {"type": "boolean", "default": False, "description": "Set true only after the user explicitly agrees, to ignore the 9 MB per-call image budget and inline every image in this window. Responses over 10 MB can be rejected or disconnect on MCP clients using default buffer limits; use only when the client is known to accept large messages. Only relevant when inline image reading is enabled in the plugin settings."},
                 },
                 "additionalProperties": False,
             },
@@ -4963,6 +4975,25 @@ def sniff_image_mime(data: bytes) -> str | None:
     return None
 
 
+def _format_budget_label(num_bytes: int) -> str:
+    """把预算字节数格式化为声明与提示行使用的人类可读片段。"""
+    mb = num_bytes / (1024 * 1024)
+    if mb >= 1:
+        return f"{mb:.0f} MB" if mb.is_integer() else f"{mb:.1f} MB"
+    return f"{num_bytes} 字节"
+
+
+def build_inline_image_budget_note(stats: dict[str, int], budget_bytes: int) -> str:
+    """根据内联统计生成 siyuan_read 头部的图片预算提示行。"""
+    label = _format_budget_label(budget_bytes)
+    mb = stats.get("inlined_bytes", 0) / (1024 * 1024)
+    return (
+        f"图片：共 {stats.get('total', 0)} 张，已内联 {stats.get('inlined', 0)} 张（合计 {mb:.1f} MB）；"
+        f"{stats.get('over_budget', 0)} 张超出单笔 {label} 图片总量安全范围未返回，"
+        "请按各图位置声明中的路径或地址单独读取。"
+    )
+
+
 def inline_images_into_markdown(
     markdown: str,
     *,
@@ -4970,26 +5001,49 @@ def inline_images_into_markdown(
     client: SiYuanClient,
     doc_id: str,
     allow_large: bool,
+    budget_bytes: int = INLINE_RESPONSE_BUDGET_BYTES,
     fetch_url: Callable[[str, int], bytes] | None = None,
-) -> tuple[str, list[dict[str, str]]]:
+) -> tuple[str, list[dict[str, str]], dict[str, int]]:
     """把 Markdown 中的图片引用替换为内联标记或原位声明。
 
-    返回 (替换后的 Markdown, 图片块列表)。图片块列表按标记序号排列，
-    每项含 data（base64）、mimeType 和 source（原文件路径或 URL）。
+    返回 (替换后的 Markdown, 图片块列表, 统计)。图片块列表按标记序号排列，
+    每项含 data（base64）、mimeType 和 source（原文件路径或 URL）；
+    统计含 total/inlined/inlined_bytes/over_budget，供头部提示行使用。
+    单笔图片总量按 base64 后字节逐图累计（docs/图片总量闸门方案-2026-09-28.md）：
+    默认前缀装填，碰到装不下的图即停止装填，其后所有图原位声明；
+    allow_large=True 时无视预算全量内联。
     本图提取失败、格式不支持或超限时，在原位置写入未返回声明，不无声跳过。
     """
     image_blocks: list[dict[str, str]] = []
-    threshold = ASSET_LARGE_FILE_THRESHOLD_BYTES
+    stats = {"total": 0, "inlined": 0, "inlined_bytes": 0, "over_budget": 0}
+    remaining = None if allow_large else budget_bytes
+    stopped = False
+    budget_label = _format_budget_label(budget_bytes)
     fetch = fetch_url or fetch_url_bytes
 
-    def too_large_note(display: str) -> str:
-        note = f"[图片未返回：超过 20 MB 单张上限"
-        if not allow_large:
-            note += "，用户明确同意后可用 include_large_images=true 强制内联"
-        return note + f"。文件：{display}]"
+    def local_display(url: str) -> str:
+        rel = unquote(url[len("assets/"):] if url.lower().startswith("assets/") else url.lstrip("/"))
+        return (attachment_root_dir(root, doc_id) / "assets" / rel).resolve().as_posix()
+
+    def budget_note(display: str, is_local: bool, exhausted: bool) -> str:
+        if exhausted:
+            reason = f"单笔 {budget_label} 图片总量预算已被前面的图片占满"
+        else:
+            reason = f"超出单笔 {budget_label} 图片总量安全范围"
+        if is_local:
+            return (
+                f"[图片未返回：{reason}。文件：{display}，"
+                f"可用平台读图能力直接查看；用户明确同意后可用 include_large_images=true 强制内联]"
+            )
+        return (
+            f"[图片未返回：{reason}。原地址：{display}，"
+            f"可用平台的网页获取工具下载后查看；用户明确同意后可用 include_large_images=true 强制内联]"
+        )
 
     def replace(match: re.Match[str]) -> str:
+        nonlocal stopped, remaining
         url = match.group(1).strip().strip("<>")
+        stats["total"] += 1
         scheme = urlparse(url).scheme
         is_network = scheme in ("http", "https")
         ext = read_image_extension(url)
@@ -5003,8 +5057,13 @@ def inline_images_into_markdown(
 
         display = url
         try:
+            if stopped:
+                stats["over_budget"] += 1
+                return budget_note(local_display(url) if not is_network else url, not is_network, exhausted=True)
             if is_network:
-                data = fetch(url, 0 if allow_large else threshold)
+                # 流式下载边下边计数：中止线取剩余预算对应的原始字节上限
+                # （原始 L 字节 base64 后为 ceil(L/3)*4，floor((remaining//4)*3) 保证不超）。
+                data = fetch(url, 0 if remaining is None else (remaining // 4) * 3)
                 if mime is None:
                     # 网络图后缀不可靠，下载后按文件魔数识别。
                     mime = sniff_image_mime(data)
@@ -5017,8 +5076,12 @@ def inline_images_into_markdown(
                 local = attachment_root_dir(root, doc_id) / "assets" / rel
                 display = local.resolve().as_posix()
                 if local.exists():
-                    if local.stat().st_size > threshold and not allow_large:
-                        return too_large_note(display)
+                    # 本地图先 stat 预判，装不下不读内容。
+                    size_b64 = (local.stat().st_size + 2) // 3 * 4
+                    if remaining is not None and size_b64 > remaining:
+                        stopped = True
+                        stats["over_budget"] += 1
+                        return budget_note(display, True, exhausted=False)
                     data = local.read_bytes()
                 else:
                     data = client.get_asset(url if url.lower().startswith("assets/") else f"assets/{rel}")
@@ -5028,22 +5091,31 @@ def inline_images_into_markdown(
                         if ext in SIYUAN_IMAGE_EXTENSIONS:
                             return f"[图片未返回：格式 {ext} 平台通常不支持内联。文件：{display}]"
                         return f"[图片未返回：无法识别图片格式。文件：{display}]"
-            if len(data) > threshold and not allow_large:
-                return too_large_note(display)
-            index = len(image_blocks)
+            size_b64 = (len(data) + 2) // 3 * 4
+            if remaining is not None and size_b64 > remaining:
+                stopped = True
+                stats["over_budget"] += 1
+                return budget_note(display, not is_network, exhausted=False)
+            if remaining is not None:
+                remaining -= size_b64
+            stats["inlined"] += 1
+            stats["inlined_bytes"] += size_b64
             image_blocks.append({
                 "data": base64.b64encode(data).decode("ascii"),
                 "mimeType": mime,
                 "source": display,
             })
-            return f"\n@@SIYUAN-IMAGE:{index}@@\n"
+            return f"\n@@SIYUAN-IMAGE:{len(image_blocks) - 1}@@\n"
         except InlineImageTooLarge:
-            return too_large_note(display)
+            # 流式下载超出剩余预算被中止：停止装填并声明。
+            stopped = True
+            stats["over_budget"] += 1
+            return budget_note(display, not is_network, exhausted=False)
         except (HTTPError, URLError, OSError, SiYuanApiError, SiYuanConnectionError) as exc:
             return f"[图片未返回：读取失败（{exc}）。文件：{display}]"
 
     replaced = MARKDOWN_IMAGE_RE.sub(replace, markdown)
-    return replaced, image_blocks
+    return replaced, image_blocks, stats
 
 
 def build_read_content(text: str, images: list[dict[str, str]]) -> list[dict[str, Any]]:
