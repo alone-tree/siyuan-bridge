@@ -2825,7 +2825,9 @@ class McpServer:
 
         for row in rows:
             doc_id = block_document_id(row)
-            if not doc_id or doc_id in seen:
+            # Hidden documents are absent from the visible index. A block id
+            # that does not match an indexed document must not be treated as visible.
+            if not doc_id or doc_id not in doc_index or doc_id in seen:
                 continue
 
             doc = live_doc_from_block(row, doc_index, notebook_names)

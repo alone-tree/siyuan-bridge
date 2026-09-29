@@ -14,8 +14,9 @@ from source_code.ignore import PrivacyRules, write_privacy_rules_cache
 
 
 class FakeSearchClient:
-    def __init__(self, blocks: list[dict[str, Any]], *, closed: bool = False):
+    def __init__(self, blocks: list[dict[str, Any]], *, closed: bool = False, sql_rows: list[dict[str, Any]] | None = None):
         self.blocks = blocks
+        self.sql_rows = sql_rows
         self.closed = closed
         self.base_url = "http://127.0.0.1:6806"
         self.opened: list[str] = []
@@ -107,6 +108,8 @@ class FakeSearchClient:
                 if isinstance(blocks, list):
                     return blocks
             return []
+        if self.sql_rows is not None:
+            return self.sql_rows
         return [{"exists": 1}]
 
     def search_full_text(self, **payload):
@@ -1333,6 +1336,58 @@ class McpServerTests(unittest.TestCase):
 
         self.assertIn("命中块：共 6 个，展示前 6 个。", output)
         self.assertIn("block6", output)
+
+    def test_find_sql_drops_rows_outside_visible_index(self):
+        base = self.root / "knowledge_base"
+        visible = {
+            "id": "doc1",
+            "notebook_id": "nb1",
+            "notebook_name": "Main",
+            "hpath": "/Projects/Doc One",
+            "title": "Doc One",
+            "path": "/doc1.sy",
+            "tags": [],
+            "word_count": 123,
+            "block_count": 4,
+            "updated": "20260501010101",
+        }
+        (base / "docs.jsonl").write_text(
+            json.dumps(visible, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        client = FakeSearchClient([], sql_rows=[
+            {"id": "block-hidden", "content": "隐藏正文密匙"},
+            {"id": "doc2", "content": "隐藏文档正文"},
+            {"id": "doc3", "root_id": "doc3", "content": "子文档密匙"},
+            {"content": "无身份正文"},
+            {"id": "block1", "root_id": "doc1", "content": "可见正文不应出现"},
+        ])
+        output = self.run_find(client, {"query": "SELECT id, content FROM blocks", "mode": "sql"})
+
+        self.assertIn("`doc1`", output)
+        self.assertIn("/Projects/Doc One", output)
+        self.assertNotIn("隐藏正文密匙", output)
+        self.assertNotIn("隐藏文档正文", output)
+        self.assertNotIn("子文档密匙", output)
+        self.assertNotIn("无身份正文", output)
+        self.assertNotIn("可见正文不应出现", output)
+        self.assertNotIn("doc2", output)
+        self.assertNotIn("doc3", output)
+        self.assertNotIn("block-hidden", output)
+
+    def test_find_sql_still_filters_indexed_document_by_privacy_rule(self):
+        write_privacy_rules_cache(
+            self.root,
+            PrivacyRules(ignore=[{"scope": "document", "id": "doc2"}], allow=[]),
+        )
+        client = FakeSearchClient([], sql_rows=[
+            {"id": "block2", "root_id": "doc2", "content": "隐藏正文里有机器人"},
+        ])
+        output = self.run_find(client, {"query": "SELECT id, content FROM blocks", "mode": "sql"})
+
+        self.assertIn("未找到匹配的可见文档", output)
+        self.assertNotIn("doc2", output)
+        self.assertNotIn("隐藏正文里有机器人", output)
 
     def test_find_documents_filters_live_results_with_privacy_rules(self):
         write_privacy_rules_cache(

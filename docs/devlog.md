@@ -2,6 +2,16 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-09-28：SQL 搜索丢弃可见索引之外的行
+
+- 问题：`siyuan_find(mode=sql)` 在结果行没有文档身份时，把块 ID 当成文档 ID。隐私规则对不上就当可见，并把 `content` 印出来。隐藏文档不在可见索引里，因此会漏出。关联 issue：<https://github.com/alone-tree/siyuan-bridge/issues/12>。
+- 处理：`_enrich_sql_results` 要求解析出的文档 ID 存在于 `docs.jsonl` 可见索引，否则丢弃。已有的隐私判断和 Privacy Rules 硬过滤保留。query / regex 不变。
+- 代价：尚未 refresh 进可见索引的新文档不会出现在 SQL 结果中。
+- 公开 schema 未改。Skill 补了一句：SQL 只返回可见索引中的文档。版本升级至 1.10.2（PATCH；基于 1.10.1 +0.0.1）。
+- 测试：`python -m pytest tests -q` 为 `402 passed, 1 skipped`。
+- 对照：隐私规则保持 5 条文档规则、测试笔记本 33 篇不变。只临时去掉 `_enrich_sql_results` 里「文档 ID 必须在可见索引中」这一句，重新加载开发版后用同一条 `SELECT id, content FROM blocks WHERE root_id = '20260501152211-oe1flwt'`。关掉时返回隐藏文档的 4 条块正文，含「这里有一个密匙asdf」；加回后同一条查询变为「未找到匹配的可见文档」。可见文档 `20260501151950-iiwhmiy` 在关掉时返回 8 条块正文，加回后块正文消失，只剩文档清单。`SELECT *` 在两种代码下都只返回该可见文档。思源原始 SQL 在两次调用中都有数据：隐藏文档 5 行，可见文档 9 行。
+- 版本升级：1.10.1 → 1.10.2（PATCH，+0.0.1）。
+
 ## 2026-09-28：读文档图片单笔总量闸门（修复多图文档断连）
 
 - 事故与根因：2026-09-26 读《W5 营销》时 `siyuan_read` 连续 4 次 `MCP error -32000: Connection closed`。根因是图片内联无单笔总量上限——5 张截图 base64 后约 14.2 MB，超出 MCP SDK 客户端默认 10 MB 单消息读缓冲，客户端掐断连接；`token_budget`/`block_limit` 无效（每图按 1,568 token 名义计价，与实际字节无关）。能力库与 DSH 均按 SDK 默认行为工作，无缺陷。行业调研（Codex/Claude Code/ChatGPT/DeepSeek/chrome-devtools-mcp）确认全行业都做「预处理缩放 + 降级声明，绝不让单条大响应杀死会话」。定稿方案见 `docs/图片总量闸门方案-2026-09-28.md`。
