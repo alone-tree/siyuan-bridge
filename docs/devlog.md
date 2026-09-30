@@ -2,6 +2,17 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-09-30：SQL 搜索按块返回并核验真实身份
+
+- 关联 issue：<https://github.com/alone-tree/siyuan-bridge/issues/14>。需求与实测记录见 `docs/SQL搜索块级结果方案-2026-09-30.md`。
+- 行为：`siyuan_find(mode=sql)` 不再把同一文档的多条命中折叠成文档清单。只从用户 SQL 结果行提取 `id`，分批 64 个重新查询真实 `blocks` 元数据（`WHERE id IN (...)` 加显式 LIMIT），用真实 `root_id` 校验可见索引、Privacy Rules 与系统文档硬过滤，过滤通过后才读取正文。伪造 `root_id`、`hpath`、`path`、`content` 或文档可见性都不影响输出；不返回任意列报表。
+- 输出：保持 SQL 全局顺序，不去重重复行。隐私过滤后展示前 20 条可见命中（正文块计 1 条，文档计 1 条）。正文块用 `get_block_kramdown` 完整返回；文档命中用 `build_display_blocks()` 展示前 20 个展示块、不标内部序号、不展开 `query_embed`，并提示 `siyuan_read`。图片统一降级为普通地址链接，不内联、不提取附件。
+- 截断：新增 `query_sql_with_info()`，以 `mode=readonly` 调用 `/api/query/sql` 并保留顶层 `limit`/`truncated`。`truncated=true` 时提示仍有候选未返回，并按原始候选数给出 `LIMIT n OFFSET n` 的继续方式，不按过滤后可见数推进。不自动补查凑满 20 条，不增加桥侧字符或 token 上限。
+- 工具面：`siyuan_find` 的参数描述写明 `scope`、`limit`、`max_snippets_per_doc` 只作用于 query/regex 模式；同步更新 `docs/ARCHITECTURE.md`、`docs/思源API.md`、Skill、中英文 README 和方案文档。
+- 测试：`python -m pytest tests -q` 为 `430 passed, 1 skipped, 3 warnings`（现有 `locale.getdefaultlocale` 弃用警告）。`tests/test_client.py` 覆盖 `query_sql_with_info` 的 readonly 载荷、`limit`/`truncated` 保留、旧 `query_sql` 兼容与错误；`tests/test_mcp_server.py` 覆盖交错顺序、id-only 投影、伪造身份与隐藏正文不读取、20 条上限、文档 20 块、大块完整、截断 OFFSET、重复行不合并、notebooks 关闭恢复、图片地址与文档标签。
+- 开发版 MCP 实调（思源 3.8.5，测试笔记本夹具）：交错查询按 A1 到 B1 到 A2 到 B2 返回；`LIMIT 2 OFFSET 2` 返回第三、四条；`SELECT id` 只投影 id 仍返回完整正文；伪造 `root_id`/`hpath`/`content` 的行仍只显示真实路径与正文，指向隐藏文档的伪造命中返回 0 条；递归 CTE 生成 65 条同时命中同一可见块时输出「64 条可见结果，展示 20 条」并提示 `LIMIT 64 OFFSET 64`；文档命中只展示前 20 个块、图片为 `[图片](assets/...)` 地址、`{{SELECT ...}}` 保留原语法。临时验证文档 `20260930150803-ggq4va4` 已删除。
+- 版本保持 `1.10.2`，未发布；发布时按 MINOR 升至 `1.11.0`（与 `siyuan_read` 嵌入展开同一批）。本次只提交本地保存点，不推送、不部署。
+
 ## 2026-09-30：siyuan_read 展开嵌入块
 
 - 实现 `query_embed` 的惰性解析：仅解析完整 `{{SELECT ...}}`；先获取目标 ID 和元数据，经可见索引、Privacy Rules 与系统文档过滤后才读取正文。不可见和缺失目标不披露路径、ID 或数量；无可见结果统一显示「查无此块」。
