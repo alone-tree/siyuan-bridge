@@ -2,6 +2,12 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-09-30：v1.11.0 发布（SQL 块级搜索与嵌入块读取）
+
+- 集市版本 `1.11.0`（MINOR，基于 `1.10.2` 加 `0.1.0`）。`source_code/__init__.py` 与 `siyuan-plugin/plugin.json` 同步；`dist/package.zip` 随 GitHub Release 上传，集市索引随后自动拉取，无需再提 PR。
+- 本次两个功能项：`siyuan_find(mode="sql")` 按块返回经真实身份核验的可见命中（见下文 2026-09-30 条目），`siyuan_read` 惰性展开 `{{SELECT ...}}` 嵌入块（见下文 2026-09-30 嵌入块条目）。
+- 面向用户的 `README.md` 与 `README.en-US.md` 补充嵌入块读取说明；发布时同步到 `siyuan-plugin/README.zh-CN.md` 与 `siyuan-plugin/README.md`。工具描述、Skill 与 `docs/ARCHITECTURE.md` 已在各自条目内更新。
+
 ## 2026-09-30：SQL 搜索按块返回并核验真实身份
 
 - 关联 issue：<https://github.com/alone-tree/siyuan-bridge/issues/14>。需求与实测记录见 `docs/SQL搜索块级结果方案-2026-09-30.md`。
