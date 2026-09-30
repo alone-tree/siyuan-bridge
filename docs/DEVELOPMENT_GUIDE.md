@@ -527,17 +527,30 @@ python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE%
 
 ### DSH 能力库中的三个思源桥
 
-DSH 能力库注册表（`~/.dsh/skill-mcp-manager/registry.json`，用 `mcp_register`/`mcp_load` 管理）里有三个思源桥注册项，服务端代码来源不同：
+DSH 能力库注册表（`~/.dsh/skill-mcp-manager/registry.json`）里只保留三个思源桥。开发版和测试版已经注册好。第二层验证只切换这两个的档位，禁止再 `mcp_register` 新名字，也禁止删除这两个正式注册项。
 
-| 注册名 | 指向 | 用途 |
-|---|---|---|
-| `siyuan-bridge` | 用户版安装副本 `D:\SiYuan\data\plugins\siyuan-bridge\bridge\scripts\run_mcp.py` | 正常版，日用。真实笔记的读写搜走它；禁止用它做开发验证 |
-| `siyuan-bridge-dev` | GitHub 仓库源码：cwd `D:\Github\siyuan-agent-bridge`，`python -m source_code.mcp_server` | 开发版，开发时真实调用测试。可用于用户工作空间和测试空间 |
-| `siyuan-bridge-test` | 测试工作空间安装副本 `D:\Siyuan2test\data\plugins\siyuan-bridge\bridge\scripts\run_mcp.py` | 测试版，通常只在需要单独验证插件前端实际效果时才用：先把当前源码导入测试空间，再由人类手动打开测试库思源并在 UI 中验收 |
+| 注册名 | 指向 | 用途 | 平时档位 |
+|---|---|---|---|
+| `siyuan-bridge` | 用户版安装副本 `D:\SiYuan\data\plugins\siyuan-bridge\bridge\scripts\run_mcp.py` | 正常版，日用。真实笔记的读写搜走它；禁止用它做开发验证 | `on-demand` |
+| `siyuan-bridge-dev` | GitHub 仓库源码：cwd `D:\Github\siyuan-agent-bridge`，`python -m source_code.mcp_server` | 开发版。开发时真实调用；跟随思源当前打开的工作空间，用户空间和测试空间都能连 | `disabled` |
+| `siyuan-bridge-test` | 测试工作空间安装副本 `D:\Siyuan2test\data\plugins\siyuan-bridge\bridge\scripts\run_mcp.py` | 测试版。只在必须由人在思源本体 UI 验收插件前端时使用：先把当前源码导入测试空间，再由人类打开测试库查看 | `disabled` |
 
-三个桥都连接正在运行的思源（`127.0.0.1:6806`），区别只在桥服务端代码来自哪里。开发版跟随思源当前打开的工作空间：思源开用户工作空间就连用户空间，开测试空间就连测试空间。大部分开发验证用开发版即可；只有必须在思源本体 UI 观察的功能才动用测试版，并由人类验收。
+三个桥都连接正在运行的思源（`127.0.0.1:6806`），区别只在桥服务端代码来自哪里。大部分开发验证用 `siyuan-bridge-dev`；只有必须在思源本体 UI 观察的功能才动用 `siyuan-bridge-test`。
 
-`siyuan-bridge-dev` 和 `siyuan-bridge-test` 平时是 `disabled`，开发时用 `mcp_register` 把档位临时改成 `on-demand` 再 `mcp_load`，验证结束后改回 `disabled`，避免与用户版混淆。
+要用开发版时，只把已有条目从关闭改为按需，再加载。只传 `name` 和 `tier`，不要带 `command`、`args`、`cwd` 或 `env`，否则会重新试连并可能改写已有配置：
+
+```text
+mcp_register name=siyuan-bridge-dev tier=on-demand
+mcp_load name=siyuan-bridge-dev
+```
+
+验证结束后改回关闭。同样只传名字和档位：
+
+```text
+mcp_register name=siyuan-bridge-dev tier=disabled
+```
+
+测试版把名字换成 `siyuan-bridge-test`，步骤相同。不要注册 `siyuan-bridge-dev-test` 或其他带 dev/test 的新名字；验完只改回 `disabled`，不要删注册项。
 
 ### 第一层：测试代码
 
@@ -545,11 +558,11 @@ DSH 能力库注册表（`~/.dsh/skill-mcp-manager/registry.json`，用 `mcp_reg
 
 ### 第二层：能力库开发版 MCP
 
-把 GitHub 工作目录中的当前源码临时注册为能力库中的开发版 MCP。每次修改后重新 `load`，再通过 DSH 能力库实际调用受影响工具并检查结果。能力库承担通用 MCP 客户端和进程加载职责，不依赖任何 AI 会话重载。
+使用已经注册的 `siyuan-bridge-dev`。按上一节把它从 `disabled` 改成 `on-demand`，再 `mcp_load`。每次修改后重新 `load`，再通过 DSH 能力库实际调用受影响工具并检查结果。能力库承担通用 MCP 客户端和进程加载职责，不依赖任何 AI 会话重载。
 
 写入工具只能操作明确的临时测试文档，并在测试后清理；读取、搜索场景优先使用固定夹具。不要使用用户版思源桥做开发验证。
 
-开发版注册必须明确指向当前仓库源码和测试配置，名称中应包含 `dev` 或 `test`。验证结束后按能力库维护规则禁用或移除临时注册，避免与用户版混淆。
+不要为这一层新建 MCP 注册项。验证结束后把 `siyuan-bridge-dev` 改回 `disabled`。
 
 ### 第三层：子代理调用验证（大型修改时）
 
@@ -558,7 +571,7 @@ DSH 能力库注册表（`~/.dsh/skill-mcp-manager/registry.json`，用 `mcp_reg
 子代理的 MCP 路由顺序固定为：
 
 1. 优先使用当前环境直接暴露、且已确认指向当前开发版源码和测试配置的内置 MCP。
-2. 如果没有可用的开发版内置 MCP，读取能力库入口，通过能力库调用第二层临时注册的开发版 MCP。
+2. 如果没有可用的开发版内置 MCP，读取能力库入口，把已注册的 `siyuan-bridge-dev` 改为 `on-demand` 后 `mcp_load` 再调用。不要新建注册项。
 3. 禁止使用用户版、生产版或无法确认代码来源的思源桥 MCP 做开发验证；无法确认时应报告阻塞，不得猜测。
 
 写入类验证只能操作明确的临时测试文档；测试结束后清理。如果调用 `siyuan_start`，注意它会清理 `ai_workspace/` 中除 README 外的内容。

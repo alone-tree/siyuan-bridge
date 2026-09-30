@@ -311,14 +311,14 @@ POST /api/asset/insertLocalAssets
 
 ### 第二层：能力库开发版 MCP
 
-- 通过能力库临时注册项 `siyuan-bridge-dev-test` 加载当前开发源码。
+- 通过能力库已注册的 `siyuan-bridge-dev` 加载当前开发源码。档位切换见 `docs/DEVELOPMENT_GUIDE.md` 的「DSH 能力库中的三个思源桥」，不要新建注册项。
 - 公司电脑执行时使用 Python 3.13，并通过 `env -u PYTHONPATH` 避免 Hermes venv 的 Python 3.11 环境污染。
 - 每次源码变化后重新 load，再真实调用受影响 action。
 - 禁止使用当前环境中的 `mcp__siyuan_bridge__*` 用户版/生产版工具验证开发代码。
 
 ### 第三层：子代理调用
 
-- 子代理实际调用已确认指向开发版的 MCP；如果没有开发版内置工具，则让子代理通过能力库调用临时注册项。
+- 子代理实际调用已确认指向开发版的 MCP；如果没有开发版内置工具，则让子代理通过能力库调用已注册的 `siyuan-bridge-dev`。
 - 验证 AI 能只凭 tool schema 和 Skill 正确区分 `name` 与 `title`，完成文件、图片、文件夹插入及大文件上传开关处理。
 - 禁止用用户版思源桥冒充开发版验收。
 

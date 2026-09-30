@@ -22,6 +22,13 @@
 - 测试：`tests/test_mcp_server.py` 为 `255 passed`；完整 `python -m pytest tests -q` 为 `414 passed, 1 skipped, 3 warnings`（现有 `locale.getdefaultlocale` 弃用警告）。
 - 开发版 MCP 实调：读取测试笔记本的嵌入夹具，正常预算下展开；`block_start=2`、`token_budget=1000` 时只返回原 SQL、统一超预算提示、0 展示统计和下一窗口 `block_start=3`。验证后将 `siyuan-bridge-dev` 恢复为 `disabled`。启动包另提示「MCP 使用指南」系统文档缺失，本次未处理。
 - 版本保持 `1.10.2`，未发布；发布时按 MINOR 升至 `1.11.0`。本次按用户要求提交本地保存点，不推送或部署。
+
+## 2026-09-29：能力库只保留三个思源桥
+
+- 删掉 5 个只禁用、未删除的临时注册：`siyuan-bridge-dev-test`、`siyuan-bridge-current-dev`、`siyuan-bridge-dev-inline`、`siyuan-bridge-test-inline`、`siyuan-bridge-dev-refs`。注册表和 `cordis.patch.yml` 都已去掉。
+- 保留 `siyuan-bridge`（用户版，按需）、`siyuan-bridge-dev`（开发版）、`siyuan-bridge-test`（测试版）。后两个平时 `disabled`，用 `mcp_register` 只改 `tier`，用完改回 `disabled`。禁止再新建思源桥 MCP。
+- 规则写在 `docs/DEVELOPMENT_GUIDE.md` 的「DSH 能力库中的三个思源桥」，`AGENTS.md` 分层验证已改成同一说法。下文旧记录里的「临时注册」是当时做法，不是当前规则。
+
 ## 2026-09-28：SQL 搜索丢弃可见索引之外的行
 
 - 问题：`siyuan_find(mode=sql)` 在结果行没有文档身份时，把块 ID 当成文档 ID。隐私规则对不上就当可见，并把 `content` 印出来。隐藏文档不在可见索引里，因此会漏出。关联 issue：<https://github.com/alone-tree/siyuan-bridge/issues/12>。
@@ -30,7 +37,6 @@
 - 公开 schema 未改。Skill 补了一句：SQL 只返回可见索引中的文档。版本升级至 1.10.2（PATCH；基于 1.10.1 +0.0.1）。
 - 测试：`python -m pytest tests -q` 为 `402 passed, 1 skipped`。
 - 对照：隐私规则保持 5 条文档规则、测试笔记本 33 篇不变。只临时去掉 `_enrich_sql_results` 里「文档 ID 必须在可见索引中」这一句，重新加载开发版后用同一条 `SELECT id, content FROM blocks WHERE root_id = '20260501152211-oe1flwt'`。关掉时返回隐藏文档的 4 条块正文，含「这里有一个密匙asdf」；加回后同一条查询变为「未找到匹配的可见文档」。可见文档 `20260501151950-iiwhmiy` 在关掉时返回 8 条块正文，加回后块正文消失，只剩文档清单。`SELECT *` 在两种代码下都只返回该可见文档。思源原始 SQL 在两次调用中都有数据：隐藏文档 5 行，可见文档 9 行。
-- 版本升级：1.10.1 → 1.10.2（PATCH，+0.0.1）。
 
 ## 2026-09-28：读文档图片单笔总量闸门（修复多图文档断连）
 
