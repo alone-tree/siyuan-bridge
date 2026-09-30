@@ -4836,6 +4836,448 @@ class McpServerReadBlockIdTests(unittest.TestCase):
         self.assertIn("Section One", result)
 
 
+class EmbedReadFakeClient(FakeSearchClient):
+    def __init__(
+        self,
+        *,
+        result_ids: list[str] | None = None,
+        metadata_rows: list[dict[str, Any]] | None = None,
+        content_rows: list[dict[str, Any]] | None = None,
+        result_map: list[tuple[str, list[str]]] | None = None,
+        asset_bytes: bytes = b"asset-bytes",
+    ):
+        super().__init__([])
+        self.result_ids = list(result_ids or [])
+        self.metadata_rows = list(metadata_rows or [])
+        self.content_rows = list(content_rows or [])
+        self.result_map = list(result_map or [])
+        self.asset_bytes = asset_bytes
+        self.sql_calls: list[str] = []
+        self.content_queries: list[str] = []
+        self.fail_embed_query = False
+        self.asset_requests: list[str] = []
+
+    def query_sql(self, statement):
+        text = str(statement or "")
+        normalized = text.casefold()
+        self.sql_calls.append(text)
+        if normalized.startswith("select id from (") and "as embed_matches" in normalized:
+            if self.fail_embed_query:
+                raise RuntimeError("simulated embed resolution failure")
+            for marker, ids in self.result_map:
+                if marker.casefold() in normalized:
+                    return [{"id": block_id} for block_id in ids]
+            return [{"id": block_id} for block_id in self.result_ids]
+        if normalized.startswith("select id, root_id, box, hpath, path, type, subtype"):
+            return [
+                row for row in self.metadata_rows
+                if f"'{row.get('id')}" in text
+            ]
+        if normalized.startswith("select id, markdown, content from blocks"):
+            self.content_queries.append(text)
+            return [
+                row for row in self.content_rows
+                if f"'{row.get('id')}" in text
+            ]
+        return super().query_sql(statement)
+
+    def get_asset(self, asset_path):
+        self.asset_requests.append(str(asset_path))
+        return self.asset_bytes
+
+
+class McpServerReadEmbeddedBlocksTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path.cwd() / ".test_tmp" / "mcp_embed_read"
+        shutil.rmtree(self.root, ignore_errors=True)
+        base = self.root / "knowledge_base"
+        base.mkdir(parents=True, exist_ok=True)
+        (base / "notebooks.json").write_text(
+            json.dumps([{"id": "nb1", "name": "Main"}], ensure_ascii=False),
+            encoding="utf-8",
+        )
+        self.docs = [
+            self._doc("host", "/Host"),
+            self._doc("source-doc", "/Source"),
+            self._doc("source-b", "/Source B"),
+            *(self._doc(f"source-{index}", f"/Source {index}") for index in range(1, 9)),
+            self._doc("secret-doc", "/Secret"),
+        ]
+        (base / "docs.jsonl").write_text(
+            "".join(json.dumps(doc, ensure_ascii=False) + "\n" for doc in self.docs),
+            encoding="utf-8",
+        )
+        write_privacy_rules_cache(
+            self.root,
+            PrivacyRules(ignore=[{"scope": "document", "id": "secret-doc"}], allow=[]),
+        )
+
+    @staticmethod
+    def _doc(doc_id: str, hpath: str) -> dict[str, Any]:
+        return {
+            "id": doc_id,
+            "notebook_id": "nb1",
+            "notebook_name": "Main",
+            "hpath": hpath,
+            "title": hpath.rsplit("/", 1)[-1],
+            "path": f"/{doc_id}.sy",
+            "tags": [],
+            "word_count": 0,
+            "block_count": 1,
+            "updated": "20260501010101",
+        }
+
+    @staticmethod
+    def _meta(block_id: str, doc_id: str, block_type: str = "p", *, subtype: str = ""):
+        doc_paths = {
+            "host": "/Host",
+            "source-doc": "/Source",
+            "source-b": "/Source B",
+            "secret-doc": "/Secret",
+        }
+        return {
+            "id": block_id,
+            "root_id": doc_id,
+            "box": "nb1",
+            "hpath": doc_paths.get(doc_id, f"/{doc_id}"),
+            "path": f"/{doc_id}.sy",
+            "type": block_type,
+            "subtype": subtype,
+        }
+
+    @staticmethod
+    def _embed(block_id: str = "embed-1", sql: str = "SELECT id FROM blocks WHERE root_id='source-doc'"):
+        return {
+            "id": block_id,
+            "parent_id": "host",
+            "root_id": "host",
+            "type": "query_embed",
+            "markdown": "{{" + sql + "}}",
+            "sort": 1,
+        }
+
+    def _make_client(
+        self,
+        host_blocks: list[dict[str, Any]],
+        *,
+        result_ids: list[str] | None = None,
+        metadata_rows: list[dict[str, Any]] | None = None,
+        content_rows: list[dict[str, Any]] | None = None,
+        result_map: list[tuple[str, list[str]]] | None = None,
+        blocks_by_root: dict[str, list[dict[str, Any]]] | None = None,
+        asset_bytes: bytes = b"asset-bytes",
+    ) -> EmbedReadFakeClient:
+        client = EmbedReadFakeClient(
+            result_ids=result_ids,
+            metadata_rows=metadata_rows,
+            content_rows=content_rows,
+            result_map=result_map,
+            asset_bytes=asset_bytes,
+        )
+        client._blocks = {"host": host_blocks, **(blocks_by_root or {})}
+        client._hpaths.update({doc["id"]: doc["hpath"] for doc in self.docs})
+        client._docs["host"] = "Host body"
+        return client
+
+    def _read(self, client: EmbedReadFakeClient, **args):
+        server = mcp_server.McpServer(self.root)
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = client
+        result = server.siyuan_read({"document_id": "host", **args})
+        return server, result
+
+    def test_visible_results_preserve_sql_order_and_never_read_hidden_content(self):
+        embed = self._embed()
+        metadata = [
+            self._meta("visible-a", "source-doc"),
+            self._meta("secret-block", "secret-doc"),
+            self._meta("visible-b", "source-b"),
+        ]
+        content = [
+            {"id": "visible-a", "markdown": "Alpha visible text", "content": "Alpha visible text"},
+            {"id": "secret-block", "markdown": "SECRET_CONTENT", "content": "SECRET_CONTENT"},
+            {"id": "visible-b", "markdown": "Beta visible text", "content": "Beta visible text"},
+        ]
+        client = self._make_client(
+            [embed],
+            result_ids=["visible-a", "secret-block", "visible-b"],
+            metadata_rows=metadata,
+            content_rows=content,
+        )
+
+        _, result = self._read(client, include_block_ids=True)
+
+        self.assertIn("[1] id=embed-1 type=query_embed", result)
+        self.assertIn("嵌入块来源：/Main/Source source-doc visible-a", result)
+        self.assertIn("嵌入块来源：/Main/Source B source-b visible-b", result)
+        self.assertLess(result.index("> Alpha visible text"), result.index("> Beta visible text"))
+        self.assertIn("嵌入内容共2个块，当前展示2个块", result)
+        self.assertNotIn("secret-doc", result)
+        self.assertNotIn("secret-block", result)
+        self.assertNotIn("SECRET_CONTENT", result)
+        self.assertEqual(
+            {"visible-a", "visible-b"},
+            {block_id for block_id in ("visible-a", "visible-b") if any(f"'{block_id}'" in query for query in client.content_queries)},
+        )
+        self.assertTrue(all("secret-block" not in query for query in client.content_queries))
+
+    def test_all_hidden_results_are_reported_only_as_missing(self):
+        embed = self._embed()
+        client = self._make_client(
+            [embed],
+            result_ids=["secret-block"],
+            metadata_rows=[self._meta("secret-block", "secret-doc")],
+            content_rows=[{"id": "secret-block", "markdown": "SECRET_CONTENT", "content": "SECRET_CONTENT"}],
+        )
+
+        _, result = self._read(client)
+
+        self.assertIn("嵌入块来源：查无此块", result)
+        self.assertIn("> 查无此块", result)
+        self.assertIn("嵌入内容共0个块，当前展示0个块", result)
+        self.assertNotIn("secret-doc", result)
+        self.assertNotIn("secret-block", result)
+        self.assertNotIn("SECRET_CONTENT", result)
+        self.assertTrue(all("secret-block" not in query for query in client.content_queries))
+
+    def test_target_missing_between_metadata_and_content_reads_is_not_disclosed(self):
+        embed = self._embed(sql="SELECT id FROM blocks WHERE type='p'")
+        client = self._make_client(
+            [embed],
+            result_ids=["missing-block"],
+            metadata_rows=[self._meta("missing-block", "source-doc")],
+            content_rows=[],
+        )
+
+        _, result = self._read(client)
+
+        self.assertIn("嵌入块来源：查无此块", result)
+        self.assertIn("嵌入内容共0个块，当前展示0个块", result)
+        self.assertNotIn("source-doc", result)
+        self.assertNotIn("missing-block", result)
+
+    def test_document_target_uses_its_own_attachment_directory(self):
+        embed = self._embed()
+        client = self._make_client(
+            [embed],
+            result_ids=["source-doc"],
+            metadata_rows=[self._meta("source-doc", "source-doc", "d")],
+            content_rows=[{"id": "source-doc", "markdown": "", "content": ""}],
+            blocks_by_root={
+                "source-doc": [
+                    {
+                        "id": "source-image",
+                        "parent_id": "source-doc",
+                        "root_id": "source-doc",
+                        "type": "p",
+                        "markdown": "![Diagram](assets/diagram.png)\nSource paragraph",
+                        "sort": 1,
+                    }
+                ]
+            },
+            asset_bytes=b"\x89PNG\r\nembedded-image",
+        )
+
+        _, result = self._read(client)
+
+        target_asset = mcp_server.attachment_root_dir(self.root, "source-doc") / "assets" / "diagram.png"
+        self.assertTrue(target_asset.exists())
+        self.assertEqual(["assets/diagram.png"], client.asset_requests)
+        self.assertIn("嵌入块来源：/Main/Source source-doc", result)
+        self.assertNotIn("source-image", result)
+        self.assertIn(target_asset.resolve().as_posix(), result)
+        self.assertIn("> Source paragraph", result)
+        self.assertIn("嵌入内容共1个块，当前展示1个块", result)
+
+    def test_heading_target_includes_heading_and_its_children(self):
+        embed = self._embed()
+        client = self._make_client(
+            [embed],
+            result_ids=["heading-1"],
+            metadata_rows=[self._meta("heading-1", "source-doc", "h", subtype="h2")],
+            content_rows=[{"id": "heading-1", "markdown": "## Section", "content": "Section"}],
+            blocks_by_root={
+                "heading-1": [
+                    {
+                        "id": "heading-child",
+                        "parent_id": "heading-1",
+                        "root_id": "source-doc",
+                        "type": "p",
+                        "markdown": "Inside section",
+                        "sort": 1,
+                    }
+                ]
+            },
+        )
+
+        _, result = self._read(client)
+
+        self.assertIn("> ## Section", result)
+        self.assertIn("> Inside section", result)
+        self.assertIn("嵌入内容共2个块，当前展示2个块", result)
+
+    def test_more_than_twenty_sql_matches_are_capped_after_visibility_filtering(self):
+        embed = self._embed()
+        ids = [f"match-{i}" for i in range(25)]
+        metadata = [self._meta(block_id, "source-doc") for block_id in ids]
+        content = [
+            {"id": block_id, "markdown": f"Content {i}", "content": f"Content {i}"}
+            for i, block_id in enumerate(ids)
+        ]
+        client = self._make_client(
+            [embed],
+            result_ids=ids,
+            metadata_rows=metadata,
+            content_rows=content,
+        )
+
+        _, result = self._read(client)
+
+        self.assertIn("嵌入内容共25个块，当前展示20个块", result)
+        self.assertIn("match-19", result)
+        self.assertNotIn("match-20", result)
+        self.assertTrue(all("'match-20'" not in query for query in client.content_queries))
+
+    def test_embed_resolution_error_returns_sql_fallback_instead_of_failing_read(self):
+        embed = self._embed(sql="SELECT id FROM blocks WHERE id='missing-target'")
+        client = self._make_client([embed])
+        client.fail_embed_query = True
+
+        _, result = self._read(client)
+
+        self.assertIn("{{SELECT id FROM blocks WHERE id='missing-target'}}", result)
+        self.assertIn("嵌入块内容：内容超预算不展开", result)
+        self.assertIn("嵌入内容共0个块，当前展示0个块", result)
+
+    def test_non_select_embed_stays_as_original_sql(self):
+        embed = self._embed(sql="UPDATE blocks SET content='changed'")
+        client = self._make_client([embed])
+
+        _, result = self._read(client)
+
+        self.assertIn("{{UPDATE blocks SET content='changed'}}", result)
+        self.assertNotIn("嵌入块来源：", result)
+        self.assertFalse(any("as embed_matches" in query.casefold() for query in client.sql_calls))
+
+    def test_oversized_embed_stops_contiguous_window_then_falls_back_alone(self):
+        embed = self._embed(sql="SELECT id FROM blocks WHERE id='heavy-block'")
+        host_blocks = [
+            {"id": "before", "parent_id": "host", "root_id": "host", "type": "p", "markdown": "before " * 900, "sort": 1},
+            {**embed, "sort": 2},
+            {"id": "after", "parent_id": "host", "root_id": "host", "type": "p", "markdown": "AFTER_WINDOW_BLOCK", "sort": 3},
+        ]
+        client = self._make_client(
+            host_blocks,
+            result_ids=["heavy-block"],
+            metadata_rows=[self._meta("heavy-block", "source-doc")],
+            content_rows=[{"id": "heavy-block", "markdown": "UNIQUE_SECRET_EMBED " * 1200, "content": ""}],
+        )
+
+        _, first = self._read(client, block_limit=3, token_budget=1000)
+        _, second = self._read(client, block_start=2, block_limit=3, token_budget=1000)
+        _, third = self._read(client, block_start=3, block_limit=3, token_budget=1000)
+
+        self.assertIn("block_start=2", first)
+        self.assertNotIn("嵌入块来源：", first)
+        self.assertIn("嵌入块内容：内容超预算不展开", second)
+        self.assertIn("当前展示0个块", second)
+        self.assertNotIn("UNIQUE_SECRET_EMBED", second)
+        self.assertIn("block_start=3", second)
+        self.assertIn("AFTER_WINDOW_BLOCK", third)
+
+    def test_image_budget_failure_falls_back_without_partial_embed_content(self):
+        embed = self._embed(sql="SELECT id FROM blocks WHERE id='image-block'")
+        client = self._make_client(
+            [embed],
+            result_ids=["image-block"],
+            metadata_rows=[self._meta("image-block", "source-doc")],
+            content_rows=[{
+                "id": "image-block",
+                "markdown": "![Photo](assets/photo.png)\nUNIQUE_IMAGE_EMBED_TEXT",
+                "content": "",
+            }],
+            asset_bytes=b"\x89PNG\r\n" + b"x" * 32,
+        )
+
+        with mock.patch.object(mcp_server, "load_config", return_value=mock.Mock(read_inline_images=True)):
+            with mock.patch.object(mcp_server, "INLINE_RESPONSE_BUDGET_BYTES", 4):
+                _, result = self._read(client, token_budget=10000)
+
+        self.assertIn("嵌入块内容：内容超预算不展开", result)
+        self.assertNotIn("UNIQUE_IMAGE_EMBED_TEXT", result)
+        self.assertNotIn("@@SIYUAN-IMAGE:", result)
+
+    def test_recursive_embed_stops_at_depth_seven_before_reading_next_target(self):
+        host_embed = self._embed("embed-0", "SELECT id FROM blocks WHERE id='source-1'")
+        blocks_by_root: dict[str, list[dict[str, Any]]] = {}
+        metadata = [self._meta("host", "host", "d")]
+        content = [{"id": "host", "markdown": "", "content": ""}]
+        result_map: list[tuple[str, list[str]]] = []
+        for index in range(1, 9):
+            doc_id = f"source-{index}"
+            metadata.append(self._meta(doc_id, doc_id, "d"))
+            content.append({"id": doc_id, "markdown": "", "content": ""})
+            if index < 8:
+                next_id = f"source-{index + 1}"
+                result_map.append((f"id='{next_id}'", [next_id]))
+                blocks_by_root[doc_id] = [
+                    {
+                        "id": f"embed-{index}",
+                        "parent_id": doc_id,
+                        "root_id": doc_id,
+                        "type": "query_embed",
+                        "markdown": f"{{{{SELECT id FROM blocks WHERE id='{next_id}'}}}}",
+                        "sort": 1,
+                    }
+                ]
+        result_map.insert(0, ("id='source-1'", ["source-1"]))
+        client = self._make_client(
+            [host_embed],
+            metadata_rows=metadata,
+            content_rows=content,
+            result_map=result_map,
+            blocks_by_root=blocks_by_root,
+        )
+
+        _, result = self._read(client)
+
+        self.assertIn("嵌入层级超过7层，停止解析", result)
+        self.assertNotIn("source-8'", " ".join(client.content_queries))
+
+    def test_recursive_cycle_stops_at_repeated_embed_block(self):
+        first_embed = self._embed("embed-a", "SELECT id FROM blocks WHERE id='source-doc'")
+        second_embed = {
+            "id": "embed-b",
+            "parent_id": "source-doc",
+            "root_id": "source-doc",
+            "type": "query_embed",
+            "markdown": "{{SELECT id FROM blocks WHERE id='host'}}",
+            "sort": 1,
+        }
+        client = self._make_client(
+            [first_embed],
+            metadata_rows=[
+                self._meta("source-doc", "source-doc", "d"),
+                self._meta("host", "host", "d"),
+            ],
+            content_rows=[
+                {"id": "source-doc", "markdown": "", "content": ""},
+                {"id": "host", "markdown": "", "content": ""},
+            ],
+            result_map=[
+                ("id='source-doc'", ["source-doc"]),
+                ("id='host'", ["host"]),
+            ],
+            blocks_by_root={"source-doc": [second_embed]},
+        )
+
+        _, result = self._read(client)
+
+        self.assertIn("循环嵌套，停止解析", result)
+        self.assertIn("嵌入内容共0个块，当前展示0个块", result)
+        self.assertLessEqual(result.count("循环嵌套，停止解析"), 1)
+
+
 class McpServerReadInlineImagesTests(unittest.TestCase):
     """读文档时内联返回图片（docs/图片内联需求-2026-09-14.md 已定决策）。"""
 

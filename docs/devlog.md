@@ -2,6 +2,15 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-09-30：siyuan_read 展开嵌入块
+
+- 实现 `query_embed` 的惰性解析：仅解析完整 `{{SELECT ...}}`；先获取目标 ID 和元数据，经可见索引、Privacy Rules 与系统文档过滤后才读取正文。不可见和缺失目标不披露路径、ID 或数量；无可见结果统一显示「查无此块」。
+- 文档、标题和普通块按各自规则渲染，最多展开 20 条可见匹配；嵌套循环停止，递归深度上限为 7。每个嵌入块带来源、统计与来源文档编辑提示；超出 20 条的可见匹配计入总数，隐藏目标不计入。
+- 嵌入作为原子块共享宿主文档的 token 与单笔图片预算。中段超预算时停在嵌入块前；窗口首块超预算或渲染异常时保留原 SQL 和统一降级提示，后续窗口从下一宿主块继续。附件按各自来源文档发现与提取，避免通过导出提前读取未过滤目标。
+- 同步 `ARCHITECTURE.md`、`DEVELOPMENT_GUIDE.md`、SiYuan Bridge Skill 和本方案的状态/统计口径；更新 `siyuan_read` 工具描述。
+- 测试：`tests/test_mcp_server.py` 为 `255 passed`；完整 `python -m pytest tests -q` 为 `414 passed, 1 skipped, 3 warnings`（现有 `locale.getdefaultlocale` 弃用警告）。
+- 开发版 MCP 实调：读取测试笔记本的嵌入夹具，正常预算下展开；`block_start=2`、`token_budget=1000` 时只返回原 SQL、统一超预算提示、0 展示统计和下一窗口 `block_start=3`。验证后将 `siyuan-bridge-dev` 恢复为 `disabled`。启动包另提示「MCP 使用指南」系统文档缺失，本次未处理。
+- 版本保持 `1.10.2`，未发布；发布时按 MINOR 升至 `1.11.0`。本次按用户要求提交本地保存点，不推送或部署。
 ## 2026-09-28：SQL 搜索丢弃可见索引之外的行
 
 - 问题：`siyuan_find(mode=sql)` 在结果行没有文档身份时，把块 ID 当成文档 ID。隐私规则对不上就当可见，并把 `content` 印出来。隐藏文档不在可见索引里，因此会漏出。关联 issue：<https://github.com/alone-tree/siyuan-bridge/issues/12>。

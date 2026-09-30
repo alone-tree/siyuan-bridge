@@ -469,6 +469,25 @@ WINDOW_PREVIEW_INTERVAL = 50
 WINDOW_PREVIEW_MIN_HEADINGS = 5
 WINDOW_PREVIEW_MIN_BLOCKS = 100
 WINDOW_PREVIEW_PREFIX_LEN = 80
+MAX_EMBED_RESULTS = 20
+MAX_EMBED_DEPTH = 7
+EMBED_CONTENT_HINT = "嵌入内容来自其他文档，不要把嵌入块当普通块编辑（避免 SQL 被改丢引用），要改去来源文档"
+
+
+@dataclass
+class EmbeddedContent:
+    markdown: str
+    block_count: int
+    total_block_count: int | None = None
+
+
+@dataclass
+class EmbedResolutionContext:
+    client: Any
+    docs_by_id: dict[str, dict[str, Any]]
+    notebook_names: dict[str, str]
+    compiled_ignore: list[dict[str, Any]]
+    compiled_allow: list[dict[str, Any]]
 
 
 @dataclass
@@ -483,6 +502,9 @@ class DisplayBlock:
     heading_level: int | None = None
     heading_text: str = ""
     source_markdown: str = ""
+    embed_resolver: Callable[[], EmbeddedContent | None] | None = field(
+        default=None, repr=False, compare=False
+    )
 
 
 @dataclass
@@ -1516,8 +1538,47 @@ def estimate_token_count(text: str) -> int:
     return int(cjk * 1.0 + latin_words * 1.3 + digits * 0.8 + punct * 0.4)
 
 
-def build_display_blocks(client: Any, root_id: str, *, include_block_ids: bool = False) -> list[DisplayBlock]:
-    """Build ordered list of DisplayBlock using SiYuan's getChildBlocks API."""
+def extract_embed_select(markdown: str) -> str | None:
+    match = re.fullmatch(r"\s*\{\{\s*(.*?)\s*\}\}\s*", str(markdown or ""), re.DOTALL)
+    if not match:
+        return None
+    statement = match.group(1).strip().rstrip(";").strip()
+    if not re.match(r"(?is)^SELECT\b", statement):
+        return None
+    return statement
+
+
+def quote_embedded_markdown(markdown: str) -> str:
+    lines = str(markdown or "").rstrip().splitlines()
+    if not lines:
+        return "> （空内容）"
+    return "\n".join(f"> {line}" if line else ">" for line in lines)
+
+
+def finish_embedded_content(content: EmbeddedContent, displayed_count: int) -> str:
+    total_count = content.total_block_count
+    if total_count is None:
+        total_count = content.block_count
+    return "\n".join([
+        content.markdown,
+        f"嵌入内容共{total_count}个块，当前展示{displayed_count}个块",
+        EMBED_CONTENT_HINT,
+    ])
+
+
+def sql_string_list(values: list[str]) -> str:
+    return ", ".join("'" + str(value).replace("'", "''") + "'" for value in values)
+
+
+def build_display_blocks(
+    client: Any,
+    root_id: str,
+    *,
+    include_block_ids: bool = False,
+    resolve_embeds: bool = False,
+    embed_resolver: Callable[[dict[str, Any]], EmbeddedContent | None] | None = None,
+) -> list[DisplayBlock]:
+    """Build ordered display blocks using getChildBlocks; embed resolution stays lazy."""
     blocks: list[DisplayBlock] = []
     visited: set[str] = set()
 
@@ -1617,6 +1678,10 @@ def build_display_blocks(client: Any, root_id: str, *, include_block_ids: bool =
             return
 
         estimated_tokens = estimate_token_count(block_md)
+        lazy_embed_resolver = None
+        if resolve_embeds and block_type == "query_embed" and embed_resolver is not None:
+            captured_block = dict(block)
+            lazy_embed_resolver = lambda captured_block=captured_block: embed_resolver(captured_block)
         blocks.append(DisplayBlock(
             index=len(blocks) + 1,
             id=block_id,
@@ -1628,6 +1693,7 @@ def build_display_blocks(client: Any, root_id: str, *, include_block_ids: bool =
             heading_level=heading_level,
             heading_text=heading_text,
             source_markdown=block_md,
+            embed_resolver=lazy_embed_resolver,
         ))
 
         # List items and tables: their markdown already contains subtree content — skip children
@@ -2886,6 +2952,287 @@ class McpServer:
             if isinstance(notebook, dict)
         }
 
+    def _make_embed_resolution_context(self, client: Any) -> EmbedResolutionContext:
+        indexed_docs = load_docs(self.root)
+        privacy = load_privacy_rules(self.root)
+        visible_docs = filter_documents(indexed_docs, privacy)
+        return EmbedResolutionContext(
+            client=client,
+            docs_by_id={str(doc.get("id") or ""): doc for doc in visible_docs if doc.get("id")},
+            notebook_names=self.load_notebook_names(),
+            compiled_ignore=compile_rules(privacy.ignore, indexed_docs),
+            compiled_allow=compile_rules(privacy.allow, indexed_docs),
+        )
+
+    def _query_embed_targets(
+        self, context: EmbedResolutionContext, statement: str
+    ) -> list[dict[str, Any]]:
+        client = context.client
+        try:
+            # Only IDs leave the user-provided SELECT. Fetch block metadata separately,
+            # filter it against the visible index, and read content only afterwards.
+            id_rows = client.query_sql(f"SELECT id FROM ({statement}) AS embed_matches")
+            ordered_ids: list[str] = []
+            seen: set[str] = set()
+            for row in id_rows:
+                block_id = str(row.get("id") or "")
+                if block_id and block_id not in seen:
+                    seen.add(block_id)
+                    ordered_ids.append(block_id)
+            if not ordered_ids:
+                return []
+            metadata_rows = client.query_sql(
+                "SELECT id, root_id, box, hpath, path, type, subtype "
+                f"FROM blocks WHERE id IN ({sql_string_list(ordered_ids)})"
+            )
+        except SiYuanApiError:
+            return []
+
+        metadata_by_id = {
+            str(row.get("id") or ""): row
+            for row in metadata_rows
+            if row.get("id")
+        }
+        matches: list[dict[str, Any]] = []
+        for block_id in ordered_ids:
+            block = metadata_by_id.get(block_id)
+            if not block:
+                continue
+            block_type = str(block.get("type") or "")
+            if block_type not in ("d", "NodeDocument") and not str(
+                block.get("root_id") or block.get("rootID") or ""
+            ):
+                continue
+            doc_id = block_document_id(block)
+            if not doc_id or doc_id not in context.docs_by_id:
+                continue
+            doc = live_doc_from_block(block, context.docs_by_id, context.notebook_names)
+            if not is_live_doc_visible(doc, context.compiled_ignore, context.compiled_allow):
+                continue
+            if is_privacy_rules_document(
+                str(doc.get("hpath") or ""),
+                root=self.root,
+                document_id=doc_id,
+                notebook_id=str(doc.get("notebook_id") or ""),
+            ):
+                continue
+            matches.append({"block": block, "document": doc})
+        return matches
+
+    def _build_embedded_display_blocks(
+        self,
+        context: EmbedResolutionContext,
+        root_id: str,
+        depth: int,
+        active_embed_ids: frozenset[str],
+    ) -> list[DisplayBlock]:
+        def resolve(block: dict[str, Any]) -> EmbeddedContent | None:
+            return self._resolve_embedded_block(
+                context,
+                block,
+                depth=depth,
+                active_embed_ids=active_embed_ids,
+            )
+
+        return build_display_blocks(
+            context.client,
+            root_id,
+            resolve_embeds=True,
+            embed_resolver=resolve,
+        )
+
+    def _expand_nested_embeds(self, blocks: list[DisplayBlock]) -> list[DisplayBlock]:
+        for display_block in blocks:
+            resolver = display_block.embed_resolver
+            if resolver is None:
+                continue
+            display_block.embed_resolver = None
+            embedded = resolver()
+            if embedded is None:
+                continue
+            display_block.markdown = "\n".join(
+                part for part in (display_block.markdown, finish_embedded_content(embedded, embedded.block_count))
+                if part
+            )
+            display_block.estimated_tokens = estimate_token_count(display_block.markdown)
+        return blocks
+
+    def _embedded_target_content(
+        self,
+        context: EmbedResolutionContext,
+        target: dict[str, Any],
+        content_row: dict[str, Any],
+        nested_depth: int,
+        nested_active_ids: frozenset[str],
+    ) -> tuple[str, int]:
+        client = context.client
+        block = target["block"]
+        doc = target["document"]
+        block_id = str(block.get("id") or "")
+        doc_id = str(doc.get("id") or "")
+        block_type = str(block.get("type") or "")
+        combined = {**block, **content_row}
+
+        if block_type in ("d", "NodeDocument"):
+            blocks = self._build_embedded_display_blocks(
+                context, doc_id, nested_depth, nested_active_ids
+            )
+            self._expand_nested_embeds(blocks)
+            markdown = "\n\n".join(item.markdown for item in blocks if item.markdown.strip())
+            block_count = len(blocks)
+        elif block_type == "h":
+            heading_markdown = str(combined.get("markdown") or "")
+            if not heading_markdown:
+                getter = getattr(client, "get_block_kramdown", None)
+                if callable(getter):
+                    heading_markdown = str(getter(block_id) or "")
+            children = self._build_embedded_display_blocks(
+                context, block_id, nested_depth, nested_active_ids
+            )
+            self._expand_nested_embeds(children)
+            markdown = "\n\n".join(
+                part for part in [heading_markdown, *(item.markdown for item in children)] if part.strip()
+            )
+            block_count = (1 if heading_markdown.strip() else 0) + len(children)
+        else:
+            markdown = str(combined.get("markdown") or "")
+            if not markdown:
+                getter = getattr(client, "get_block_kramdown", None)
+                if callable(getter):
+                    markdown = str(getter(block_id) or "")
+            if not markdown:
+                markdown = str(combined.get("content") or "")
+            if block_type == "query_embed" and markdown:
+                nested = self._resolve_embedded_block(
+                    context,
+                    combined,
+                    depth=nested_depth,
+                    active_embed_ids=nested_active_ids,
+                )
+                if nested is not None:
+                    markdown = "\n".join(
+                        part for part in (markdown, finish_embedded_content(nested, nested.block_count)) if part
+                    )
+            block_count = 1 if markdown.strip() else 0
+
+        if markdown:
+            extract_attachments(markdown, client, doc_id, self.root)
+            markdown = rewrite_local_asset_links(markdown, doc_id, self.root)
+        return markdown, block_count
+
+    def _resolve_embedded_block(
+        self,
+        context: EmbedResolutionContext,
+        block: dict[str, Any],
+        *,
+        depth: int,
+        active_embed_ids: frozenset[str],
+    ) -> EmbeddedContent | None:
+        statement = extract_embed_select(block_field(block, "markdown"))
+        if statement is None:
+            return None
+
+        client = context.client
+        embed_id = block_field(block, "id")
+        with ensure_notebooks_open(client):
+            matches = self._query_embed_targets(context, statement)
+            if not matches:
+                return EmbeddedContent(
+                    "\n".join(["嵌入块来源：查无此块", "嵌入块内容：", "> 查无此块"]),
+                    0,
+                )
+
+            stop_reason = None
+            if embed_id and embed_id in active_embed_ids:
+                stop_reason = "循环嵌套，停止解析"
+            elif depth >= MAX_EMBED_DEPTH:
+                stop_reason = "嵌入层级超过7层，停止解析"
+            if stop_reason:
+                lines = ["嵌入块内容："]
+                if len(matches) == 1:
+                    lines = [
+                        f"嵌入块来源：{self._embedded_source_label(matches[0])}",
+                        f"嵌入块内容：{stop_reason}",
+                    ]
+                else:
+                    for target in matches[:MAX_EMBED_RESULTS]:
+                        lines.extend([
+                            f"嵌入块来源：{self._embedded_source_label(target)}",
+                            f"> {stop_reason}",
+                        ])
+                return EmbeddedContent("\n".join(lines), 0)
+
+            selected = matches[:MAX_EMBED_RESULTS]
+            truncated_match_count = max(0, len(matches) - len(selected))
+            ids = [str(target["block"].get("id") or "") for target in selected]
+            try:
+                content_rows = client.query_sql(
+                    "SELECT id, markdown, content FROM blocks "
+                    f"WHERE id IN ({sql_string_list(ids)})"
+                ) if ids else []
+            except SiYuanApiError:
+                return EmbeddedContent(
+                    "\n".join(["嵌入块来源：查无此块", "嵌入块内容：", "> 查无此块"]),
+                    0,
+                )
+            content_by_id = {
+                str(row.get("id") or ""): row
+                for row in content_rows
+                if row.get("id")
+            }
+            selected = [
+                target for target in selected
+                if str(target["block"].get("id") or "") in content_by_id
+            ]
+            if not selected:
+                return EmbeddedContent(
+                    "\n".join(["嵌入块来源：查无此块", "嵌入块内容：", "> 查无此块"]),
+                    0,
+                )
+
+            rendered: list[tuple[str, str]] = []
+            block_count = 0
+            next_active_ids = active_embed_ids | ({embed_id} if embed_id else set())
+            for target in selected:
+                target_id = str(target["block"].get("id") or "")
+                try:
+                    markdown, rendered_count = self._embedded_target_content(
+                        context,
+                        target,
+                        content_by_id.get(target_id, {}),
+                        depth + 1,
+                        frozenset(next_active_ids),
+                    )
+                except SiYuanApiError:
+                    return EmbeddedContent(
+                        "\n".join(["嵌入块来源：查无此块", "嵌入块内容：", "> 查无此块"]),
+                        0,
+                    )
+                rendered.append((self._embedded_source_label(target), markdown))
+                block_count += rendered_count
+
+            if len(rendered) == 1:
+                source, markdown = rendered[0]
+                body_lines = [f"嵌入块来源：{source}", "嵌入块内容："]
+                body_lines.append(quote_embedded_markdown(markdown))
+            else:
+                body_lines = ["嵌入块内容："]
+                for source, markdown in rendered:
+                    body_lines.append(f"嵌入块来源：{source}")
+                    body_lines.append(quote_embedded_markdown(markdown))
+            total_block_count = block_count + truncated_match_count
+            return EmbeddedContent("\n".join(body_lines), block_count, total_block_count)
+
+    def _embedded_source_label(self, target: dict[str, Any]) -> str:
+        block = target["block"]
+        doc = target["document"]
+        doc_id = str(doc.get("id") or "")
+        block_type = str(block.get("type") or "")
+        label = f"{display_document_path(doc)} {doc_id}"
+        if block_type not in ("d", "NodeDocument"):
+            label += f" {block.get('id') or ''}".rstrip()
+        return label
+
     def siyuan_read(self, args: dict[str, Any]) -> str:
         self._pending_read_images = None
         doc = self.resolve_visible_document(args)
@@ -2915,13 +3262,40 @@ class McpServer:
         doc_id = str(doc.get("id"))
         notebook_id = str(doc.get("notebook_id", ""))
 
-        with ensure_notebooks_open(client, [notebook_id]):
-            display_blocks = build_display_blocks(client, doc_id, include_block_ids=include_block_ids)
+        embed_context = self._make_embed_resolution_context(client)
 
-        # Fallback: if block build returns empty (e.g., very unusual document), use export
+        def resolve_host_embed(block: dict[str, Any]) -> EmbeddedContent | None:
+            return self._resolve_embedded_block(
+                embed_context,
+                block,
+                depth=0,
+                active_embed_ids=frozenset(),
+            )
+
+        with ensure_notebooks_open(client, [notebook_id]):
+            display_blocks = build_display_blocks(
+                client,
+                doc_id,
+                include_block_ids=include_block_ids,
+                resolve_embeds=True,
+                embed_resolver=resolve_host_embed,
+            )
+
+        # Fallback: export is safe only when the host document has no query embeds,
+        # because SiYuan export expands their targets before bridge privacy filtering.
         if not display_blocks:
             with ensure_notebooks_open(client, [notebook_id]):
-                markdown = client.export_markdown(doc_id)
+                try:
+                    query_embed_rows = client.query_sql(
+                        "SELECT id FROM blocks "
+                        f"WHERE root_id={sql_string_list([doc_id])} AND type='query_embed' LIMIT 1"
+                    )
+                except SiYuanApiError:
+                    query_embed_rows = [{}]
+                if query_embed_rows:
+                    markdown = "文档块序列不可用，嵌入块未展开。"
+                else:
+                    markdown = client.export_markdown(doc_id)
             attachment_count = extract_attachments(markdown, client, doc_id, self.root)
             image_stats: dict[str, int] | None = None
             if inline_images:
@@ -2956,53 +3330,147 @@ class McpServer:
         total_blocks = len(display_blocks)
         heading_count = sum(1 for b in display_blocks if b.is_heading)
 
-        # Extract attachments from the markdown (use export for attachment discovery)
-        with ensure_notebooks_open(client, [notebook_id]):
-            full_md = client.export_markdown(doc_id)
-        attachment_count = extract_attachments(full_md, client, doc_id, self.root)
+        # Read only the host document's own block Markdown here. Export may expand
+        # query embeds before their target visibility has been checked.
+        host_markdown = "\n\n".join(
+            block.source_markdown for block in display_blocks if block.source_markdown
+        )
+        attachment_count = extract_attachments(host_markdown, client, doc_id, self.root)
 
         # Clamp block window params
         block_start = max(int(args.get("block_start") or 1), 1)
         block_limit = clamp_int(args.get("block_limit"), DEFAULT_BLOCK_LIMIT, MIN_BLOCK_LIMIT, MAX_BLOCK_LIMIT)
         token_budget = clamp_int(args.get("token_budget"), DEFAULT_TOKEN_BUDGET, MIN_TOKEN_BUDGET, MAX_TOKEN_BUDGET)
 
-        # Select window
+        # Select one contiguous block window. Embedded blocks are resolved only when
+        # they are reached, so blocks outside this window never read their targets.
         start_idx = max(block_start - 1, 0)
         end_idx = min(start_idx + block_limit, total_blocks)
-
-        # Apply token budget — include at least one block
         window_blocks: list[DisplayBlock] = []
+        body_lines: list[str] = []
         token_sum = 0
-        for db in display_blocks[start_idx:end_idx]:
-            block_cost = db.estimated_tokens
-            if inline_images:
-                block_cost += INLINE_IMAGE_TOKEN_COST * count_inlineable_images(db.markdown)
-            if window_blocks and token_sum + block_cost > token_budget:
-                break
+        image_bytes_used = 0
+        image_fill_stopped = False
+        image_items: list[dict[str, str]] = []
+        image_stats: dict[str, int] | None = (
+            {"total": 0, "inlined": 0, "inlined_bytes": 0, "over_budget": 0}
+            if inline_images else None
+        )
+
+        def add_image_results(
+            markdown: str,
+            images: list[dict[str, str]],
+            stats: dict[str, int],
+        ) -> str:
+            nonlocal image_bytes_used, image_fill_stopped
+            if image_stats is not None:
+                for key in image_stats:
+                    image_stats[key] += stats.get(key, 0)
+            image_bytes_used += stats.get("inlined_bytes", 0)
+            if stats.get("over_budget", 0):
+                image_fill_stopped = True
+            offset = len(image_items)
+            markdown = re.sub(
+                r"@@SIYUAN-IMAGE:(\d+)@@",
+                lambda match: f"@@SIYUAN-IMAGE:{offset + int(match.group(1))}@@",
+                markdown,
+            )
+            image_items.extend(images)
+            return markdown
+
+        def inline_one_block(markdown: str) -> tuple[str, list[dict[str, str]], dict[str, int]]:
+            remaining = max(0, INLINE_RESPONSE_BUDGET_BYTES - image_bytes_used)
+            return inline_images_into_markdown(
+                markdown,
+                root=self.root,
+                client=client,
+                doc_id=doc_id,
+                allow_large=allow_large,
+                budget_bytes=remaining,
+                stop_at_start=image_fill_stopped,
+            )
+
+        def append_embed_fallback(db: DisplayBlock, embedded: EmbeddedContent | None) -> None:
+            nonlocal token_sum
+            total_count = 0
+            if embedded is not None:
+                total_count = embedded.total_block_count
+                if total_count is None:
+                    total_count = embedded.block_count
+            fallback_markdown = "\n".join([
+                db.markdown,
+                "嵌入块内容：内容超预算不展开",
+                f"嵌入内容共{total_count}个块，当前展示0个块",
+                EMBED_CONTENT_HINT,
+            ])
             window_blocks.append(db)
+            body_lines.append(fallback_markdown)
+            token_sum += estimate_token_count(fallback_markdown)
+
+        for db in display_blocks[start_idx:end_idx]:
+            resolved: EmbeddedContent | None = None
+            candidate_markdown = db.markdown
+            if db.embed_resolver is not None:
+                resolver = db.embed_resolver
+                db.embed_resolver = None
+                try:
+                    resolved = resolver()
+                except Exception:
+                    if window_blocks:
+                        break
+                    append_embed_fallback(db, None)
+                    break
+                if resolved is not None:
+                    candidate_markdown = "\n".join([
+                        db.markdown,
+                        finish_embedded_content(resolved, resolved.block_count),
+                    ])
+
+            block_cost = estimate_token_count(candidate_markdown) if resolved is not None else db.estimated_tokens
+            if inline_images:
+                block_cost += INLINE_IMAGE_TOKEN_COST * count_inlineable_images(candidate_markdown)
+
+            exceeds_token_budget = token_sum + block_cost > token_budget
+            if resolved is not None and exceeds_token_budget:
+                if window_blocks:
+                    break
+                append_embed_fallback(db, resolved)
+                break
+
+            if resolved is None and window_blocks and exceeds_token_budget:
+                break
+
+            if inline_images:
+                try:
+                    prepared, images, stats = inline_one_block(candidate_markdown)
+                except Exception:
+                    if resolved is None:
+                        raise
+                    if window_blocks:
+                        break
+                    append_embed_fallback(db, resolved)
+                    break
+                if resolved is not None and (
+                    stats.get("over_budget", 0)
+                    or stats.get("inlined", 0) < count_inlineable_images(candidate_markdown)
+                ):
+                    if window_blocks:
+                        break
+                    append_embed_fallback(db, resolved)
+                    break
+                candidate_markdown = add_image_results(prepared, images, stats)
+
+            window_blocks.append(db)
+            if candidate_markdown.strip():
+                body_lines.append(candidate_markdown)
             token_sum += block_cost
 
         window_tokens = token_sum
         first_idx = window_blocks[0].index if window_blocks else start_idx + 1
         last_idx = window_blocks[-1].index if window_blocks else start_idx
-
-        # Build block text for current window（图片内联先于头部组装，供头部提示行使用）
-        body_lines: list[str] = []
-        for db in window_blocks:
-            if db.markdown.strip():
-                body_lines.append(db.markdown)
         body = "\n\n".join(body_lines)
-        image_stats: dict[str, int] | None = None
         if inline_images:
-            body, images, image_stats = inline_images_into_markdown(
-                body,
-                root=self.root,
-                client=client,
-                doc_id=doc_id,
-                allow_large=allow_large,
-                budget_bytes=INLINE_RESPONSE_BUDGET_BYTES,
-            )
-            self._pending_read_images = images or None
+            self._pending_read_images = image_items or None
         body = rewrite_local_asset_links(body, doc_id, self.root)
 
         # Build header
@@ -4763,7 +5231,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_read",
-            "description": "Read a visible SiYuan document as Markdown. Prefer document path including notebook name, e.g. /Notebook/Folder/Doc; use document_id only as fallback. Always returns the document outline and one complete block window. Set include_block_ids=true before any siyuan_edit call to get exact [index] id type targets. Normal reading keeps Markdown clean and hides block IDs. When inline image reading is enabled in the plugin settings, images in this window are returned as image content blocks interleaved with the text, up to a 9 MB per-call image budget; images beyond the budget and unsupported images are reported at their position with their location.",
+            "description": "Read a visible SiYuan document as Markdown. Prefer document path including notebook name, e.g. /Notebook/Folder/Doc; use document_id only as fallback. Always returns the document outline and one complete block window. Set include_block_ids=true before any siyuan_edit call to get exact [index] id type targets. Normal reading keeps Markdown clean and hides block IDs. SELECT query_embed blocks in the selected window expand privacy-visible matches as quoted Markdown with source paths; hidden targets are never disclosed. Embedded blocks remain atomic under token and shared image budgets, preserving contiguous-window behavior. When inline image reading is enabled in the plugin settings, images in this window are returned as image content blocks interleaved with the text, up to a 9 MB per-call image budget; images beyond the budget and unsupported images are reported at their position with their location.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -5005,6 +5473,7 @@ def inline_images_into_markdown(
     allow_large: bool,
     budget_bytes: int = INLINE_RESPONSE_BUDGET_BYTES,
     fetch_url: Callable[[str, int], bytes] | None = None,
+    stop_at_start: bool = False,
 ) -> tuple[str, list[dict[str, str]], dict[str, int]]:
     """把 Markdown 中的图片引用替换为内联标记或原位声明。
 
@@ -5019,12 +5488,16 @@ def inline_images_into_markdown(
     image_blocks: list[dict[str, str]] = []
     stats = {"total": 0, "inlined": 0, "inlined_bytes": 0, "over_budget": 0}
     remaining = None if allow_large else budget_bytes
-    stopped = False
+    stopped = stop_at_start and not allow_large
     budget_label = _format_budget_label(budget_bytes)
     fetch = fetch_url or fetch_url_bytes
 
     def local_display(url: str) -> str:
-        rel = unquote(url[len("assets/"):] if url.lower().startswith("assets/") else url.lstrip("/"))
+        decoded = unquote(url)
+        path = Path(decoded)
+        if path.is_absolute():
+            return path.resolve().as_posix()
+        rel = decoded[len("assets/"):] if decoded.lower().startswith("assets/") else decoded.lstrip("/")
         return (attachment_root_dir(root, doc_id) / "assets" / rel).resolve().as_posix()
 
     def budget_note(display: str, is_local: bool, exhausted: bool) -> str:
@@ -5065,7 +5538,7 @@ def inline_images_into_markdown(
             if is_network:
                 # 流式下载边下边计数：中止线取剩余预算对应的原始字节上限
                 # （原始 L 字节 base64 后为 ceil(L/3)*4，floor((remaining//4)*3) 保证不超）。
-                data = fetch(url, 0 if remaining is None else (remaining // 4) * 3)
+                data = fetch(url, 0 if remaining is None else max(1, (remaining // 4) * 3))
                 if mime is None:
                     # 网络图后缀不可靠，下载后按文件魔数识别。
                     mime = sniff_image_mime(data)
@@ -5074,8 +5547,22 @@ def inline_images_into_markdown(
                             return f"[图片未返回：格式 {ext} 平台通常不支持内联。文件：{display}]"
                         return f"[图片未返回：无法识别图片格式（非常见 PNG/JPEG/GIF/WebP）。文件：{display}]"
             else:
-                rel = unquote(url[len("assets/"):] if url.lower().startswith("assets/") else url.lstrip("/"))
-                local = attachment_root_dir(root, doc_id) / "assets" / rel
+                decoded = unquote(url)
+                requested_path = Path(decoded)
+                if requested_path.is_absolute():
+                    local = requested_path.resolve()
+                    attachments_root = (root / "ai_workspace" / "attachments").resolve()
+                    try:
+                        relative = local.relative_to(attachments_root).as_posix()
+                    except ValueError:
+                        return f"[图片未返回：本地路径不在思源附件目录中。文件：{local.as_posix()}]"
+                    asset_marker = "/assets/"
+                    if asset_marker not in f"/{relative}":
+                        return f"[图片未返回：本地路径不在思源附件目录中。文件：{local.as_posix()}]"
+                    asset_rel = f"/{relative}".split(asset_marker, 1)[1]
+                else:
+                    asset_rel = decoded[len("assets/"):] if decoded.lower().startswith("assets/") else decoded.lstrip("/")
+                    local = attachment_root_dir(root, doc_id) / "assets" / asset_rel
                 display = local.resolve().as_posix()
                 if local.exists():
                     # 本地图先 stat 预判，装不下不读内容。
@@ -5086,7 +5573,7 @@ def inline_images_into_markdown(
                         return budget_note(display, True, exhausted=False)
                     data = local.read_bytes()
                 else:
-                    data = client.get_asset(url if url.lower().startswith("assets/") else f"assets/{rel}")
+                    data = client.get_asset(f"assets/{asset_rel}")
                 if mime is None:
                     mime = sniff_image_mime(data)
                     if mime is None:
