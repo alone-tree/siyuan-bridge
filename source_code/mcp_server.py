@@ -2730,12 +2730,14 @@ class McpServer:
             notebook_names.update(list_live_notebook_names(client))
             try:
                 with ensure_notebooks_open(client, notebooks):
-                    rows = client.query_sql(query)
+                    response = client.query_sql_with_info(query)
+                    rows = response["data"]
+                    enriched = self._enrich_sql_results(rows, indexed_docs, notebook_names, privacy, notebooks)
+                    return self._render_sql_results(query, enriched, response, client)
             except SiYuanApiError as exc:
                 if "administrator" in str(exc).casefold() or "privilege" in str(exc).casefold():
                     raise tool_error(_ERR_SQL_ADMIN, "SQL 搜索需要思源管理员权限，请改用 query 或 regex 模式。") from exc
                 raise
-            enriched = self._enrich_sql_results(rows, indexed_docs, notebook_names, privacy, notebooks)
         else:
             client = self._require_active_client()
             notebook_names.update(list_live_notebook_names(client))
@@ -2886,47 +2888,77 @@ class McpServer:
         compiled_ignore = compile_rules(privacy.ignore, indexed_docs)
         compiled_allow = compile_rules(privacy.allow, indexed_docs)
 
-        seen: set[str] = set()
+        # SQL selects IDs only for our purposes. Never trust a user-selected
+        # root_id/path/content: a JOIN or computed column can forge all of them.
+        ordered_ids = [str(row["id"]) for row in rows if row.get("id")]
+        client = self._require_active_client()
+        metadata_by_id: dict[str, dict[str, Any]] = {}
+        unique_ids = list(dict.fromkeys(ordered_ids))
+        for offset in range(0, len(unique_ids), 64):
+            ids = unique_ids[offset:offset + 64]
+            metadata = client.query_sql(
+                "SELECT id, root_id, box, hpath, path, type, subtype FROM blocks "
+                f"WHERE id IN ({sql_string_list(ids)}) LIMIT {len(ids)}"
+            )
+            metadata_by_id.update({str(block["id"]): block for block in metadata if block.get("id")})
+
         results: list[dict[str, Any]] = []
-
-        for row in rows:
-            doc_id = block_document_id(row)
-            # Hidden documents are absent from the visible index. A block id
-            # that does not match an indexed document must not be treated as visible.
-            if not doc_id or doc_id not in doc_index or doc_id in seen:
+        for block_id in ordered_ids:
+            block = metadata_by_id.get(block_id)
+            if not block:
                 continue
-
-            doc = live_doc_from_block(row, doc_index, notebook_names)
+            doc_id = block_document_id(block)
+            if not doc_id or doc_id not in doc_index:
+                continue
+            doc = live_doc_from_block(block, doc_index, notebook_names)
             nb_id = str(doc.get("notebook_id", ""))
             if notebook_filter and nb_id not in notebook_filter:
                 continue
             if not is_live_doc_visible(doc, compiled_ignore, compiled_allow):
                 continue
-            # Hard-filter Privacy Rules document
             if is_privacy_rules_document(
-                str(doc.get("hpath", "")),
-                root=self.root,
-                document_id=doc_id,
-                notebook_id=nb_id,
+                str(doc.get("hpath", "")), root=self.root,
+                document_id=doc_id, notebook_id=nb_id,
             ):
                 continue
-
-            seen.add(doc_id)
-            results.append({
-                "id": doc_id,
-                "notebook_id": nb_id,
-                "notebook_name": str(doc.get("notebook_name", "")),
-                "hpath": str(doc.get("hpath", "")),
-                "word_count": doc.get("word_count", 0),
-                "block_count": doc.get("block_count", 0),
-                "updated": str(doc.get("updated", "")),
-                "tags": [str(tag) for tag in (doc.get("tags") or []) if str(tag)],
-                "snippet": "",
-                "source": "sql",
-            })
-
-        results.sort(key=lambda r: (r["notebook_name"].casefold(), r["hpath"].casefold()))
+            results.append({"block": block, "document": doc})
         return results
+
+    def _render_sql_results(
+        self, query: str, results: list[dict[str, Any]], response: dict[str, Any], client: Any,
+    ) -> str:
+        """Render complete text in SQL order; no document grouping or image/SQL expansion."""
+        shown = results[:20]
+        lines = [f'# 搜索："{query}"（sql，{len(results)} 条可见结果，展示 {len(shown)} 条）', ""]
+        if not shown:
+            lines.append("未找到匹配的可见文档或块。")
+        for index, result in enumerate(shown, 1):
+            block, doc = result["block"], result["document"]
+            block_id, doc_id = str(block["id"]), str(doc["id"])
+            is_document = str(block.get("type")) in ("d", "NodeDocument")
+            lines.extend([f"## 结果 {index}：{display_document_path(doc)}", f"文档 ID：`{doc_id}`"])
+            if is_document:
+                blocks = build_display_blocks(client, doc_id)
+                content = "\n\n".join(item.markdown for item in blocks[:20])
+                lines.extend(["", content])
+                if len(blocks) > 20:
+                    lines.append(f"\n文档仅展示前 20 个块；更多请调用 siyuan_read(document_id=\"{doc_id}\")。")
+            else:
+                lines.extend([f"块 ID：`{block_id}`", "", client.get_block_kramdown(block_id)])
+            lines.append("")
+        if len(results) > len(shown):
+            lines.append("本次可见结果超过 20 条，仅展示前 20 条；可缩小 SQL 条件或使用 LIMIT/OFFSET 继续查询。")
+        if response.get("truncated") is True:
+            upstream_limit = response.get("limit")
+            lines.append("上游查询已截断，仍有候选未返回（后续候选仍需隐私过滤）。")
+            if isinstance(upstream_limit, int) and upstream_limit > 0:
+                lines.append(
+                    f"可保留原排序，使用 LIMIT {upstream_limit} OFFSET {len(response['data'])} 继续查询；"
+                    "OFFSET 按原始候选数推进，不按可见结果数推进。"
+                )
+            else:
+                lines.append("可保留原排序，使用 SQL LIMIT/OFFSET 继续查询。")
+        return "\n".join(lines)
 
     @staticmethod
     def _group_by_notebook(results: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:

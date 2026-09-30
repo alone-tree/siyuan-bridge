@@ -67,6 +67,16 @@ class SiYuanClient:
             raise SiYuanApiError("Unexpected SQL response shape")
         return [item for item in data if isinstance(item, dict)]
 
+    def query_sql_with_info(self, stmt: str) -> dict[str, Any]:
+        """Read-only search, retaining SiYuan's upstream limit/truncation metadata."""
+        envelope = self._post(
+            "/api/query/sql", {"stmt": stmt, "mode": "readonly"}, include_envelope=True,
+        )
+        data = envelope.get("data")
+        if not isinstance(data, list):
+            raise SiYuanApiError("Unexpected SQL response shape")
+        return {**envelope, "data": [item for item in data if isinstance(item, dict)]}
+
     def export_markdown(self, block_id: str) -> str:
         data = self._post(
             "/api/export/exportMdContent",
@@ -480,7 +490,7 @@ class SiYuanClient:
     def push_err_msg(self, msg: str, timeout: int = 7000) -> None:
         self._post("/api/notification/pushErrMsg", {"msg": msg, "timeout": timeout})
 
-    def _post(self, path: str, payload: dict[str, Any], *, timeout: float | None = None) -> Any:
+    def _post(self, path: str, payload: dict[str, Any], *, timeout: float | None = None, include_envelope: bool = False) -> Any:
         body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json", "Connection": "close"}
         if self.token:
@@ -490,7 +500,7 @@ class SiYuanClient:
         last_error: Exception | None = None
         for attempt in range(2):
             try:
-                return self._post_once(path, body, headers, timeout=request_timeout)
+                return self._post_once(path, body, headers, timeout=request_timeout, include_envelope=include_envelope)
             except SiYuanConnectionError as exc:
                 last_error = exc
                 if attempt < 1:
@@ -500,7 +510,7 @@ class SiYuanClient:
                 break
         raise last_error  # type: ignore[misc]
 
-    def _post_once(self, path: str, body: bytes, headers: dict[str, str], *, timeout: float | None = None) -> Any:
+    def _post_once(self, path: str, body: bytes, headers: dict[str, str], *, timeout: float | None = None, include_envelope: bool = False) -> Any:
         req = request.Request(
             f"{self.base_url}{path}",
             data=body,
@@ -535,7 +545,7 @@ class SiYuanClient:
             msg = envelope.get("msg") or envelope.get("message") or f"API returned code {code}"
             raise SiYuanApiError(str(msg), code=int(code) if isinstance(code, int) else None)
 
-        return envelope.get("data")
+        return envelope if include_envelope else envelope.get("data")
 
 
 def _read_http_error(exc: error.HTTPError) -> str:
