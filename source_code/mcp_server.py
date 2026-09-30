@@ -2907,6 +2907,8 @@ class McpServer:
             block = metadata_by_id.get(block_id)
             if not block:
                 continue
+            if str(block.get("type")) not in ("d", "NodeDocument") and not block_field(block, "root_id", "rootID"):
+                continue
             doc_id = block_document_id(block)
             if not doc_id or doc_id not in doc_index:
                 continue
@@ -2937,14 +2939,18 @@ class McpServer:
             block_id, doc_id = str(block["id"]), str(doc["id"])
             is_document = str(block.get("type")) in ("d", "NodeDocument")
             lines.extend([f"## 结果 {index}：{display_document_path(doc)}", f"文档 ID：`{doc_id}`"])
+            tags = doc.get("tags") or []
+            if tags:
+                lines.append("tag：" + " ".join(f"#{tag}#" for tag in tags))
             if is_document:
                 blocks = build_display_blocks(client, doc_id)
                 content = "\n\n".join(item.markdown for item in blocks[:20])
-                lines.extend(["", content])
+                lines.extend(["", MARKDOWN_IMAGE_RE.sub(lambda match: match.group(0)[1:], content)])
                 if len(blocks) > 20:
                     lines.append(f"\n文档仅展示前 20 个块；更多请调用 siyuan_read(document_id=\"{doc_id}\")。")
             else:
-                lines.extend([f"块 ID：`{block_id}`", "", client.get_block_kramdown(block_id)])
+                content = client.get_block_kramdown(block_id)
+                lines.extend([f"块 ID：`{block_id}`", "", MARKDOWN_IMAGE_RE.sub(lambda match: match.group(0)[1:], content)])
             lines.append("")
         if len(results) > len(shown):
             lines.append("本次可见结果超过 20 条，仅展示前 20 条；可缩小 SQL 条件或使用 LIMIT/OFFSET 继续查询。")
@@ -5250,12 +5256,12 @@ def tool_specs() -> list[dict[str, Any]]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search expression. In query mode, SiYuan treats whitespace as AND: 'GPU optical' = 'GPU AND optical'. Use explicit OR for related concepts: 'GPU OR optical OR NVLink'. Supports AND, OR, NOT, parentheses, quoted phrases, and prefix*. Hyphenated or other special-character terms are auto-quoted for FTS5, e.g. Scale-out becomes \"Scale-out\". Regex mode accepts Go RE2; SQL mode accepts a raw SQL statement."},
+                    "query": {"type": "string", "description": "Search expression. In query mode, SiYuan treats whitespace as AND: 'GPU optical' = 'GPU AND optical'. Use explicit OR for related concepts: 'GPU OR optical OR NVLink'. Supports AND, OR, NOT, parentheses, quoted phrases, and prefix*. Hyphenated or other special-character terms are auto-quoted for FTS5, e.g. Scale-out becomes \"Scale-out\". Regex mode accepts Go RE2; SQL mode accepts a SiYuan read-only SQL statement returning block IDs in an id column, e.g. SELECT * FROM blocks WHERE type='p' ORDER BY created DESC. Returned rows keep SQL order: full text for block hits, first 20 display blocks for document hits, each with source path and IDs. Only the first 20 privacy-visible hits are shown. Images remain addresses and embedded SQL is not expanded. Upstream truncation is reported without automatically fetching more candidates."},
                     "mode": {"type": "string", "enum": ["query", "regex", "sql"], "default": "query", "description": "Search mode. Defaults to query."},
-                    "scope": {"type": "string", "enum": ["headings", "full"], "default": "headings", "description": "headings = document titles and outline headings only. full = all block content."},
+                    "scope": {"type": "string", "enum": ["headings", "full"], "default": "headings", "description": "Query/regex only: headings = document titles and outline headings only; full = all block content. SQL uses the statement's conditions."},
                     "notebooks": {"description": "Notebook ID or list of IDs to scope the search. 'ALL' (default) searches all notebooks."},
-                    "limit": {"type": "integer", "default": 20, "description": "Maximum document results."},
-                    "max_snippets_per_doc": {"type": "integer", "default": DEFAULT_SNIPPETS_PER_DOC, "description": "Maximum matching blocks to display per document. The result still reports the total matching block count."},
+                    "limit": {"type": "integer", "default": 20, "description": "Maximum document results for query/regex. SQL always displays at most 20 visible hits; use SQL LIMIT/OFFSET to choose candidates."},
+                    "max_snippets_per_doc": {"type": "integer", "default": DEFAULT_SNIPPETS_PER_DOC, "description": "Query/regex only: maximum matching blocks to display per document. The result still reports the total matching block count. SQL does not group hits by document."},
                 },
                 "required": ["query"],
                 "additionalProperties": False,

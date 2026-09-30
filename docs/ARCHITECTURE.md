@@ -349,13 +349,13 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 当前主搜索是 API-only：
 
 - `query/regex` 走思源 `/api/search/fullTextSearchBlock`。
-- `sql` 走 `/api/query/sql`。当前代码会把 administrator/privilege 类错误解释为 SQL 权限不足，并提示改用 query/regex。
+- `sql` 通过 `query_sql_with_info()` 走 `/api/query/sql`（`mode=readonly`），保留上游截断信息。administrator/privilege 类错误解释为 SQL 权限不足，并提示改用 query/regex。
 - 搜索前临时打开目标关闭笔记本，用完恢复。
 - 搜索结果返回前做隐私过滤和元数据补全。
 
 历史上曾合并本地索引搜索和思源 API 搜索，后来废弃。原因是两套召回语义不一致，合并去重复杂，且容易让 AI 误解结果来源。当前本地 `docs.jsonl` 只用于元数据和路径解析，不作为全文召回主路径。
 
-`sql` 模式是高级诊断能力，不是普通搜索入口。它仍必须经过文档级可见性过滤，不能绕过 Privacy Rules。SQL 行解析出的文档 ID 不在可见索引中时直接丢弃；块 ID 和正文不能用来生成结果。隐藏文档及其子树因此不会从 SQL 结果返回。尚未刷新进可见索引的新文档也不会出现。
+`sql` 使用思源只读 SQL 召回块 ID，再独立查询真实块元数据；不信任用户 SELECT 行中的 root_id、路径、标题或正文。真实来源必须在可见索引内并通过 Privacy Rules 和系统文档硬过滤，之后才读取正文。隐藏文档及其子树不返回、不计数，不披露被过滤数量；尚未刷新进可见索引的新文档也不会出现。结果保持 SQL 全局顺序，展示前 20 条可见命中：正文块展示完整文本，文档展示前 20 个展示块。图片保留地址、嵌入 SQL 保留语法，不展开。保留上游 `limit/truncated`，不自动补查，不设置额外字符或 token 上限。结果过滤不是数据库级隔离：不能阻止任意 SQL 通过隐藏数据谓词影响可见命中；本工具不提供聚合或任意列报表。
 
 ## 阅读模型
 
@@ -601,10 +601,10 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 | ------------------------ | --------------- | ------------ | --------------------------------------------- |
 | `query`                | string          | 必填         | 搜索语句                                      |
 | `mode`                 | enum            | `query`    | `query` / `regex` / `sql`；旧客户端传 `mode="keyword"` 时按 `query` 兼容处理 |
-| `scope`                | enum            | `headings` | `headings` / `full`                       |
+| `scope`                | enum            | `headings` | 仅 query/regex：`headings` / `full`；SQL 由查询条件决定 |
 | `notebooks`            | string 或 array | `ALL`      | 限定笔记本 ID                                 |
-| `limit`                | integer         | 20           | 最多文档结果数                                |
-| `max_snippets_per_doc` | integer         | 5            | 每文档最多展示多少命中块                      |
+| `limit`                | integer         | 20           | 仅 query/regex：最多文档结果数；SQL 固定展示前 20 条可见命中 |
+| `max_snippets_per_doc` | integer         | 5            | 仅 query/regex：每文档最多展示多少命中块      |
 
 模式：
 
@@ -612,7 +612,7 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 | ----------- | ----------------- | ------------------------------------------------------ |
 | `query`   | 思源搜索 method 1 | 默认模式；使用思源原生查询语法，空格分隔词默认 AND，也支持 AND/OR/NOT、括号、短语和前缀 |
 | `regex`   | 思源搜索 method 3 | 正则搜索                                               |
-| `sql`     | `query_sql()`   | 高级诊断；当前代码会把 administrator/privilege 类错误解释为思源 SQL 权限不足 |
+| `sql`     | `query_sql_with_info()` | 只读块搜索，保留 SQL 原顺序及上游截断提示；administrator/privilege 类错误解释为 SQL 权限不足 |
 
 公开 schema 的搜索文本参数是 `query`，不暴露 `keyword`。后端仍接受旧客户端传入的 `keyword` 作为 `query` 别名；两者同时传入且值不同时拒绝。旧客户端传入 `mode="keyword"` 时按 `query`（method 1）执行，避免旧 Skill 或旧会话中断；不再调用语义与多词 AND 契约不一致的 method 0。
 
@@ -628,10 +628,11 @@ scope：
 3. 探测在线工作空间。
 4. 搜索前临时打开目标关闭笔记本。
 5. 调用思源搜索或 SQL。
-6. 把命中块映射回文档。SQL 模式只保留文档 ID 已在可见索引中的行。
+6. query/regex 把命中块映射回文档；SQL 提取结果行的 id，分批查询真实块元数据，不使用用户返回的其他列。文档 ID 必须已在可见索引中。
 7. 应用隐私过滤。
-8. 硬过滤 Privacy Rules 文档。
-9. 按文档聚合命中块，返回 snippet 和 match_count。命中文档带文档属性标签时在明细行下展示 `tag：#甲# #乙#`，不做命中归因；无标签不展示。
+8. 硬过滤 Privacy Rules 文档；过滤前不读取命中正文。
+9. query/regex 按文档聚合命中块，返回 snippet 和 match_count。SQL 不聚合、不去重命中行、不重新排序；前 20 条可见命中逐条附完整来源路径、文档 ID，正文块另附块 ID 和完整 Kramdown；文档复用 `build_display_blocks()` 展示前 20 块，不标内部序号，剩余用 `siyuan_read`。图片转普通地址链接，嵌入 SQL 不展开，不提取附件或内联图片。文档属性标签仍以 `tag：#甲# #乙#` 展示。
+10. SQL 上游 `truncated=true` 时说明还有候选未返回，提示保留 ORDER BY、使用 LIMIT/OFFSET；OFFSET 按原始候选数推进，不按可见数推进。用户显式 LIMIT 没触发自动截断，不意味着 LIMIT 外无数据。桥不自动补查或凑满可见结果，正文不额外截断。
 
 设计约束：
 

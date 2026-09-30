@@ -35,7 +35,7 @@
 | 块 UI | fold/unfold 类端点 | 折叠、展开 | 不开放 |
 | 属性 | `/api/attr/getBlockAttrs`, `/api/attr/setBlockAttrs` | 读取或设置块属性 | `setBlockAttrs` 已由 `siyuan_doc_manage(action=set_tags)` 内部使用（文档块 `tags` 属性，写前快照）；块级属性标记暂不开放 |
 | 搜索 | `/api/search/fullTextSearchBlock` | 全文搜索正文、标题和块 | 已作为 `siyuan_find` 的召回源 |
-| SQL | `/api/query/sql` | 结构化读取 blocks 表、诊断、定位 | 内部使用，不开放任意 SQL |
+| SQL | `/api/query/sql` | 结构化读取 blocks 表、块搜索和定位 | `siyuan_find(mode=sql)` 使用 `mode=readonly`，保留 `limit/truncated`；只输出真实可见块，不回显任意列或聚合报表 |
 | 引用关系 | `/api/query/sql` 查询 `refs`、`spans` 并关联 `blocks` | 正向查询文档引用哪些块，反向查询文档被哪些块引用；写前检查即将消失的 ID 是否仍被引用 | 只读查询通过 `siyuan_operate` 的 `check_forward_references` / `check_backward_references` 暴露；写入保护仍内部执行 |
 | 导出 | `/api/export/exportMdContent` 等 | 读取文档 Markdown、导出资源 | 已用于阅读；不作为写入主路径 |
 | 资源 | `/api/asset/insertLocalAssets` | 按目标文档处理本地文件/文件夹并返回资源路径 | 仅由 `siyuan_edit(action=insert_assets)` 内部使用 |
