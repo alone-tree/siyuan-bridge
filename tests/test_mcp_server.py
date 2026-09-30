@@ -17,6 +17,9 @@ class FakeSearchClient:
     def __init__(self, blocks: list[dict[str, Any]], *, closed: bool = False, sql_rows: list[dict[str, Any]] | None = None):
         self.blocks = blocks
         self.sql_rows = sql_rows
+        self.sql_info: dict[str, Any] = {"limit": 64, "truncated": False}
+        self.sql_statements: list[str] = []
+        self.kramdown_reads: list[str] = []
         self.closed = closed
         self.base_url = "http://127.0.0.1:6806"
         self.opened: list[str] = []
@@ -66,8 +69,33 @@ class FakeSearchClient:
         self.closed_again.append(notebook_id)
         self.closed = True
 
+    def query_sql_with_info(self, stmt):
+        self.sql_statements.append(stmt)
+        return {"code": 0, "data": list(self.sql_rows or []), **self.sql_info}
+
     def query_sql(self, _stmt):
+        self.sql_statements.append(str(_stmt))
         stmt = str(_stmt).casefold() if _stmt else ""
+        if "from blocks" in stmt and "where id in" in stmt:
+            import re
+            match = re.search(r"where\s+id\s+in\s*\((.*?)\)", str(_stmt), re.IGNORECASE)
+            wanted = set(re.findall(r"'((?:''|[^'])*)'", match.group(1))) if match else set()
+            wanted = {value.replace("''", "'") for value in wanted}
+            metadata = []
+            for doc_id, hpath in self._hpaths.items():
+                if doc_id in wanted:
+                    metadata.append({"id": doc_id, "root_id": doc_id, "box": "nb1",
+                                     "hpath": hpath, "path": f"/{doc_id}.sy", "type": "d"})
+            for root_id, blocks in self._blocks.items():
+                if not isinstance(blocks, list):
+                    continue
+                for block in blocks:
+                    if block.get("id") in wanted:
+                        doc_id = str(block.get("root_id", root_id))
+                        metadata.append({"root_id": doc_id, "box": "nb1",
+                                         "hpath": self._hpaths.get(doc_id, ""),
+                                         "path": f"/{doc_id}.sy", **block})
+            return metadata
         if "from blocks" in stmt and "where id" in stmt:
             import re
             match = re.search(r"where\s+id\s*=\s*'([^']+)'", stmt)
@@ -226,6 +254,15 @@ class FakeSearchClient:
         if block_id in self._docs:
             return self._docs[block_id]
         return ""
+
+    def get_block_kramdown(self, block_id):
+        self.kramdown_reads.append(block_id)
+        for blocks in self._blocks.values():
+            if isinstance(blocks, list):
+                for block in blocks:
+                    if block.get("id") == block_id:
+                        return str(block.get("markdown", ""))
+        raise SiYuanApiError("block not found")
 
     def get_asset(self, asset_path):
         return b""
@@ -1362,8 +1399,12 @@ class McpServerTests(unittest.TestCase):
             {"content": "无身份正文"},
             {"id": "block1", "root_id": "doc1", "content": "可见正文不应出现"},
         ])
+        client._blocks["doc1"] = [{"id": "block1", "type": "p", "markdown": "真实可见完整正文"}]
+        client._blocks["doc2"] = [{"id": "block-hidden", "type": "p", "markdown": "真实隐藏正文"}]
         output = self.run_find(client, {"query": "SELECT id, content FROM blocks", "mode": "sql"})
 
+        self.assertIn("真实可见完整正文", output)
+        self.assertEqual(client.kramdown_reads, ["block1"])
         self.assertIn("`doc1`", output)
         self.assertIn("/Projects/Doc One", output)
         self.assertNotIn("隐藏正文密匙", output)
@@ -1383,11 +1424,190 @@ class McpServerTests(unittest.TestCase):
         client = FakeSearchClient([], sql_rows=[
             {"id": "block2", "root_id": "doc2", "content": "隐藏正文里有机器人"},
         ])
+        client._blocks["doc2"] = [{"id": "block2", "type": "p", "markdown": "真实隐藏正文不读取"}]
         output = self.run_find(client, {"query": "SELECT id, content FROM blocks", "mode": "sql"})
 
+        self.assertEqual(client.kramdown_reads, [])
         self.assertIn("未找到匹配的可见文档", output)
         self.assertNotIn("doc2", output)
         self.assertNotIn("隐藏正文里有机器人", output)
+
+    def test_find_sql_preserves_interleaved_order_and_id_only_projection(self):
+        client = FakeSearchClient([], sql_rows=[{"id": value} for value in ("A1", "B1", "A2", "B2")])
+        client._blocks["doc1"] = [{"id": value, "type": "p", "markdown": f"真实正文-{value}"}
+                                   for value in ("A1", "A2")]
+        client._blocks["doc2"] = [{"id": value, "type": "p", "markdown": f"真实正文-{value}"}
+                                   for value in ("B1", "B2")]
+        output = self.run_find(client, {"query": "SELECT id FROM blocks ORDER BY updated", "mode": "sql"})
+        positions = [output.index(f"真实正文-{value}") for value in ("A1", "B1", "A2", "B2")]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(client.kramdown_reads, ["A1", "B1", "A2", "B2"])
+        self.assertIn("4 条可见结果，展示 4 条", output)
+        self.assertTrue(any("WHERE id IN" in stmt for stmt in client.sql_statements))
+
+    def test_find_sql_filters_canonical_identity_before_reading_any_body(self):
+        write_privacy_rules_cache(self.root, PrivacyRules(
+            ignore=[{"scope": "document", "id": "doc2"}], allow=[]))
+        client = FakeSearchClient([], sql_rows=[
+            {"id": "secret", "root_id": "doc1", "box": "nb1", "hpath": "/Projects/Doc One",
+             "path": "/doc1.sy", "content": "伪装可见正文"},
+            {"id": "public", "root_id": "doc2", "box": "hidden-nb", "hpath": "/secret",
+             "path": "/doc2.sy", "content": "伪造隐藏正文", "markdown": "伪造隐藏Markdown"},
+        ])
+        client._blocks["doc2"] = [{"id": "secret", "type": "p", "markdown": "秘密真实正文"}]
+        client._blocks["doc1"] = [{"id": "public", "type": "p", "markdown": "公开真实完整正文"}]
+        output = self.run_find(client, {"query": "SELECT id, root_id, content FROM blocks", "mode": "sql"})
+        self.assertEqual(client.kramdown_reads, ["public"])
+        self.assertIn("公开真实完整正文", output)
+        self.assertIn("1 条可见结果，展示 1 条", output)
+        for secret in ("秘密真实正文", "伪装可见正文", "伪造隐藏正文", "伪造隐藏Markdown",
+                       "`secret`", "hidden-nb", "/secret", "`doc2`", "隐藏 1", "过滤 1"):
+            self.assertNotIn(secret, output)
+
+    def test_find_sql_allows_read_only_but_hard_filters_privacy_rules(self):
+        write_privacy_rules_cache(self.root, PrivacyRules(ignore=[], allow=[], permissions=[
+            {"scope": "document", "id": "doc1", "permission": "read_only"}]))
+        client = FakeSearchClient([], sql_rows=[{"id": "public"}, {"id": "privacy"}])
+        client._blocks["doc1"] = [{"id": "public", "type": "p", "markdown": "只读真实正文"}]
+        client._blocks["doc2"] = [{"id": "privacy", "type": "p", "markdown": "规则秘密正文"}]
+        with mock.patch("source_code.agent_notebook.active_system_ids",
+                        return_value=("nb1", {"privacy_rules": {"doc2"}})):
+            output = self.run_find(client, {"query": "SELECT id FROM blocks", "mode": "sql"})
+        self.assertIn("只读真实正文", output)
+        self.assertNotIn("规则秘密正文", output)
+        self.assertNotIn("`doc2`", output)
+        self.assertEqual(client.kramdown_reads, ["public"])
+        self.assertEqual(client._snapshots, [])
+
+    def test_find_sql_applies_twenty_hit_cap_after_visibility_and_ignores_snippet_limits(self):
+        write_privacy_rules_cache(self.root, PrivacyRules(
+            ignore=[{"scope": "document", "id": "doc2"}], allow=[]))
+        ids = [f"hit-{number:02d}" for number in range(21)]
+        client = FakeSearchClient([], sql_rows=[{"id": "secret"}, *({"id": value} for value in ids)])
+        client._blocks["doc2"] = [{"id": "secret", "type": "p", "markdown": "秘密正文"}]
+        client._blocks["doc1"] = [{"id": value, "type": "p", "markdown": f"完整正文-{value}"} for value in ids]
+        output = self.run_find(client, {"query": "SELECT id FROM blocks", "mode": "sql",
+                                       "limit": 1, "max_snippets_per_doc": 1})
+        self.assertIn("21 条可见结果，展示 20 条", output)
+        self.assertEqual(client.kramdown_reads, ids[:20])
+        self.assertIn("完整正文-hit-19", output)
+        self.assertNotIn("完整正文-hit-20", output)
+        self.assertNotIn("秘密正文", output)
+        self.assertIn("LIMIT/OFFSET", output)
+
+    def test_find_sql_document_hit_counts_once_and_shows_only_twenty_display_blocks(self):
+        client = FakeSearchClient([], sql_rows=[{"id": "doc1"}, {"id": "tail"}])
+        client._blocks["doc1"] = [
+            {"id": "embed", "type": "query_embed", "markdown": "{{SELECT id FROM blocks WHERE id='secret'}}"},
+            {"id": "image", "type": "p", "markdown": "![图](assets/test.png)"},
+            *({"id": f"p{number}", "type": "p", "markdown": f"文档段落-{number:02d}"}
+              for number in range(2, 22)),
+        ]
+        client._blocks["doc2"] = [{"id": "tail", "type": "p", "markdown": "第二命中完整正文"}]
+        with mock.patch.object(client, "get_asset", side_effect=AssertionError("SQL 不内联图片")):
+            output = self.run_find(client, {"query": "SELECT id FROM blocks", "mode": "sql",
+                                           "limit": 1, "max_snippets_per_doc": 1})
+        self.assertIn("2 条可见结果，展示 2 条", output)
+        self.assertIn("文档段落-19", output)
+        self.assertNotIn("文档段落-20", output)
+        self.assertIn("第二命中完整正文", output)
+        self.assertIn("文档仅展示前 20 个块", output)
+        self.assertIn("{{SELECT id FROM blocks WHERE id='secret'}}", output)
+        self.assertIn("[图](assets/test.png)", output)
+        self.assertNotIn("![图]", output)
+        self.assertNotIn("base64", output)
+        self.assertNotRegex(output, r"\[\d+\] id=")
+        self.assertEqual(len(client.sql_statements), 2)  # 用户 SQL + canonical metadata；不执行嵌入 SQL
+
+    def test_find_sql_returns_large_block_complete_without_snippet_truncation(self):
+        body = "完整大块正文" * 3000 + "最终尾部标记"
+        client = FakeSearchClient([], sql_rows=[{"id": "large", "content": "伪造短正文"}])
+        client._blocks["doc1"] = [{"id": "large", "type": "p", "markdown": body}]
+        output = self.run_find(client, {"query": "SELECT id FROM blocks", "mode": "sql"})
+        self.assertIn(body, output)
+        self.assertNotIn("伪造短正文", output)
+
+    def test_find_sql_truncated_offset_uses_raw_candidates_without_hidden_counts(self):
+        write_privacy_rules_cache(self.root, PrivacyRules(
+            ignore=[{"scope": "document", "id": "doc2"}], allow=[]))
+        client = FakeSearchClient([], sql_rows=[{"id": "secret"}, {"id": "public"}, {"id": "missing"}])
+        client.sql_info = {"limit": 3, "truncated": True}
+        client._blocks["doc1"] = [{"id": "public", "type": "p", "markdown": "可见正文"}]
+        client._blocks["doc2"] = [{"id": "secret", "type": "p", "markdown": "秘密正文"}]
+        output = self.run_find(client, {"query": "SELECT id FROM blocks ORDER BY updated", "mode": "sql"})
+        self.assertIn("1 条可见结果，展示 1 条", output)
+        self.assertIn("LIMIT 3 OFFSET 3", output)
+        self.assertNotIn("OFFSET 1", output)
+        self.assertIn("OFFSET 按原始候选数推进", output)
+        self.assertIn("上游查询已截断", output)
+        for value in ("秘密正文", "`secret`", "`missing`", "隐藏 1", "过滤 2"):
+            self.assertNotIn(value, output)
+        self.assertEqual(client.kramdown_reads, ["public"])
+
+    def test_find_sql_explicit_limit_false_truncated_never_claims_exhaustion(self):
+        client = FakeSearchClient([], sql_rows=[{"id": "one"}])
+        client.sql_info = {"limit": 1, "truncated": False}
+        client._blocks["doc1"] = [{"id": "one", "type": "p", "markdown": "真实正文"}]
+        output = self.run_find(client, {"query": "SELECT id FROM blocks LIMIT 1", "mode": "sql"})
+        self.assertIn("真实正文", output)
+        for claim in ("全部查完", "全部查询完成", "已查完", "上游查询已截断", "OFFSET"):
+            self.assertNotIn(claim, output)
+
+    def test_find_sql_duplicate_rows_preserve_order_and_are_not_deduplicated(self):
+        client = FakeSearchClient([], sql_rows=[{"id": value} for value in ("a", "b", "a")])
+        client._blocks["doc1"] = [{"id": "a", "type": "p", "markdown": "甲真实正文"},
+                                   {"id": "b", "type": "p", "markdown": "乙真实正文"}]
+        output = self.run_find(client, {"query": "SELECT id FROM blocks", "mode": "sql"})
+        self.assertEqual(client.kramdown_reads, ["a", "b", "a"])
+        self.assertEqual(output.count("甲真实正文"), 2)
+        self.assertLess(output.index("甲真实正文"), output.index("乙真实正文"))
+        self.assertLess(output.index("乙真实正文"), output.rindex("甲真实正文"))
+        self.assertIn("3 条可见结果，展示 3 条", output)
+
+    def test_find_sql_notebook_filter_restores_closed_notebook_after_render(self):
+        client = FakeSearchClient([], closed=True, sql_rows=[{"id": "public"}, {"id": "other"}])
+        client._blocks["doc1"] = [{"id": "public", "type": "p", "markdown": "目标本正文"},
+                                   {"id": "other", "box": "nb2", "type": "p", "markdown": "其他本正文"}]
+        original = client.get_block_kramdown
+
+        def read_while_open(block_id):
+            self.assertFalse(client.closed)
+            return original(block_id)
+
+        with mock.patch.object(client, "get_block_kramdown", side_effect=read_while_open):
+            output = self.run_find(client, {"query": "SELECT id FROM blocks", "mode": "sql", "notebooks": ["nb1"]})
+        self.assertIn("目标本正文", output)
+        self.assertNotIn("其他本正文", output)
+        self.assertEqual(client.kramdown_reads, ["public"])
+        self.assertEqual(client.opened, ["nb1"])
+        self.assertEqual(client.closed_again, ["nb1"])
+        self.assertTrue(client.closed)
+
+    def test_find_sql_block_keeps_image_addresses_and_document_tags_without_inline(self):
+        docs = mcp_server.load_docs(self.root)
+        docs[0]["tags"] = ["研究", "图表"]
+        (self.root / "knowledge_base" / "docs.jsonl").write_text(
+            "".join(json.dumps(doc, ensure_ascii=False) + "\n" for doc in docs), encoding="utf-8")
+        body = '![本地图](assets/local.png)\n![网络图](https://example.com/chart.png "说明")'
+        client = FakeSearchClient([], sql_rows=[{"id": "image-block"}])
+        client._blocks["doc1"] = [{"id": "image-block", "type": "p", "markdown": body}]
+        with mock.patch.object(client, "get_asset", side_effect=AssertionError("SQL 不下载图片")):
+            output = self.run_find(client, {"query": "SELECT id FROM blocks", "mode": "sql"})
+        self.assertIn("tag：#研究# #图表#", output)
+        self.assertIn("[本地图](assets/local.png)", output)
+        self.assertIn('[网络图](https://example.com/chart.png "说明")', output)
+        self.assertNotIn("![", output)
+        self.assertNotIn("base64", output)
+        self.assertEqual(client.kramdown_reads, ["image-block"])
+
+    def test_find_sql_missing_id_and_nonexistent_blocks_produce_no_output(self):
+        client = FakeSearchClient([], sql_rows=[{"content": "无ID伪造正文"}, {"id": "missing", "root_id": "doc1"}])
+        output = self.run_find(client, {"query": "SELECT id FROM blocks", "mode": "sql"})
+        self.assertIn("0 条可见结果，展示 0 条", output)
+        self.assertIn("未找到匹配的可见文档或块", output)
+        self.assertNotIn("无ID伪造正文", output)
+        self.assertNotIn("`missing`", output)
+        self.assertEqual(client.kramdown_reads, [])
 
     def test_find_documents_filters_live_results_with_privacy_rules(self):
         write_privacy_rules_cache(

@@ -53,6 +53,53 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(SiYuanTimeoutError):
             client.version()
 
+    def test_query_sql_with_info_readonly_payload_and_metadata(self):
+        seen = {}
+        envelope = {"code": 0, "msg": "", "data": [{"id": "b1"}, "bad", None],
+                    "limit": 64, "truncated": True}
+
+        def transport(req, timeout):
+            seen["url"] = req.full_url
+            seen["body"] = json.loads(req.data.decode("utf-8"))
+            return FakeResponse(envelope)
+
+        client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
+        result = client.query_sql_with_info("SELECT id FROM blocks")
+        self.assertEqual(seen["url"], "http://127.0.0.1:6806/api/query/sql")
+        self.assertEqual(seen["body"], {"stmt": "SELECT id FROM blocks", "mode": "readonly"})
+        self.assertEqual(result, {**envelope, "data": [{"id": "b1"}]})
+
+    def test_query_sql_with_info_preserves_false_truncated_and_empty_data(self):
+        envelope = {"code": 0, "data": [], "limit": 1, "truncated": False}
+        client = SiYuanClient("http://127.0.0.1:6806",
+                              transport=lambda req, timeout: FakeResponse(envelope))
+        self.assertEqual(client.query_sql_with_info("SELECT id FROM blocks LIMIT 1"), envelope)
+
+    def test_query_sql_legacy_payload_and_list_return_remain_compatible(self):
+        seen = []
+
+        def transport(req, timeout):
+            seen.append(json.loads(req.data.decode("utf-8")))
+            return FakeResponse({"code": 0, "data": [{"id": "b1"}, "bad"],
+                                 "limit": 64, "truncated": True})
+
+        client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
+        self.assertEqual(client.query_sql("SELECT id FROM blocks"), [{"id": "b1"}])
+        self.assertEqual(seen, [{"stmt": "SELECT id FROM blocks"}])
+
+    def test_query_sql_with_info_rejects_invalid_data_and_api_errors(self):
+        for data in (None, {}, "bad", 1):
+            with self.subTest(data=data):
+                client = SiYuanClient("http://127.0.0.1:6806",
+                                      transport=lambda req, timeout: FakeResponse({"code": 0, "data": data}))
+                with self.assertRaisesRegex(SiYuanApiError, "Unexpected SQL response shape"):
+                    client.query_sql_with_info("SELECT id FROM blocks")
+        client = SiYuanClient("http://127.0.0.1:6806", transport=lambda req, timeout:
+                              FakeResponse({"code": -1, "msg": "SQL denied", "data": []}))
+        with self.assertRaisesRegex(SiYuanApiError, "SQL denied") as ctx:
+            client.query_sql_with_info("SELECT id FROM blocks")
+        self.assertEqual(ctx.exception.code, -1)
+
     def test_create_snapshot_posts_memo_only(self):
         seen = {}
 
