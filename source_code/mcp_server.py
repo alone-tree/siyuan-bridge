@@ -1859,8 +1859,8 @@ def markdown_has_multiple_blocks(markdown: str) -> bool:
     return False
 
 
-def main() -> int:
-    server = McpServer(Path.cwd())
+def main(root: Path | None = None) -> int:
+    server = McpServer(root if root is not None else Path.cwd())
     for line in sys.stdin:
         line = line.strip()
         if not line:

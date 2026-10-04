@@ -162,6 +162,8 @@ MCP JSON 只包含 Python 命令、`run_mcp.py` 绝对路径和 `PYTHONUTF8=1`�
 
 插件前端的实现细节、CommonJS/ESM 加载坑、测试导入流程和 UI 数据流见 `docs/FRONTEND.md`。架构文档只记录它与 Python Bridge、配置文件和 Worker 后端的关系。
 
+安装态 `run_mcp.py` 从脚本自身路径（`absolute()`，保留 junction/symlink 安装路径）计算 Bridge 根目录并显式传给 `main(root)`；进程工作目录切换到系统临时目录，避免 Windows 因 CWD 占用而拒绝集市重命名插件目录。临时目录不保存插件配置；持久数据位置和迁移规则不变。开发用 `python -m source_code.mcp_server` 未传 root 时仍使用 CWD，CLI 不变。升级期间暂停 MCP 调用，升级后重启 MCP 进程，避免旧内存代码与新磁盘文件混用；此修复不提供热更新保证。
+
 ## 配置与工作空间连接
 
 配置入口：
