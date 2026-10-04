@@ -7,7 +7,9 @@
 - 最小运行时代码改动：`run_mcp.py` 保留脚本绝对路径计算，工作目录改为系统临时目录，调用 `main(REPO_ROOT)`；`mcp_server.main(root=None)` 接收显式根目录，未传参仍使用 CWD。配置、数据迁移、工具契约和 CLI 均不改。
 - 新增启动回归测试：显式 root 与默认 CWD 兼容；不同启动目录、中文空格路径、petal 配置定位；真实 stdio MCP 存活时重命名一次性插件副本，并确认配置未变。
 - 中英文 README 补充旧进程首次升级解锁和更新后重启 MCP 的说明；新建对话不保证重启，更新期间应暂停工具调用。不承诺排除其他程序占用或权限错误。
-- 待运行验证；本次不部署、不发布，版本号暂不变。
+- 验证：Hermes Gateway 与旧 `run_mcp.py` 进程退出后，用户手动更新思源集市正式版成功。DSH 基准测试中，旧生成包（MCP 版本 1.5.2）进程运行时重命名其 `bridge/` 被 Windows 拒绝，报“文件正被另一进程使用”；同步当前源码为 1.11.0 包后，DSH 加载的同一启动器在存活状态下成功重命名，调用仍有响应。随后用当前仓库源码、系统临时目录 CWD、正式插件目录作为显式 root 做只读实调：`siyuan_start` 与 `siyuan_list` 成功；data/petal 下的 `config.local.json`、`telemetry.json`、`system_state.json` 保持原样，`privacy_rules.json` 缓存按启动流程刷新，隐私规则正常加载；未写入用户笔记。测试后关闭开发 MCP、恢复目录，并将 `siyuan-bridge-dev` 恢复为仓库源码命令且设为 `disabled`。旧包不是精确的上一版源码快照；且代码提交早于用户要求的有序基准流程，因此这里只能如实记为事后重建的旧启动行为对照。
+- 测试：`python -m pytest tests/test_mcp_launcher.py -q -p no:cacheprovider`：3 passed、4 subtests；`python -m pytest tests -q -p no:cacheprovider`：433 passed、1 skipped、3 warnings、56 subtests。
+- 未部署、未发布、未推送，版本号暂不变。
 
 ## 2026-09-30：v1.11.0 发布（SQL 块级搜索与嵌入块读取）
 
