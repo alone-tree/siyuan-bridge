@@ -9,7 +9,7 @@
 - 中英文 README 补充旧进程首次升级解锁和更新后重启 MCP 的说明；新建对话不保证重启，更新期间应暂停工具调用。不承诺排除其他程序占用或权限错误。
 - 验证：Hermes Gateway 与旧 `run_mcp.py` 进程退出后，用户手动更新思源集市正式版成功。DSH 基准测试中，旧生成包（MCP 版本 1.5.2）进程运行时重命名其 `bridge/` 被 Windows 拒绝，报“文件正被另一进程使用”；同步当前源码为 1.11.0 包后，DSH 加载的同一启动器在存活状态下成功重命名，调用仍有响应。随后用当前仓库源码、系统临时目录 CWD、正式插件目录作为显式 root 做只读实调：`siyuan_start` 与 `siyuan_list` 成功；data/petal 下的 `config.local.json`、`telemetry.json`、`system_state.json` 保持原样，`privacy_rules.json` 缓存按启动流程刷新，隐私规则正常加载；未写入用户笔记。测试后关闭开发 MCP、恢复目录，并将 `siyuan-bridge-dev` 恢复为仓库源码命令且设为 `disabled`。旧包不是精确的上一版源码快照；且代码提交早于用户要求的有序基准流程，因此这里只能如实记为事后重建的旧启动行为对照。
 - 测试：`python -m pytest tests/test_mcp_launcher.py -q -p no:cacheprovider`：3 passed、4 subtests；`python -m pytest tests -q -p no:cacheprovider`：433 passed、1 skipped、3 warnings、56 subtests。
-- 本次按用户要求将已验证修复按 PATCH 发布为 `v1.11.1`（相对 `1.11.0` 加 `0.0.1`）；版本号已准备，正式发布待全量测试、打包和 GitHub Release。
+- 按用户要求将已验证修复按 PATCH 升至 `v1.11.1`（相对 `1.11.0` 加 `0.0.1`）；全量测试为 433 passed、1 skipped、3 warnings、56 subtests。`python scripts/build_package.py` 构建成功，发布 ZIP 已核验版本、修复启动器/显式根目录及运行时配置排除。
 
 ## 2026-09-30：v1.11.0 发布（SQL 块级搜索与嵌入块读取）
 
