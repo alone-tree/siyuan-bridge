@@ -156,9 +156,9 @@ siyuan-plugin/
 
 `siyuan-plugin/bridge/` 由 `python scripts/sync_siyuan_plugin_bridge.py` 生成，不提交 Git。同步脚本只复制必要 Python 运行文件和说明文件，不复制 `config.local.json`、`knowledge_base/`、`ai_workspace/`、`tests/`、`.mcp.json` 或 `dist/`。
 
-MCP JSON 只包含 Python 命令、`run_mcp.py` 绝对路径和 `PYTHONUTF8=1`。Token 只保存在插件数据区 `config.local.json` 中，并继续使用现有 `profiles` 配置模型。绝对路径属于当前设备运行状态，不写入插件配置；插件每次打开 MCP 配置页或点击“刷新 JSON”时，都会通过 `/api/system/getWorkspaces` 重新识别当前打开的本机工作空间并生成路径。
+MCP JSON 只包含 Python 命令、`run_mcp.py` 绝对路径和 `PYTHONUTF8=1`。Token 只保存在插件数据区 `config.local.json` 中，并继续使用现有 `profiles` 配置模型。绝对路径属于当前设备运行状态，不写入插件配置；插件每次打开 MCP 配置页时，都会通过 `/api/system/getWorkspaces` 重新识别当前打开的本机工作空间并生成路径。
 
-插件启动和设置页通过思源本地 `/api/system/getConf` 获取当前设备 Token，通过 `/api/system/getWorkspaces` 获取当前设备实际打开的工作空间路径。插件每次启动时，如果当前 Token 尚未存在于插件数据区 `config.local.json` 的 profiles 中，就以当前工作空间名称追加一个 profile；已有 profile 不覆盖、不删除、不重排。设置页点击“刷新 JSON”时同样合并当前 Token 并保存配置。这样同一工作空间经思源同步到另一台设备时，各设备 Token 会逐步汇总到 profiles，MCP JSON 仍不包含 Token。Token 在设置页中允许明文显示，方便用户确认工作空间；用户也可以手动新增、改名或修改 profile。MCP 绝对路径仍必须在每台电脑上按当前工作空间重新生成。
+插件启动和设置页通过思源本地 `/api/system/getConf` 获取当前设备 Token，通过 `/api/system/getWorkspaces` 获取当前设备实际打开的工作空间路径。插件每次启动时，如果当前 Token 尚未存在于插件数据区 `config.local.json` 的 profiles 中，就以当前工作空间名称追加一个 profile；已有 profile 不覆盖、不删除、不重排。设置页打开时同样合并当前 Token，页面上任何改动都会 500ms 防抖自动保存整份配置（页面没有保存按钮）。这样同一工作空间经思源同步到另一台设备时，各设备 Token 会逐步汇总到 profiles，MCP JSON 仍不包含 Token。Token 在设置页中允许明文显示，方便用户确认工作空间；用户也可以手动新增、改名或修改 profile。MCP 绝对路径仍必须在每台电脑上按当前工作空间重新生成。
 
 插件前端的实现细节、CommonJS/ESM 加载坑、测试导入流程和 UI 数据流见 `docs/FRONTEND.md`。架构文档只记录它与 Python Bridge、配置文件和 Worker 后端的关系。
 
@@ -396,12 +396,12 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 
 图片内联（可选，由插件设置页开关控制，决策见 `docs/图片内联需求-2026-09-14.md`）：
 
-- 开关状态保存在插件数据区 `config.local.json` 的 `read_inline_images`。安装默认关闭，用户打开后持久保存；MCP 进程重启后生效。
+- 开关状态保存在插件数据区 `config.local.json` 的 `read_inline_images`。安装默认关闭，用户打开后持久保存，下一次读取即生效（读侧每次调用都重新读配置，不要求重启 MCP 进程）。插件设置页「高级配置」里的「单次读取时总图片体积上限」写入同一文件的 `inline_image_budget_mb`（单位 MB，默认 9），覆盖内置默认值。
 - 开启后 `siyuan_read` 返回 MCP 多模态 content 数组：文本块和图片块按文档顺序交替；图片是 base64 + MIME 类型，不采用 Markdown 嵌图。
 - 处理范围是思源认定的图片：本地图（`assets/...`，优先读附件提取结果，缺失时回退 `get_asset`）和网络图（http/https，下载后转 base64）。
 - 每张成功内联的图片按固定 1,568 token 计入窗口 `token_budget`；块数和 token 任意一个触发即翻页。
-- 单笔响应图片累计 base64 字节不超过 9 MB（`INLINE_RESPONSE_BUDGET_BYTES`，低于 MCP SDK 客户端默认 10 MB 单消息读缓冲）：按文档顺序前缀装填，碰到装不下的图即停止装填，该图及其后所有图在原位置声明；声明含本地路径（本地图，附件已提取到 `ai_workspace/`）或原地址（网络图）与单独读取指引，响应头部追加图片统计提示行。本地图先 `stat` 预判不读内容，网络图下载以剩余预算为流式中止线。决策与行为规格见 `docs/图片总量闸门方案-2026-09-28.md`。
-- `include_large_images=true`（AI 获得用户明确同意后）无视 9 MB 预算全量内联；响应超过 10 MB 时默认配置的客户端会断开连接，属明知风险的自担选项。
+- 单笔响应图片累计 base64 字节不超过单笔图片体积预算（内置默认 `INLINE_RESPONSE_BUDGET_BYTES = 9 MB`，低于 MCP SDK 客户端默认 10 MB 单消息读缓冲；插件设置页可用 `inline_image_budget_mb` 覆盖，设为 0 时所有图片只做原位声明）：按文档顺序前缀装填，碰到装不下的图即停止装填，该图及其后所有图在原位置声明；声明含本地路径（本地图，附件已提取到 `ai_workspace/`）或原地址（网络图）与单独读取指引，响应头部追加图片统计提示行。本地图先 `stat` 预判不读内容，网络图下载以剩余预算为流式中止线。决策与行为规格见 `docs/图片总量闸门方案-2026-09-28.md`。
+- `include_large_images=true`（AI 获得用户明确同意后）无视图片体积预算全量内联；响应超过 10 MB 时默认配置的客户端会断开连接，属明知风险的自担选项。
 - 扩展名在思源图片清单内但平台通常不支持内联的格式（SVG、AVIF、BMP、TIFF、ICO 等）以及读取失败的图片，同样在原位置声明，不无声跳过；成功内联和声明处都保留原文件路径。
 
 块展示规则：
@@ -661,7 +661,7 @@ scope：
 | `block_limit`       | integer | 200   | 最大展示块数量                              |
 | `token_budget`      | integer | 10000 | 估算 token 预算                             |
 | `include_block_ids` | boolean | false | 启用引用阅读                                |
-| `include_large_images` | boolean | false | 用户明确同意后无视单笔 9 MB 图片总量预算，全量内联窗口内图片；仅图片内联开启时相关 |
+| `include_large_images` | boolean | false | 用户明确同意后无视单笔图片体积预算（默认 9 MB），全量内联窗口内图片；仅图片内联开启时相关 |
 
 数据流：
 
@@ -672,7 +672,7 @@ scope：
 5. 如果展示块为空，仅当块表确认宿主文档不含 `query_embed` 时才降级到 `exportMdContent`；否则返回安全提示，不让导出提前读取未过滤的嵌入来源。
 6. 生成大纲并选择连续窗口；只在窗口走到嵌入块时，执行 SELECT ID 查询、元数据可见性/隐私过滤，再读可见目标正文并递归渲染。
 7. 宿主与嵌入来源附件分别提取到各自文档目录，并按各自来源改写本地 asset 链接。
-8. 图片内联开启时，把窗口正文图片替换为内联标记或原位声明；宿主与嵌入图片共用单笔 9 MB 图片预算，嵌入内容完整或不展开。
+8. 图片内联开启时，把窗口正文图片替换为内联标记或原位声明；宿主与嵌入图片共用单笔图片体积预算（默认 9 MB），嵌入内容完整或不展开。
 9. 返回当前窗口。
 
 返回内容：
@@ -689,7 +689,7 @@ scope：
 - 当前窗口正文。
 - 可见 `query_embed` 结果以引用块形式嵌入，含来源、展示块统计和来源文档编辑提示；无可见结果时仅显示通用 `查无此块`，混合结果中的隐藏目标不产生来源行或计数，也不返回隐藏元数据。
 - 嵌入块按单个宿主展示块计入窗口范围；超预算时保持连续窗口，首块降级保留原始 SQL。
-- 图片内联开启时，正文窗口与图片按文档顺序交替返回（MCP 多模态 content）；宿主与嵌入图片共用单笔 9 MB 预算，超限头部附图片统计提示行。
+- 图片内联开启时，正文窗口与图片按文档顺序交替返回（MCP 多模态 content）；宿主与嵌入图片共用单笔图片体积预算（默认 9 MB），超限头部附图片统计提示行。
 
 编辑前要求：
 

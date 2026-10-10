@@ -2,6 +2,19 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-10-10：MCP 配置页改版，图片体积上限可配置（v1.12.0）
+
+- 触发：用户反馈 MCP 配置页把同一条路径显示 4 次、更像填表而不是给新手的接入说明；同时要求把「MCP 图片读取容量」收进折叠的「高级配置」。定稿效果图与三版备选见 `ai_workspace/attachments/mcp-settings-mockup-d.html`（Git 忽略）。
+- 定稿结构：工作空间配置（常显）→「复制 MCP 配置 JSON」与「复制给 AI」→ 折叠「MCP JSON 原文」→ 折叠「高级配置」（Python 命令、MCP 名称、单次读取时总图片体积上限，末项带问号悬停说明）。
+- 插件端（`siyuan-plugin/index.js` 与 `src/index.js` 同步）：删除无消费者的「插件目录」「Bridge 目录」「MCP 启动脚本」三个只读字段，`getPluginContext()` 不再返回 `pluginDir`/`bridgeDir`；删除「保存配置」「刷新 JSON」按钮与 `refreshDetectedPaths()`（绝对路径与 MCP JSON 改为每次打开配置页重新探测）。改动即保存：profiles 与体积上限变更后 500ms 防抖写入 `config.local.json`，`normalizeConfig()` 保留新键 `inline_image_budget_mb`；上限为空、非数字或负数时不写入并回填当前值。
+- 配置项：`config.local.json` 新增 `inline_image_budget_mb`（MB，默认 9，不限上下限，0 表示不返回任何图片）。用户决策：不设上下限，高级设置面向高级用户。
+- 读侧：`Config.inline_image_budget_bytes`（`_inline_image_budget_bytes()` 做类型与范围校验，非法值回退 None）；`_read_document_block_window(..., budget_bytes=None)` 默认取常量 `INLINE_RESPONSE_BUDGET_BYTES`，`siyuan_read` 传入配置值；工具总描述与 `include_large_images` 里的「9 MB」改为「the per-call image budget (9 MB by default)」。
+- 文案修正：`docs/FRONTEND.md` 与 Home Dialog 原写「重新连接 MCP 后生效」，实际读侧 `siyuan_read` 每次调用都 `load_config()`（无缓存），改为「下一次读取即生效」。
+- 文档同步：`ARCHITECTURE.md`、`FRONTEND.md`、`DEVELOPMENT_GUIDE.md`、`README.md`、`README.en-US.md`、`plugins/siyuan-bridge/skills/siyuan-bridge/SKILL.md`、`docs/图片总量闸门方案-2026-09-28.md`（「不新增设置项」作废）。`siyuan-plugin/README*.md` 由 `scripts/build_package.py` 同步。
+- 测试：`tests/test_config.py` 新增 `inline_image_budget_mb` 解析用例（4 → 4 MB、0 → 0、`"4"`/`True`/`-1`/缺失 → None）；`tests/test_mcp_server.py` 新增配置覆盖内置默认值的用例（预算 0 → 全部图片原位声明、正文与提示行仍返回），并同步 `load_config` mock 与工具描述断言。全量 `python -m pytest tests -q`：446 passed、1 skipped；`node tests/test_plugin_storage.js`、`node tests/test_block_index.js` 通过；`node --check` 通过根入口（CommonJS）与 `siyuan-plugin/src/index.js`（ESM）。
+- 验证：JSON-RPC `tools/list` 9 个工具不变（`siyuan_read` 描述已更新）；能力库 `siyuan-bridge-dev` 临时改 on-demand 实调 `siyuan_start` + `siyuan_read(/思源桥/关于思源桥)` 成功，验证后恢复 `disabled`。设置页版式与折叠交互需在思源 UI 人工查看（导入 `D:\Siyuan2test`），本次尚未查看。
+- 版本按 MINOR 升至 `1.12.0`：可配置的图片体积上限属用户可见新能力。
+
 ## 2026-10-10：取消系统文档登记表，定位退回文档名匹配（v1.11.2）
 
 - 需求与决策见 `docs/系统笔记本登记表简化需求-2026-10-10.md`；背景是「部分系统文档维护失败」弹窗误报与登记表机制自 v1.5.1 起的持续复杂度。

@@ -18,17 +18,17 @@
 插件设置入口打开 Home Dialog，标题为「思源桥」并在右侧用灰色小字显示插件版本号（读 `/data/plugins/siyuan-bridge/plugin.json` 的 `version`，读不到时只显示标题）。Dialog 包含：
 
 - 通知：GET Worker `/api/notifications`。
-- MCP 配置：展示 Python 命令、Bridge 路径、MCP JSON 和 profiles。
+- MCP 配置：工作空间配置（一行一个「名称 + 访问令牌」）、「复制 MCP 配置 JSON」与「复制给 AI」按钮、折叠的「MCP JSON 原文」、折叠的「高级配置」（Python 命令、MCP 名称、单次读取时总图片体积上限）。
 - 反馈：POST Worker `/api/feedback`。
 - 用户体验改进：通过 `Plugin.loadData/saveData` 读写插件数据区 `telemetry.json` 中的 `telemetry`。
-- 读取图片：「读文档时默认返回图片」开关，写入插件数据区 `config.local.json` 的 `read_inline_images`，安装默认关闭，保存后提示重新连接 MCP 生效。
+- 读取图片：「读文档时默认返回图片」开关，写入插件数据区 `config.local.json` 的 `read_inline_images`，安装默认关闭，改动后下一次读取即生效（读侧每次调用都重新读配置，不需要重连 MCP）。
 - 系统笔记本维护：插件每次激活时按文档名发现、创建和维护四篇系统文档，并在发现重复文档时弹窗提示用户手动检查删除。
 
 ## 插件数据
 
 以下文件通过 `Plugin.loadData/saveData` 保存在工作空间 `data/storage/petal/siyuan-bridge/`，不会随集市更新替换插件程序目录而丢失：
 
-- `config.local.json`：profiles、Token、内部语言配置、`read_inline_images` 图片内联开关。Token 不写入 MCP JSON。
+- `config.local.json`：profiles、Token、内部语言配置、`read_inline_images` 图片内联开关、`inline_image_budget_mb` 单次读取图片体积上限（MB，默认 9）。Token 不写入 MCP JSON。
 - `telemetry.json`：匿名 ID、遥测开关、本地副本开关、端点、代理。
 - `block-index.json`：块序号显示开关。
 
@@ -42,7 +42,9 @@
 
 Home Dialog 保持紧凑：外层 `padding: 16px`、卡片间距 `gap: 12px`、卡片 `padding: 14px 16px`、标题 `margin-bottom: 8px`，卡片内最后一个元素不留底部外边距。Dialog 不写死 `height`，由内容决定高度；内容过长时由 `.siyuan-bridge-home` 的 `max-height` + `overflow-y` 滚动。通知区最多显示两条通知的高度（`max-height: 100px`），超出部分在同区域内纵向滚动，不能撑高 Dialog；通知少时不保留空位，单条通知最多两行（`max-height: 48px`）。
 
-工作空间绝对路径不写入配置文件。每次打开 MCP 配置页或点击“刷新 JSON”时，前端调用 `/api/system/getWorkspaces`，选择 `closed=false` 的当前工作空间，重新生成本机插件目录、Bridge 目录、`run_mcp.py` 绝对路径和 MCP JSON。这样插件整体同步到另一台电脑后，设置页仍会显示另一台电脑自己的路径。
+工作空间绝对路径不写入配置文件。每次打开 MCP 配置页时，前端调用 `/api/system/getWorkspaces`，选择 `closed=false` 的当前工作空间，重新生成本机 `run_mcp.py` 绝对路径和 MCP JSON。这样插件整体同步到另一台电脑后，配置页复制出的仍是另一台电脑自己的路径。
+
+MCP 配置页没有「保存」按钮。工作空间配置和「单次读取时总图片体积上限」改动后 500ms 防抖写入 `config.local.json`；Python 命令与 MCP 名称只在本次对话框内影响复制出来的 JSON，不持久化。体积上限单位为 MB、默认 9，留空或填非法值时回填当前值；这一项决定读侧单次返回图片的总量预算，语义见 `ARCHITECTURE.md` 的「阅读模型」。
 
 插件只维护 `bridge/templates/system-docs/` 中的四类系统文档模板（About、Privacy Rules、User Preferences、Workspace Index 占位）。MCP 使用指南和索引创建指南自 v1.11.2 起属于代码资产（`templates/guides/`，随集市更新覆盖），不进系统笔记本、不提供设置页重置；插件不再读取 manifest，也不做指南哈希校验。
 

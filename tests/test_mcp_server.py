@@ -5801,7 +5801,7 @@ class McpServerReadInlineImagesTests(unittest.TestCase):
         spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_read")
         self.assertIn("include_large_images", spec["inputSchema"]["properties"])
         description = spec["inputSchema"]["properties"]["include_large_images"]["description"]
-        self.assertIn("9 MB per-call image budget", description)
+        self.assertIn("ignore the per-call image budget", description)
         self.assertIn("10 MB", description)
 
 

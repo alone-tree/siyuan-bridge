@@ -73,6 +73,8 @@ ASSET_LARGE_FILE_THRESHOLD_BYTES = 20 * 1024 * 1024
 # 读侧单笔响应图片总量预算：逐图累计 base64 字节上限（docs/图片总量闸门方案-2026-09-28.md）。
 # 只约束 siyuan_read 的图片内联；写入侧 insert_assets 的 20 MB 阈值与此无关。
 # MCP SDK 客户端默认单消息读缓冲 10 MB（10,485,760 字节），9 MB 留出文本与协议开销余量。
+# 这是内置默认值；插件设置页「单次读取时总图片体积上限」通过 config.local.json 的
+# inline_image_budget_mb 覆盖（0 表示不返回任何图片，见 Config.inline_image_budget_bytes）。
 INLINE_RESPONSE_BUDGET_BYTES = 9 * 1024 * 1024
 SIYUAN_IMAGE_EXTENSIONS = frozenset({
     ".apng", ".ico", ".cur", ".jpg", ".jpe", ".jpeg", ".jfif", ".pjp",
@@ -5285,7 +5287,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_read",
-            "description": "Read a visible SiYuan document as Markdown. Prefer document path including notebook name, e.g. /Notebook/Folder/Doc; use document_id only as fallback. Always returns the document outline and one complete block window. Set include_block_ids=true before any siyuan_edit call to get exact [index] id type targets. Normal reading keeps Markdown clean and hides block IDs. SELECT query_embed blocks in the selected window expand privacy-visible matches as quoted Markdown with source paths; hidden targets are never disclosed. Embedded blocks remain atomic under token and shared image budgets, preserving contiguous-window behavior. When inline image reading is enabled in the plugin settings, images in this window are returned as image content blocks interleaved with the text, up to a 9 MB per-call image budget; images beyond the budget and unsupported images are reported at their position with their location.",
+            "description": "Read a visible SiYuan document as Markdown. Prefer document path including notebook name, e.g. /Notebook/Folder/Doc; use document_id only as fallback. Always returns the document outline and one complete block window. Set include_block_ids=true before any siyuan_edit call to get exact [index] id type targets. Normal reading keeps Markdown clean and hides block IDs. SELECT query_embed blocks in the selected window expand privacy-visible matches as quoted Markdown with source paths; hidden targets are never disclosed. Embedded blocks remain atomic under token and shared image budgets, preserving contiguous-window behavior. When inline image reading is enabled in the plugin settings, images in this window are returned as image content blocks interleaved with the text, up to the per-call image budget (9 MB by default, set in the plugin settings); images beyond the budget and unsupported images are reported at their position with their location.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -5295,7 +5297,7 @@ def tool_specs() -> list[dict[str, Any]]:
                     "block_limit": {"type": "integer", "default": DEFAULT_BLOCK_LIMIT, "description": "Maximum display blocks to return in this window, 1–1000."},
                     "token_budget": {"type": "integer", "default": DEFAULT_TOKEN_BUDGET, "description": "Estimated token ceiling for this window. Blocks stop before exceeding budget (at least one block always returned)."},
                     "include_block_ids": {"type": "boolean", "default": False, "description": "Enable reference reading for editing: each block is shown as [index] id=... type=... followed by content. Use these exact values for siyuan_edit start_index/start_id."},
-                    "include_large_images": {"type": "boolean", "default": False, "description": "Set true only after the user explicitly agrees, to ignore the 9 MB per-call image budget and inline every image in this window. Responses over 10 MB can be rejected or disconnect on MCP clients using default buffer limits; use only when the client is known to accept large messages. Only relevant when inline image reading is enabled in the plugin settings."},
+                    "include_large_images": {"type": "boolean", "default": False, "description": "Set true only after the user explicitly agrees, to ignore the per-call image budget and inline every image in this window. Responses over 10 MB can be rejected or disconnect on MCP clients using default buffer limits; use only when the client is known to accept large messages. Only relevant when inline image reading is enabled in the plugin settings."},
                 },
                 "additionalProperties": False,
             },

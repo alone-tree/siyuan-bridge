@@ -325,8 +325,8 @@ Error: invalid parameter
 - 图片内联关闭时，`siyuan_read` 返回行为与旧契约完全一致：单段文本，无内联标记。
 - 图片内联开启时，返回的 MCP content 数组按文档顺序交替包含文本块和图片块；每张成功内联的图片按 1,568 token 计入窗口预算并触发翻页。
 - 本地 assets 图片优先读已提取文件，缺失时回退 `get_asset`；网络 http/https 图片下载后内联。
-- 超过单笔 9 MB 图片总量预算（`INLINE_RESPONSE_BUDGET_BYTES`）时按文档顺序前缀装填：装得下的图内联，第一张装不下的图及其后所有图原位声明（本地图给提取后的本地路径、网络图给原地址，附单独读取指引），响应头部追加图片统计提示行；本地图先 `stat` 预判，网络图下载以剩余预算为流式中止线。
-- `include_large_images=true` 无视 9 MB 预算全量内联（逃生门，schema 描述必须写明超 10 MB 响应在默认客户端会断开）；SVG 等平台不支持格式和读取失败的图片同样原位声明，不无声跳过。
+- 超过单笔图片体积预算（内置默认 9 MB，`INLINE_RESPONSE_BUDGET_BYTES`；可由插件设置页的 `inline_image_budget_mb` 覆盖）时按文档顺序前缀装填：装得下的图内联，第一张装不下的图及其后所有图原位声明（本地图给提取后的本地路径、网络图给原地址，附单独读取指引），响应头部追加图片统计提示行；本地图先 `stat` 预判，网络图下载以剩余预算为流式中止线。
+- `include_large_images=true` 无视该图片体积预算全量内联（逃生门，schema 描述必须写明超 10 MB 响应在默认客户端会断开）；SVG 等平台不支持格式和读取失败的图片同样原位声明，不无声跳过。
 - 成功内联和声明处都保留原文件路径。
 
 已知真实问题：
@@ -520,9 +520,9 @@ python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE%
 - [x] 思源 UI 启用插件后自动创建插件数据区 `config.local.json` 和 `telemetry.json`，且不再生成 `system_state.json`
 - [x] 用户没有点开设置页、没有点击保存的情况下，外部 MCP 客户端能正常启动并调用工具
 
-首次安装/启用插件的真实用户流程必须额外验证：使用 `--fresh` 同时清空测试插件目录与插件数据目录，整体导入仓库 `siyuan-plugin/` 后，由用户在思源 UI 启用插件。插件启用后应在 `data/storage/petal/siyuan-bridge/config.local.json` 写入当前工作空间名称和 Token；在用户没有点开设置页、没有点击“保存配置”的情况下，外部 MCP 客户端也应能正常启动并调用工具。
+首次安装/启用插件的真实用户流程必须额外验证：使用 `--fresh` 同时清空测试插件目录与插件数据目录，整体导入仓库 `siyuan-plugin/` 后，由用户在思源 UI 启用插件。插件启用后应在 `data/storage/petal/siyuan-bridge/config.local.json` 写入当前工作空间名称和 Token；在用户没有点开设置页、没有改动任何配置的情况下，外部 MCP 客户端也应能正常启动并调用工具。
 
-旧版升级必须验证：在插件程序目录准备旧配置、遥测、隐私缓存与 `stats/`（旧 `system_state.json` 不迁移），插件数据区为空时普通导入会完整复制；插件数据区预置不同内容时保持目标不变；插件启用后 Python Bridge 读到插件数据区内容。跨设备 Token 合并改动还必须验证：在插件数据区准备一个已有其他设备 Token 的 `config.local.json`，启用插件后当前设备 Token 会追加到 profiles，原有 profile 的名称、Token 和顺序保持不变；重复启用不产生重复项；点击“刷新 JSON”也会合并并保存当前 Token。MCP 会话连接改动必须验证：未调用 `siyuan_start` 时普通工具明确要求先 start；一次成功 start 后多个工具不重复探测 profiles；连接或 401/403 鉴权失效后缓存被清空并要求重新 start。
+旧版升级必须验证：在插件程序目录准备旧配置、遥测、隐私缓存与 `stats/`（旧 `system_state.json` 不迁移），插件数据区为空时普通导入会完整复制；插件数据区预置不同内容时保持目标不变；插件启用后 Python Bridge 读到插件数据区内容。跨设备 Token 合并改动还必须验证：在插件数据区准备一个已有其他设备 Token 的 `config.local.json`，启用插件后当前设备 Token 会追加到 profiles，原有 profile 的名称、Token 和顺序保持不变；重复启用不产生重复项；打开设置页同样合并当前 Token，改动任意配置项后随 500ms 防抖自动保存写入。MCP 会话连接改动必须验证：未调用 `siyuan_start` 时普通工具明确要求先 start；一次成功 start 后多个工具不重复探测 profiles；连接或 401/403 鉴权失效后缓存被清空并要求重新 start。
 
 ### DSH 能力库中的三个思源桥
 
