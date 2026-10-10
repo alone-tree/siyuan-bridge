@@ -660,8 +660,11 @@ class SiyuanBridgePlugin extends Plugin {
   }
 
   async openHome() {
+    const version = await loadPluginVersion();
     const dialog = new Dialog({
-      title: "思源桥",
+      title: version
+        ? `思源桥 <span class="siyuan-bridge-home__version">v${escapeHtml(version)}</span>`
+        : "思源桥",
       content: renderHome(),
       width: "680px",
     });
@@ -711,6 +714,15 @@ async function loadPluginData(plugin, storageName, legacyPath) {
 // Home Dialog
 // ---------------------------------------------------------------------------
 
+async function loadPluginVersion() {
+  try {
+    const manifest = JSON.parse(await getFile(`/data/plugins/${PLUGIN_NAME}/plugin.json`));
+    return String(manifest?.version || "").trim();
+  } catch (_error) {
+    return "";
+  }
+}
+
 function renderHome() {
   return `
     <div class="siyuan-bridge-home">
@@ -722,19 +734,28 @@ function renderHome() {
       </div>
 
       <div class="siyuan-bridge-home__section">
-        <div class="siyuan-bridge-home__section-title">用户体验改进</div>
-        <label class="siyuan-bridge-home__checkbox-row">
+        <div class="siyuan-bridge-home__row">
+          <span class="siyuan-bridge-home__row-label">MCP 配置</span>
+          <button class="b3-button" data-action="open-mcp-settings">打开 MCP 配置</button>
+        </div>
+        <p class="siyuan-bridge-home__hint">
+          配置 Python 路径、工作空间 Token 并生成 MCP JSON。
+        </p>
+      </div>
+
+      <div class="siyuan-bridge-home__section">
+        <div class="siyuan-bridge-home__row">
+          <span class="siyuan-bridge-home__row-label">用户体验改进计划</span>
           <input class="b3-switch" type="checkbox" data-telemetry="checkbox" />
-          <span class="siyuan-bridge-home__checkbox-label">加入用户体验改进计划</span>
-        </label>
+        </div>
         <p class="siyuan-bridge-home__hint">
           匿名收集工具使用数据（功能调用、成功率等），帮助我们改进思源桥。不包含任何笔记内容或个人身份信息。
         </p>
         <div data-telemetry="local-copy-area" style="display:none">
-          <label class="siyuan-bridge-home__checkbox-row">
+          <div class="siyuan-bridge-home__row">
+            <span class="siyuan-bridge-home__row-label">遥测保留本地副本</span>
             <input class="b3-switch" type="checkbox" data-telemetry="local-copy" />
-            <span class="siyuan-bridge-home__checkbox-label">遥测数据保留本地副本</span>
-          </label>
+          </div>
           <p class="siyuan-bridge-home__hint">
             在 stats/events/ 目录保留每日 JSONL 文件，方便自行查看上传内容，打消隐私顾虑。
           </p>
@@ -742,31 +763,23 @@ function renderHome() {
       </div>
 
       <div class="siyuan-bridge-home__section">
-        <div class="siyuan-bridge-home__section-title">块序号</div>
-        <label class="siyuan-bridge-home__checkbox-row">
+        <div class="siyuan-bridge-home__row">
+          <span class="siyuan-bridge-home__row-label">显示思源桥块序号</span>
           <input class="b3-switch" type="checkbox" data-block-index="checkbox" />
-          <span class="siyuan-bridge-home__checkbox-label">显示思源桥块序号</span>
-        </label>
+        </div>
         <p class="siyuan-bridge-home__hint">
           在正文左侧显示与 AI 引用阅读一致的实时块序号。默认开启。序号是界面覆盖层，不会写入笔记。
         </p>
       </div>
 
       <div class="siyuan-bridge-home__section">
-        <div class="siyuan-bridge-home__section-title">读取图片</div>
-        <label class="siyuan-bridge-home__checkbox-row">
+        <div class="siyuan-bridge-home__row">
+          <span class="siyuan-bridge-home__row-label">读文档时默认同时读取图片</span>
           <input class="b3-switch" type="checkbox" data-inline-images="checkbox" />
-          <span class="siyuan-bridge-home__checkbox-label">读文档时默认返回图片</span>
-        </label>
+        </div>
         <p class="siyuan-bridge-home__hint">
-          开启后 AI 读取文档时随文字一起返回图片内容。单张超过 20 MB 的图片仍需 AI 获得你的明确同意后才会返回。重新连接思源桥 MCP 后生效。
+          开启后 AI 读取文档时随文字一起返回图片内容。重新连接思源桥 MCP 后生效。
         </p>
-      </div>
-
-      <div class="siyuan-bridge-home__section">
-        <div class="siyuan-bridge-home__section-title">MCP 配置</div>
-        <p class="siyuan-bridge-home__hint">配置 Python 路径、工作空间 Token 并生成 MCP JSON。</p>
-        <button class="b3-button" data-action="open-mcp-settings">打开 MCP 配置</button>
       </div>
 
       <div class="siyuan-bridge-home__section">

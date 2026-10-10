@@ -115,8 +115,11 @@ export default class SiyuanBridgePlugin extends Plugin {
   }
 
   async openHome() {
+    const version = await loadPluginVersion();
     const dialog = new Dialog({
-      title: "思源桥",
+      title: version
+        ? `思源桥 <span class="siyuan-bridge-home__version">v${escapeHtml(version)}</span>`
+        : "思源桥",
       content: renderHome(),
       width: "680px",
     });
@@ -165,6 +168,15 @@ async function loadPluginData(plugin, storageName, legacyPath) {
 // ---------------------------------------------------------------------------
 // Home Dialog
 // ---------------------------------------------------------------------------
+
+async function loadPluginVersion() {
+  try {
+    const manifest = JSON.parse(await getFile(`/data/plugins/${PLUGIN_NAME}/plugin.json`));
+    return String(manifest?.version || "").trim();
+  } catch (_error) {
+    return "";
+  }
+}
 
 function renderHome() {
   return `

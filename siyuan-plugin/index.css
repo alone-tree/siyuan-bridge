@@ -154,19 +154,32 @@
   margin-top: 0;
 }
 
-.siyuan-bridge-home__checkbox-row {
-  align-items: center;
-  cursor: pointer;
-  display: flex;
-  gap: 10px;
-  margin-bottom: 4px;
-  user-select: none;
+.siyuan-bridge-home__version {
+  color: var(--b3-theme-on-surface-light);
+  font-size: 12px;
+  font-weight: 400;
+  margin-left: 6px;
 }
 
-.siyuan-bridge-home__checkbox-label {
+.siyuan-bridge-home__row {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  min-height: 22px;
+}
+
+.siyuan-bridge-home__row-label {
   color: var(--b3-theme-on-surface);
-  font-size: 14px;
+  font-size: 15px;
+  font-weight: 600;
   line-height: 22px;
+}
+
+.siyuan-bridge-home__row .b3-switch,
+.siyuan-bridge-home__row .b3-button {
+  flex: 0 0 auto;
 }
 
 .siyuan-bridge-block-index-layer {

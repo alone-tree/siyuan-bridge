@@ -15,7 +15,7 @@
 
 ## UI 结构
 
-插件设置入口打开 Home Dialog，包含：
+插件设置入口打开 Home Dialog，标题为「思源桥」并在右侧用灰色小字显示插件版本号（读 `/data/plugins/siyuan-bridge/plugin.json` 的 `version`，读不到时只显示标题）。Dialog 包含：
 
 - 通知：GET Worker `/api/notifications`。
 - MCP 配置：展示 Python 命令、Bridge 路径、MCP JSON 和 profiles。
