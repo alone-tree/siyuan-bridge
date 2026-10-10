@@ -42,6 +42,7 @@ from .indexer import (
 from .agent_notebook import (
     AgentNotebookState,
     PrivacyRulesUnavailableError,
+    collect_system_notebook_ids,
     is_privacy_rules_document,
     is_system_notebook_name,
     load_agent_notebook,
@@ -488,6 +489,7 @@ class EmbedResolutionContext:
     notebook_names: dict[str, str]
     compiled_ignore: list[dict[str, Any]]
     compiled_allow: list[dict[str, Any]]
+    system_notebook_ids: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -2732,7 +2734,8 @@ class McpServer:
                 with ensure_notebooks_open(client, notebooks):
                     response = client.query_sql_with_info(query)
                     rows = response["data"]
-                    enriched = self._enrich_sql_results(rows, indexed_docs, notebook_names, privacy, notebooks)
+                    enriched = self._enrich_sql_results(rows, indexed_docs, notebook_names, privacy, notebooks,
+                                                        system_notebook_ids=collect_system_notebook_ids(client))
                     return self._render_sql_results(query, enriched, response, client)
             except SiYuanApiError as exc:
                 if "administrator" in str(exc).casefold() or "privilege" in str(exc).casefold():
@@ -2755,7 +2758,8 @@ class McpServer:
                 )
             blocks: list[dict[str, Any]] = data.get("blocks", [])
             keywords = search_terms(query, mode)
-            enriched = self._enrich_search_blocks(blocks, indexed_docs, notebook_names, privacy, keywords, notebooks)
+            enriched = self._enrich_search_blocks(blocks, indexed_docs, notebook_names, privacy, keywords, notebooks,
+                                                  system_notebook_ids=collect_system_notebook_ids(client))
 
         query_syntax_hint = simple_query_syntax_hint(query) if mode == "query" else ""
         if not enriched:
@@ -2816,6 +2820,8 @@ class McpServer:
         privacy: Any,
         keywords: list[str],
         notebook_filter: list[str] | None,
+        *,
+        system_notebook_ids: frozenset[str] = frozenset(),
     ) -> list[dict[str, Any]]:
         doc_index = {str(doc.get("id", "")): doc for doc in indexed_docs}
         compiled_ignore = compile_rules(privacy.ignore, indexed_docs)
@@ -2836,8 +2842,12 @@ class McpServer:
                 continue
             if not is_live_doc_visible(doc, compiled_ignore, compiled_allow):
                 continue
-            # Hard-filter Privacy Rules document
-            if is_privacy_rules_document(str(doc.get("hpath", ""))):
+            # Hard-filter Privacy Rules document (only inside the system notebook)
+            if is_privacy_rules_document(
+                str(doc.get("hpath", "")),
+                notebook_id=nb_id,
+                system_notebook_ids=system_notebook_ids,
+            ):
                 continue
 
             if block_id:
@@ -2878,6 +2888,8 @@ class McpServer:
         notebook_names: dict[str, str],
         privacy: Any,
         notebook_filter: list[str] | None,
+        *,
+        system_notebook_ids: frozenset[str] = frozenset(),
     ) -> list[dict[str, Any]]:
         doc_index = {str(doc.get("id", "")): doc for doc in indexed_docs}
         compiled_ignore = compile_rules(privacy.ignore, indexed_docs)
@@ -2913,7 +2925,11 @@ class McpServer:
                 continue
             if not is_live_doc_visible(doc, compiled_ignore, compiled_allow):
                 continue
-            if is_privacy_rules_document(str(doc.get("hpath", ""))):
+            if is_privacy_rules_document(
+                str(doc.get("hpath", "")),
+                notebook_id=nb_id,
+                system_notebook_ids=system_notebook_ids,
+            ):
                 continue
             results.append({"block": block, "document": doc})
         return results
@@ -2992,6 +3008,7 @@ class McpServer:
             notebook_names=self.load_notebook_names(),
             compiled_ignore=compile_rules(privacy.ignore, indexed_docs),
             compiled_allow=compile_rules(privacy.allow, indexed_docs),
+            system_notebook_ids=collect_system_notebook_ids(client),
         )
 
     def _query_embed_targets(
@@ -3039,7 +3056,11 @@ class McpServer:
             doc = live_doc_from_block(block, context.docs_by_id, context.notebook_names)
             if not is_live_doc_visible(doc, context.compiled_ignore, context.compiled_allow):
                 continue
-            if is_privacy_rules_document(str(doc.get("hpath") or "")):
+            if is_privacy_rules_document(
+                str(doc.get("hpath") or ""),
+                notebook_id=str(doc.get("notebook_id") or ""),
+                system_notebook_ids=context.system_notebook_ids,
+            ):
                 continue
             matches.append({"block": block, "document": doc})
         return matches
@@ -3559,7 +3580,11 @@ class McpServer:
                     choices = "\n".join(f"- `{doc.get('id')}` {display_document_path(doc)}" for doc in exact_display_path)
                     raise tool_error(_ERR_AMBIGUOUS, f"文档路径存在歧义，请补充 document_id：\n{choices}")
                 doc = exact_display_path[0]
-                if is_privacy_rules_document(str(doc.get("hpath", ""))):
+                if is_privacy_rules_document(
+                    str(doc.get("hpath", "")),
+                    notebook_id=str(doc.get("notebook_id") or ""),
+                    system_notebook_ids=collect_system_notebook_ids(self._require_active_client()),
+                ):
                     raise tool_error(_ERR_PRIVACY_RULES,
                         "Privacy Rules 文档不可通过 AI 访问。隐私规则由人类在思源中维护。"
                     )
@@ -3579,7 +3604,11 @@ class McpServer:
         if status != "ok":
             raise tool_error(_ERR_DOC_NOT_FOUND, "未找到匹配的可见文档。文档可能已被隐藏、尚未索引，或定位符有误。")
         doc = matches[0]
-        if is_privacy_rules_document(str(doc.get("hpath", ""))):
+        if is_privacy_rules_document(
+            str(doc.get("hpath", "")),
+            notebook_id=str(doc.get("notebook_id") or ""),
+            system_notebook_ids=collect_system_notebook_ids(self._require_active_client()),
+        ):
             raise tool_error(_ERR_PRIVACY_RULES,
                 "Privacy Rules 文档不可通过 AI 访问。隐私规则由人类在思源中维护。"
             )
@@ -3660,8 +3689,12 @@ class McpServer:
         if document_permission(target_doc_for_permission, privacy, all_docs) != "read_write":
             raise tool_error(_ERR_NOT_READ_WRITE, "目标路径权限不是 read_write，不允许创建或覆盖文档。")
 
-        # Prevent creating Privacy Rules document
-        if is_privacy_rules_document(target.internal_path.strip("/")):
+        # Prevent creating Privacy Rules document (only inside the system notebook)
+        if is_privacy_rules_document(
+            target.internal_path.strip("/"),
+            notebook_id=target.notebook_id,
+            system_notebook_ids=collect_system_notebook_ids(client),
+        ):
             raise tool_error(_ERR_PRIVACY_RULES,
                 "Privacy Rules 文档不可通过 AI 创建。隐私规则由人类在思源中维护。"
             )

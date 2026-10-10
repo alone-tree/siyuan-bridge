@@ -183,8 +183,31 @@ def is_system_document(hpath: str) -> bool:
     return match_doc_key(hpath) is not None
 
 
-def is_privacy_rules_document(hpath: str) -> bool:
-    return match_doc_key(hpath) == "privacy_rules"
+def collect_system_notebook_ids(client: SiYuanClient) -> frozenset[str]:
+    """Return live IDs of notebooks whose names match the system notebook."""
+    return frozenset(
+        str(item.get("id") or "")
+        for item in client.list_notebooks()
+        if str(item.get("id") or "")
+        and match_notebook_name(str(item.get("name") or ""))
+    )
+
+
+def is_privacy_rules_document(
+    hpath: str,
+    *,
+    notebook_id: str = "",
+    system_notebook_ids: frozenset[str] = frozenset(),
+) -> bool:
+    """Hard-isolate Privacy Rules only inside the system notebook.
+
+    Same-name documents in other notebooks stay ordinary user documents.
+    """
+    return bool(
+        notebook_id
+        and notebook_id in system_notebook_ids
+        and match_doc_key(hpath) == "privacy_rules"
+    )
 
 
 def is_system_notebook_name(name: str) -> bool:

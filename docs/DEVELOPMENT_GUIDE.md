@@ -275,7 +275,7 @@ Error: invalid parameter
 - `read_write` 仍要求 `confirmed=true` 才能写。
 - Privacy Rules 文档不能被 AI 读取、搜索、创建或编辑。
 - 系统笔记本本身和除 Privacy Rules 外的系统文档进入正常索引，可以按普通权限 list/find/read/write。
-- 任何笔记本下恰好名为 `隐私规则` / `Privacy Rules` 的普通文档都会被硬隔离（v1.11.2 取消登记表后的明确行为，宁误挡不泄露）。
+- Privacy Rules 硬隔离只命中系统笔记本内的同名文档：笔记本必须按名称匹配（当前名 + 历史名，大小写不敏感）为系统笔记本，且文档根级标题匹配「隐私规则」/「Privacy Rules」。其他笔记本下同名普通文档保持可见、可读写（用户明确要求：不把其他笔记本纳入关注范围）。
 - 搜索 `sql` 模式也必须经过隐私过滤。
 - 写入后的自动 refresh 不得把 Privacy Rules 写入 AI 可见缓存。
 

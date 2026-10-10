@@ -4,6 +4,7 @@ import unittest
 
 from source_code.agent_notebook import (
     PrivacyRulesUnavailableError,
+    collect_system_notebook_ids,
     is_privacy_rules_document,
     load_agent_notebook,
 )
@@ -172,17 +173,45 @@ class AgentNotebookReadTests(unittest.TestCase):
 
 
 class PrivacyRulesNameMatchTests(unittest.TestCase):
-    def test_matches_current_and_legacy_names_case_insensitive(self):
-        self.assertTrue(is_privacy_rules_document("/隐私规则"))
-        self.assertTrue(is_privacy_rules_document("/Privacy Rules"))
-        self.assertTrue(is_privacy_rules_document("/privacy rules"))
-        self.assertFalse(is_privacy_rules_document("/Projects/隐私规则"))
-        self.assertFalse(is_privacy_rules_document("/隐私规则备份"))
-        self.assertFalse(is_privacy_rules_document(""))
+    def test_matches_only_inside_system_notebook(self):
+        system_ids = frozenset({"system-nb"})
+        for hpath in ("/隐私规则", "/Privacy Rules", "/privacy rules"):
+            self.assertTrue(is_privacy_rules_document(
+                hpath, notebook_id="system-nb", system_notebook_ids=system_ids
+            ))
+        self.assertFalse(is_privacy_rules_document(
+            "/隐私规则", notebook_id="other-nb", system_notebook_ids=system_ids
+        ))
+        self.assertFalse(is_privacy_rules_document(
+            "/隐私规则", notebook_id="system-nb", system_notebook_ids=frozenset()
+        ))
+        self.assertFalse(is_privacy_rules_document(
+            "/隐私规则", notebook_id="", system_notebook_ids=system_ids
+        ))
 
-    def test_name_match_does_not_depend_on_notebook_or_document_id(self):
-        # 纯名称匹配：不再有登记 ID 或系统笔记本限定参数。
-        self.assertTrue(is_privacy_rules_document("/Privacy Rules"))
+    def test_same_name_outside_system_notebook_stays_ordinary(self):
+        # 用户其他笔记本下的同名普通文档不受硬隔离。
+        self.assertFalse(is_privacy_rules_document(
+            "/Projects/隐私规则", notebook_id="user-nb", system_notebook_ids=frozenset({"system-nb"})
+        ))
+
+    def test_collect_system_notebook_ids_matches_current_and_legacy_names(self):
+        class FakeNotebooks:
+            def __init__(self, items):
+                self.items = items
+
+            def list_notebooks(self):
+                return self.items
+
+        client = FakeNotebooks([
+            {"id": "nb-1", "name": "思源桥"},
+            {"id": "nb-2", "name": "SiYuan Agent Bridge"},
+            {"id": "nb-3", "name": "普通笔记本"},
+            {"id": "", "name": "思源桥"},
+        ])
+        self.assertEqual(
+            collect_system_notebook_ids(client), frozenset({"nb-1", "nb-2"})
+        )
 
 
 if __name__ == "__main__":

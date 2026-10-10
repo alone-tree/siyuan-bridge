@@ -1467,9 +1467,10 @@ class McpServerTests(unittest.TestCase):
     def test_find_sql_allows_read_only_but_hard_filters_privacy_rules(self):
         write_privacy_rules_cache(self.root, PrivacyRules(ignore=[], allow=[], permissions=[
             {"scope": "document", "id": "doc1", "permission": "read_only"}]))
-        # Privacy Rules 按名称硬过滤：名为「隐私规则」的文档一律不可见。
+        # Privacy Rules 按名称硬过滤，但仅限系统笔记本内；nb1 需伪装成系统笔记本。
         client = FakeSearchClient([], sql_rows=[{"id": "public"}, {"id": "privacy"}])
         client._hpaths["doc2"] = "/隐私规则"
+        client.list_notebooks = lambda: [{"id": "nb1", "name": "思源桥", "closed": False}]
         client._blocks["doc1"] = [{"id": "public", "type": "p", "markdown": "只读真实正文"}]
         client._blocks["doc2"] = [{"id": "privacy", "type": "p", "markdown": "规则秘密正文"}]
         output = self.run_find(client, {"query": "SELECT id FROM blocks", "mode": "sql"})
@@ -1478,6 +1479,16 @@ class McpServerTests(unittest.TestCase):
         self.assertNotIn("`doc2`", output)
         self.assertEqual(client.kramdown_reads, ["public"])
         self.assertEqual(client._snapshots, [])
+
+    def test_find_sql_keeps_same_name_doc_outside_system_notebook_visible(self):
+        write_privacy_rules_cache(self.root, PrivacyRules(ignore=[], allow=[]))
+        # nb1 不是系统笔记本（名字 Main）：其下名为「隐私规则」的普通文档保持可见。
+        client = FakeSearchClient([], sql_rows=[{"id": "privacy"}])
+        client._hpaths["doc2"] = "/隐私规则"
+        client._blocks["doc2"] = [{"id": "privacy", "type": "p", "markdown": "同名普通文档正文"}]
+        output = self.run_find(client, {"query": "SELECT id FROM blocks", "mode": "sql"})
+        self.assertIn("同名普通文档正文", output)
+        self.assertIn("`doc2`", output)
 
     def test_find_sql_applies_twenty_hit_cap_after_visibility_and_ignores_snippet_limits(self):
         write_privacy_rules_cache(self.root, PrivacyRules(
