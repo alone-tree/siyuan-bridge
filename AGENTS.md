@@ -68,7 +68,7 @@ source_code/         Python 适配层
   indexer.py         扫描笔记本，生成 tree.md / docs.jsonl / notebooks.json
   mcp_server.py      MCP stdio server，9 个工具的 schema 和实现
   ignore.py          Privacy Rules Markdown 表格解析与过滤
-  i18n.py            多语言名称、系统文档名、默认模板
+  i18n.py            多语言名称、系统文档名
   agent_notebook.py  系统笔记本只读加载与多文档合并
   config.py          配置加载和 profile 探测
   runtime_data.py    安装态插件数据区定位与旧数据迁移
@@ -93,8 +93,6 @@ data/storage/petal/siyuan-bridge/  安装态持久数据区
 
 思源笔记工作空间       用户启动的工作空间（用MCP看到的内容）
   思源桥/SiYuan Bridge   思源桥MCP系统笔记本，跟随思源工作空间切换
-    MCP Usage Guide     工具搭配和关键注意事项；用户可改、可重置
-    Workspace Index Guide  创建和更新导航索引的指南；用户可改、可重置
     User Preferences    用户写给 AI 的个性化要求，确保存在但不覆盖
     Workspace Index     AI 维护的语义导航索引，缺失时只创建占位内容
     About SiYuan Bridge 给人看的说明，按开发者模板覆盖
@@ -102,6 +100,10 @@ data/storage/petal/siyuan-bridge/  安装态持久数据区
   其他笔记本
     其他文档
       其他子文档
+
+templates/           随插件版本分发的资产（集市更新会覆盖）
+  system-docs/        四类系统文档模板（插件建思源文档用）
+  guides/             两篇指南代码资产：MCP 使用指南进启动包；索引创建指南只给路径
 
 ai_workspace/        AI 临时工作区，Git 忽略
 dist/                构建产物
@@ -117,7 +119,7 @@ docs/                架构、开发指南、前端、API、idea、devlog
 - 恢复要求：项目不提供 AI 自动回滚/checkout。写入后如需恢复，只能提示用户通过思源快照手动恢复；不要让 AI 调用高风险恢复接口。
 - 不自动启动思源：连接失败只提示用户手动打开思源，不鼓励AI查找程序路径。在开发时，务必保留错误返回信息中的相关说明，不要省略“让用户启动”等关键表述。
 - Privacy Rules 硬隔离：任何操作都需要在执行前经隐私规则过滤。源码写死隐藏Privacy Rules文档，AI 不可读取、搜索或编辑 Privacy Rules 文档。
-- 系统笔记本六篇固定文档按各自生命周期维护；旧 AI Guide 按原 ID 更名为 User Preferences；定位一律按文档名匹配（当前名 + 历史名），系统文档登记表机制已取消，详见 `docs/ARCHITECTURE.md` 的「系统笔记本」。
+- 系统笔记本四篇固定文档按各自生命周期维护；旧 AI Guide 按原 ID 更名为 User Preferences；定位一律按文档名匹配（当前名 + 历史名）；MCP 使用指南与索引创建指南是代码资产（`templates/guides/`），不是系统文档。详见 `docs/ARCHITECTURE.md` 的「系统笔记本」。
 - 关闭笔记本透明打开/关闭：索引、搜索和写入前可临时打开关闭的笔记本，完成后必须恢复。
 - 工作区可能有用户改动：不要回滚、删除或重置非本任务改动。
 - README 单一来源：根目录 `README.md`（中文）是唯一客观来源，`README.en-US.md` 根据它翻译；`siyuan-plugin/README*.md` 只能由 `scripts/build_package.py` 自动同步，禁止手动维护。

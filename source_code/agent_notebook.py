@@ -17,12 +17,34 @@ from .system_templates import markdown_sha256
 
 SYSTEM_DOCUMENT_KEYS = (
     "ai_guide",
-    "mcp_usage_guide",
-    "workspace_index_guide",
     "workspace_index",
     "about",
     "privacy_rules",
 )
+
+# Built-in guide assets shipped with the bridge. They are code, not user content:
+# updates replace them together with the plugin, never through the plugin data area.
+GUIDE_DIR = Path("templates") / "guides"
+MCP_USAGE_GUIDE_FILES = {
+    "zh-CN": "mcp-usage-guide.zh-CN.md",
+    "en": "mcp-usage-guide.en.md",
+}
+WORKSPACE_INDEX_GUIDE_FILES = {
+    "zh-CN": "workspace-index-guide.zh-CN.md",
+    "en": "workspace-index-guide.en.md",
+}
+
+
+def guide_asset_path(root: Path, files: dict[str, str], language: str) -> Path:
+    filename = files.get(language) or files["zh-CN"]
+    return (root / GUIDE_DIR / filename).absolute()
+
+
+def load_guide_asset(root: Path, files: dict[str, str], language: str) -> str:
+    try:
+        return guide_asset_path(root, files, language).read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 class PrivacyRulesUnavailableError(RuntimeError):
@@ -39,6 +61,7 @@ class AgentNotebookState:
     workspace_index_markdown: str
     privacy_rules: PrivacyRules
     mcp_usage_guide_markdown: str = ""
+    workspace_index_guide_path: str = ""
     workspace_index_updated: str = ""
     workspace_index_is_placeholder: bool = False
     missing_document_keys: tuple[str, ...] = ()
@@ -129,7 +152,10 @@ def load_agent_notebook(
         ai_guide_markdown=_merge_markdown(markdown_for("ai_guide")),
         workspace_index_markdown=_merge_markdown(workspace_markdown),
         privacy_rules=privacy_rules,
-        mcp_usage_guide_markdown=_merge_markdown(markdown_for("mcp_usage_guide")),
+        mcp_usage_guide_markdown=load_guide_asset(root, MCP_USAGE_GUIDE_FILES, language),
+        workspace_index_guide_path=str(
+            guide_asset_path(root, WORKSPACE_INDEX_GUIDE_FILES, language)
+        ),
         workspace_index_updated=workspace_updated,
         workspace_index_is_placeholder=workspace_is_placeholder,
         missing_document_keys=tuple(missing),

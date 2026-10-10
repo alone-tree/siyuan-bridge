@@ -2078,8 +2078,6 @@ class McpServer:
         if notify_missing and state.missing_document_keys:
             labels = {
                 "ai_guide": "用户个性化要求",
-                "mcp_usage_guide": "MCP 使用指南",
-                "workspace_index_guide": "工作空间索引创建指南",
                 "workspace_index": "工作空间索引",
                 "about": "关于思源桥",
             }
@@ -2226,6 +2224,13 @@ class McpServer:
             "## 工作空间索引",
             "",
             f"最后更新时间：{format_siyuan_updated(state.workspace_index_updated)}",
+            "",
+            (
+                "创建或更新索引前，先阅读索引创建／更新指南："
+                f"`{state.workspace_index_guide_path}`"
+                if state.workspace_index_guide_path
+                else "创建或更新索引前，先阅读内置的索引创建／更新指南。"
+            ),
         ]
         non_privacy_missing = [
             key for key in state.missing_document_keys if key != "privacy_rules"
@@ -2233,8 +2238,6 @@ class McpServer:
         if non_privacy_missing:
             labels = {
                 "ai_guide": "用户个性化要求",
-                "mcp_usage_guide": "MCP 使用指南",
-                "workspace_index_guide": "工作空间索引创建指南",
                 "workspace_index": "工作空间索引",
                 "about": "关于思源桥",
             }
@@ -2253,14 +2256,17 @@ class McpServer:
         if state.workspace_index_is_placeholder:
             parts.extend([
                 "",
-                "> 用户尚未创建工作空间索引。请询问用户是否需要创建；创建方法见系统笔记本中的《工作空间索引创建指南》。",
+                (
+                    "> 用户尚未创建工作空间索引。请询问用户是否需要创建；"
+                    "创建方法见启动包上方给出的索引创建指南。"
+                ),
             ])
         elif age_days is not None and age_days > 30:
             parts.extend([
                 "",
                 (
                     f"> 工作空间索引已经 {age_days} 天没有更新。请询问用户是否需要更新；"
-                    "更新方法见系统笔记本中的《工作空间索引创建指南》。"
+                    "更新方法见启动包上方给出的索引创建指南。"
                 ),
             ])
         parts.extend([

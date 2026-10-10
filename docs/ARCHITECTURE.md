@@ -48,7 +48,7 @@ flowchart LR
 | MCP 工具层 | 暴露 9 个高层工具，执行权限、快照、路径同步、遥测包装 | `source_code/mcp_server.py` |
 | 思源 API 封装 | 封装项目需要的思源 HTTP API，不做完整 SDK | `source_code/client.py`、`docs/思源API.md` |
 | 索引与隐私层 | 生成可见索引，解析 Privacy Rules，过滤 list/search/read/write | `source_code/indexer.py`、`source_code/ignore.py` |
-| 系统笔记本层 | 插件激活时按文档名维护六类固定系统文档；Python MCP 只读校验、合并内容 | `siyuan-plugin/index.js`、`source_code/agent_notebook.py` |
+| 系统笔记本层 | 插件激活时按文档名维护四篇系统文档；两篇指南是代码内置资产；Python MCP 只读校验、合并内容 | `siyuan-plugin/index.js`、`source_code/agent_notebook.py`、`templates/guides/` |
 | 反馈与遥测层 | 可选记录工具调用元数据，提交反馈，不收集笔记内容 | `source_code/telemetry.py`、`worker/` |
 
 核心调用关系：
@@ -110,7 +110,7 @@ source_code/
   telemetry.py       遥测与反馈：事件收集、本地存储、代理上传、反馈提交
   ignore.py          Privacy Rules Markdown 表格解析与权限判断
   indexer.py         刷新本地安全索引与工作区 README
-  i18n.py            系统笔记本和系统文档名称、模板、多语言
+  i18n.py            系统笔记本和系统文档名称、多语言
   agent_notebook.py  系统笔记本只读加载与多文档合并
   mcp_server.py      MCP stdio server、工具实现、工具 schema
   cli.py             开发诊断 CLI
@@ -209,31 +209,37 @@ MCP JSON 只包含 Python 命令、`run_mcp.py` 绝对路径和 `PYTHONUTF8=1`�
 
 | 文档 key | 中文名 | 英文名 | 生命周期 |
 |---|---|---|---|
-| `mcp_usage_guide` | `MCP 使用指南` | `MCP Usage Guide` | 插件模板创建；用户可改；未修改时随版本升级；设置页可重置 |
-| `workspace_index_guide` | `工作空间索引创建指南` | `Workspace Index Guide` | 由现有索引构建 Skill 转为普通文档模板；生命周期同上 |
 | `ai_guide` | `用户个性化要求` | `User Preferences` | 沿用内部 key；旧 `AI 使用指南` / `AI Guide` 按原 ID 更名；正文不覆盖 |
 | `workspace_index` | `工作空间索引` | `Workspace Index` | 缺失时创建一句占位提示；之后不自动覆盖 |
-| `about` | `关于思源桥` | `About SiYuan Bridge` | 开发者控制；按 JSON 文档 ID 定位；标题或正文被修改时恢复标准标题并按原 ID 覆盖 |
+| `about` | `关于思源桥` | `About SiYuan Bridge` | 开发者控制；按名称定位；标题或正文被修改时恢复标准标题并覆盖正文 |
 | `privacy_rules` | `隐私规则` | `Privacy Rules` | 不存在时创建；存在后不覆盖；只供 MCP 内部解析 |
+
+代码内置指南资产（不属于系统笔记本，随插件版本更新，位于 `templates/guides/`）：
+
+| 资产 | 消费方式 |
+|---|---|
+| `mcp-usage-guide.{zh-CN,en}.md` | `siyuan_start` 启动包直接输出全文 |
+| `workspace-index-guide.{zh-CN,en}.md` | 启动包只输出文件路径；AI 创建/更新索引前自行读取该文件 |
 
 系统笔记本生命周期决策：
 
-1. **插件激活是唯一维护入口。** 插件激活时按文档名完成系统笔记本和六类系统文档的发现、创建、迁移与模板维护；不得等到 `siyuan_start` 才维护。
-2. **Privacy Rules 最先维护。** 其他文档逐项独立维护，某篇指南的模板或哈希失败不影响 Privacy Rules 的可用性。
+1. **插件激活是唯一维护入口。** 插件激活时按文档名完成系统笔记本和四篇系统文档的发现、创建、迁移与模板维护；不得等到 `siyuan_start` 才维护。
+2. **Privacy Rules 最先维护。** 其他文档逐项独立维护，某篇文档的模板失败不影响 Privacy Rules 的可用性。
 3. **定位只按文档名。** 系统笔记本按名称匹配（当前名 + 历史名，大小写不敏感，多个同名取第一个）；文档按根级标题匹配 `SYSTEM_DOC_NAMES` + `LEGACY_DOC_NAMES`。系统文档登记表机制已于 v1.11.2 取消，`system_state.json` 不再写入或读取；残留文件静默保留，不清理。
 4. **只有同名结果为空才创建。** 某一类型仍能按名称找到至少一篇文档时，不再为该类型创建新文档。
 5. **多篇文档不自动修复。** 找到多篇时全部继续使用；需要聚合的内容按类型合并。插件只弹窗通知用户存在重复文档（列出类型和数量），不自动删除、合并正文或提供一次性修复功能。
 6. **Privacy Rules 全量硬隔离（仅限系统笔记本内）。** 系统笔记本内名为 `隐私规则` / `Privacy Rules` 的文档不可被 AI 读取、搜索或编辑；规则表合并解析，空表不影响结果。
-7. **`siyuan_start` 是只读会话入口。** 它只探测 profile、按名称加载系统笔记本内容、解析合并后的 Privacy Rules、刷新安全索引并组装启动包，不创建、更新、迁移系统文档，也不写任何状态。这样既消除第二个写入入口，也降低每次 AI 会话启动的维护开销。
+7. **`siyuan_start` 是只读会话入口。** 它只探测 profile、按名称加载系统文档内容、读取内置指南资产、解析合并后的 Privacy Rules、刷新安全索引并组装启动包，不创建、更新、迁移系统文档，也不写任何状态。这样既消除第二个写入入口，也降低每次 AI 会话启动的维护开销。
 
 用户修改某篇系统文档标题后，插件按名称找不到，会以标准标题创建新文档；改名后的旧文档沦为普通文档（Privacy Rules 改名时 `siyuan_start` 失败关闭并提示重新启用插件重建——宁可拒绝服务，不在无隐私规则状态下放行）。用户删除 Privacy Rules 后新建同名空文档时，解析出空规则集，与历史名称兜底行为一致；该文档对 AI 的硬隔离不变。同名重复系统文档维持弹窗提醒，由用户手动删除。
 
-两篇托管指南（MCP Usage Guide、Workspace Index Guide）的模板位于 `templates/system-docs/`。防误覆盖依赖哈希现场判断：插件激活时导出当前正文计算哈希，命中当前模板或 `manifest.historical_normalized_sha256` 才允许升级覆盖；不命中视为用户修改，不覆盖、不持久化。「关于思源桥」维持「正文不等于模板即覆盖」策略；「工作空间索引」占位符判断由 Python 端现场哈希计算，`updated` 时间戳取自实时查询。
+两篇指南自 v1.11.2 起不再作为系统文档存在，改为代码资产：MCP 使用指南由启动包全文输出，索引创建指南只由启动包给出路径。用户在旧版本知识库里创建的 `MCP 使用指南` / `工作空间索引创建指南` 文档不再被插件使用，按普通文档处理，由用户自行删除。「工作空间索引」占位符判断由 Python 端现场哈希计算，`updated` 时间戳取自实时查询。
 
 系统笔记本设计原则：
 
 - 系统笔记本进入正常安全索引，可以像普通笔记本一样 list/find/read/write；普通 Privacy Rules 对它正常生效。
-- User Preferences 是用户写给 AI 的要求，Workspace Index 是导航；About 和两篇指南是工具说明。
+- User Preferences 是用户写给 AI 的要求，Workspace Index 是导航；About 是工具说明。
+- 两篇指南是代码资产，不进系统笔记本、不占用户知识库空间、不参与用户内容维护。
 - Privacy Rules 只能由 MCP server 内部读取解析，AI 不可见。
 - Privacy Rules 硬隔离 = 文档在系统笔记本内（笔记本按名称匹配，当前名 + 历史名，大小写不敏感）且文档根级标题匹配「隐私规则」/「Privacy Rules」。其他笔记本下同名普通文档是普通用户文档，不受影响、不纳入关注范围。
 
@@ -475,7 +481,7 @@ siyuan_bridge_feedback
 
 1. 加载配置并探测当前在线 profile。
 2. 调用思源 version 确认连接。
-3. 按名称定位系统笔记本，按名称分类加载六类系统文档内容。
+3. 按名称定位系统笔记本，按名称分类加载四篇系统文档，并读取内置指南资产（`templates/guides/`）。
 4. 合并解析全部 Privacy Rules 并写入本地缓存；全部缺失时失败关闭。
 5. 清理 `ai_workspace/` 中除 README 外的内容。
 6. 调用 `refresh_index()`，并传入系统笔记本 ID 和全部 Privacy Rules 文档 ID。
@@ -486,10 +492,12 @@ siyuan_bridge_feedback
 返回内容按固定顺序：
 
 1. 一行运行状态：思源版本、当前 profile、Privacy Rules 加载状态。
-2. 系统笔记本中当前实际的 MCP Usage Guide 全文。
+2. 内置 MCP Usage Guide 全文（来自 `templates/guides/mcp-usage-guide.<lang>.md`）。
 3. User Preferences 全文。
 4. 笔记本概览和统计。
-5. Workspace Index 的最后更新时间和全文。
+5. Workspace Index 的最后更新时间、内置索引创建指南的文件路径，以及 Workspace Index 全文。
+
+内置指南资产缺失时启动包仍正常返回（MCP Usage Guide 显示为空，索引指南路径回退为不带路径的提示），不阻塞启动。
 
 Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创建；真实索引超过 30 天未更新时，只在本次 MCP 返回中加入临时提醒，不写回思源文档。
 
@@ -500,7 +508,7 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 - start 中途失败不得保留旧连接或半初始化连接。
 - 缓存连接只属于当前 `McpServer` 实例；连接或鉴权失效后清空并要求重新 start。
 - 不返回语言偏好、系统笔记本 ID 或 About 入口。
-- 不应把 About 和 Workspace Index Guide 全文塞进启动包。
+- 不把索引创建指南全文塞进启动包，只给路径，由 AI 按需读取。
 - 系统笔记本初始化失败时启动失败，不能返回不完整启动包。
 
 ## `siyuan_operate`

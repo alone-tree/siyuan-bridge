@@ -283,20 +283,21 @@ Error: invalid parameter
 
 ## 修改系统笔记本或启动包时必须验证
 
-涉及插件系统笔记本维护、`load_agent_notebook()`、系统模板或 `siyuan_start` 时，必须验证：
+涉及插件系统笔记本维护、`load_agent_notebook()`、系统模板、`templates/guides/` 资产或 `siyuan_start` 时，必须验证：
 
-- 新安装会按文档名创建六篇固定文档。
+- 新安装会按文档名创建四篇固定文档（用户个性化要求、工作空间索引、关于思源桥、隐私规则）。
 - `AI 使用指南` / `AI Guide` 按原 ID 更名为 `用户个性化要求` / `User Preferences`，不删除重建。
-- 旧正文由用户修改时完整保留；托管指南只有正文哈希命中当前模板或历史模板时才自动升级；源文件 SHA-256 校验必须先统一 LF/CRLF。
-- 系统笔记本和六类系统文档一律按名称匹配定位（当前名 + 历史名，大小写不敏感；笔记本多个同名取第一个）；系统文档登记表机制已取消，`system_state.json` 不再读写，残留文件静默保留。
-- Privacy Rules 在其他系统文档前维护；任一可选文档维护失败后 Privacy Rules 仍可用。
+- 用户改过的正文完整保留；About 保持「正文不等于模板即覆盖」策略；User Preferences 和 Workspace Index 存在后永不覆盖。
+- 系统笔记本和四篇系统文档一律按名称匹配定位（当前名 + 历史名，大小写不敏感；笔记本多个同名取第一个）；系统文档登记表机制已取消，`system_state.json` 不再读写，残留文件静默保留。
+- Privacy Rules 在其他系统文档前维护；任一其他文档维护失败后 Privacy Rules 仍可用。
 - 用户改过标题的系统文档不再被识别，插件按标准标题新建；Privacy Rules 改名时 `siyuan_start` 失败关闭并提示禁用后重新启用插件。
-- 设置页重置指南按名称实时定位文档，保留文档 ID 并重写正文；不写任何状态文件。
-- About 正文不等于模板即覆盖；Workspace Index 缺失时只创建一句占位内容，已有真实索引绝不覆盖。
+- 两篇指南不再是系统文档：MCP 使用指南来自 `templates/guides/mcp-usage-guide.<lang>.md` 并全文进启动包；索引创建指南只在启动包中给出文件路径。指南资产缺失不阻塞启动。
+- 旧版本留下的 `MCP 使用指南` / `工作空间索引创建指南` 文档按普通文档处理：插件不创建、不覆盖、不改名、不删除，也不因它们弹重复文档窗。
+- Workspace Index 缺失时只创建一句占位内容，已有真实索引绝不覆盖。
 - 多篇 User Preferences、Workspace Index 和 Privacy Rules 在 MCP 运行时合并使用；名为「隐私规则」/「Privacy Rules」的文档全部硬隔离。
 - 非隐私系统文档全部缺失时 `siyuan_start` warning 后继续；Privacy Rules 全部缺失时失败关闭并提示禁用后重新启用插件。
 - 29/30 天不提示过期，超过 30 天才在 MCP 返回中临时提示；不能写回思源文档或改变更新时间。
-- 启动包顺序固定为运行状态、MCP Usage Guide、User Preferences、笔记本概览、Workspace Index；不再返回语言偏好和 About 入口。
+- 启动包顺序固定为运行状态、内置 MCP 使用指南、User Preferences、笔记本概览、Workspace Index（含索引创建指南路径）；不再返回语言偏好和 About 入口。
 
 ## 修改读取模型时必须验证
 
@@ -476,7 +477,7 @@ python scripts/sync_siyuan_plugin_bridge.py
 
 - `siyuan-plugin/bridge/source_code/mcp_server.py` 存在。
 - `siyuan-plugin/bridge/scripts/run_mcp.py` 存在。
-- `siyuan-plugin/bridge/templates/system-docs/manifest.json` 和四个指南 Markdown 模板存在。
+- `siyuan-plugin/bridge/templates/system-docs/` 下四类系统文档模板（About、Privacy Rules、User Preferences、Workspace Index 占位）和 `bridge/templates/guides/` 下两篇指南 Markdown 资产存在。
 - 同步脚本不生成或覆盖 `config.local.json`、`telemetry.json`、`privacy_rules.json` 和 `stats/`；安装态持久数据位于 `data/storage/petal/siyuan-bridge/`。
 
 ## 插件导入测试流程
@@ -730,7 +731,7 @@ python scripts/build_package.py
 
 输出：`dist/package.zip`。
 
-zip 包含：`plugin.json`、`icon.png`、`preview.png`、`index.js`、`index.css`、英文默认说明 `README.md`、中文说明 `README.zh-CN.md`、README 图片目录 `image/README/`、`bridge/`、`dist/`、`src/`。`bridge/` 由 sync 脚本生成，包含完整 Python 运行文件和系统文档模板；`knowledge_base/`、`ai_workspace/`、`stats/`、`config.local.json`、`telemetry.json`、`privacy_rules.json` 等运行时数据必须从发布包排除。
+zip 包含：`plugin.json`、`icon.png`、`preview.png`、`index.js`、`index.css`、英文默认说明 `README.md`、中文说明 `README.zh-CN.md`、README 图片目录 `image/README/`、`bridge/`、`dist/`、`src/`。`bridge/` 由 sync 脚本生成，包含完整 Python 运行文件、四类系统文档模板和 `templates/guides/` 下的两篇指南资产；`knowledge_base/`、`ai_workspace/`、`stats/`、`config.local.json`、`telemetry.json`、`privacy_rules.json` 等运行时数据必须从发布包排除。
 
 根目录 `README.md` 是中文内容基准，根目录 `README.en-US.md` 是对应英文版。发布前将两者分别同步到 `siyuan-plugin/README.zh-CN.md` 和 `siyuan-plugin/README.md`。Package 内 README 的图片路径统一使用 `image/README/...`；构建脚本必须把仓库根目录同名图片目录映射到 Package 根目录，确保在线集市和安装后的本地详情页都能显示图片。
 

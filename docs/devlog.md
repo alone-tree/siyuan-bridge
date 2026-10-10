@@ -14,6 +14,18 @@
 - 验证：JSON-RPC `initialize + tools/list` 9 个工具不变。能力库 `siyuan-bridge-dev` 实调（思源 3.8.6，用户工作空间）：`siyuan_start` 完整成功——系统笔记本「思源桥」按名称定位，隐私规则 3 笔记本 + 5 文档规则加载，启动包指南/偏好/索引齐全；`siyuan_operate(refresh)` 返回 13 笔记本、737 文档、8 条规则生效。验证后恢复 `disabled`。插件前端（设置页系统指南区域）需在思源 UI 人工查看，后续导入 `D:\Siyuan2test` 验证。
 - 版本按 PATCH 升至 `1.11.2`（相对 `1.11.1` 加 `0.0.1`），工具契约无变化。
 
+### 同日追加：两篇指南从系统文档改为代码资产
+
+- 触发：设置页「系统指南」显示两篇指南「1 篇用户已修改」，点重置后状态不变。实测定位到根因——`exportMdContent` 的导出内容与模板原文有三层固定差异：Front matter（`title`/`date`/`lastmod`）、文档标题 H1 块、思源插入的零宽字符 U+200B（在行内代码前）。剥离前两层后工作空间索引创建指南完全一致，MCP 使用指南再剥零宽字符才一致。也就是说「导出内容 == 模板原文」这个等式无法稳定成立，现场哈希判断用户是否修改本质脆弱；同时用户检查过自己两篇指南从未改动。
+- 用户决策：取消指南的「用户可改 + 重置」机制。两篇指南是给 AI 的系统提示词，属于代码的一部分；用户要自定义有「用户个性化要求」和「工作空间索引」两个正确去处。
+- 新结构：系统笔记本只维护四篇文档（用户个性化要求、工作空间索引、关于思源桥、隐私规则），维护方式不变。MCP 使用指南与索引创建指南改为随插件版本分发的代码资产，放在 `templates/guides/`（`git mv` 自 `templates/system-docs/`，随集市更新覆盖，不进 petal 用户数据区）。MCP 使用指南由启动包全文输出；索引创建指南只在启动包「## 工作空间索引」段后给出当前设备的绝对路径，AI 按需读取。
+- 删除：`templates/system-docs/manifest.json`（不再有托管指南哈希基线）、Python `system_templates.load_system_template/template_manifest/SystemTemplate`、`i18n.py` 的 `SYSTEM_DOC_KEYS`/`SYSTEM_DOC_NAMES`/`LEGACY_DOC_NAMES` 中两项、插件端 `ensureManagedGuide`/`loadManagedGuideTemplate`/`loadAndRenderSystemGuides`/`resetSystemGuide`、Home Dialog「系统指南」区域与 `reset-system-guide` 事件、`index.css` 指南行样式、`i18n.py` 中无引用的 `ABOUT_TEMPLATES` 死代码（含过时六篇描述）。维护步骤从五项减为三项（Privacy Rules 最先，之后用户个性化要求、关于思源桥、工作空间索引各自独立）。
+- 存量用户处理（用户决策 A）：不清理、不改名、不删除旧的两篇文档，按普通文档处理；About 模板正文删除「可修改/可重置」描述并新增一段说明（旧同名文档已不再使用，可自行删除）；版本发布后另发一条插件面板用户通知。
+- 内容更新：`templates/guides/mcp-usage-guide.{zh-CN,en}.md` 的「系统笔记本」段改为四篇并说明索引指南位置；`templates/system-docs/about.{zh-CN,en}.md` 同步四篇清单与旧文档提示；`source_code/agent_notebook.py` 新增 `load_guide_asset()` / `guide_asset_path()` 与 `AgentNotebookState.workspace_index_guide_path`，`mcp_usage_guide_markdown` 改为读内置资产（资产缺失时为空，不阻塞启动）。
+- 文档同步：`ARCHITECTURE.md`（系统笔记本文档表、代码资产表、生命周期决策、启动包数据流与返回顺序）、`FRONTEND.md`（UI 结构、维护流程、模板说明、验证清单）、`DEVELOPMENT_GUIDE.md`（系统笔记本验证清单、同步脚本与打包清单）、`AGENTS.md`（项目地图 templates 与四篇约束）、需求文档追加决策。
+- 测试：`tests/test_agent_notebook.py` 改为四篇文档 + 指南资产读断言（含英文语言选择、资产缺失降级、旧指南文档按普通文档处理），`test_startup.py` 断言索引指南路径、`test_plugin_entry.py` 删除托管模板哈希用例。全量 `python -m pytest tests -q`：444 passed、1 skipped、10 warnings；`node tests/test_plugin_storage.js` 通过。
+- 版本保持 `1.11.2`（与登记表取消同一批，未发布）。
+
 ## 2026-10-04：修复 MCP 工作目录阻止 Windows 集市更新
 
 - 最小运行时代码改动：`run_mcp.py` 保留脚本绝对路径计算，工作目录改为系统临时目录，调用 `main(REPO_ROOT)`；`mcp_server.main(root=None)` 接收显式根目录，未传参仍使用 CWD。配置、数据迁移、工具契约和 CLI 均不改。

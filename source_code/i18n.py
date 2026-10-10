@@ -21,8 +21,6 @@ LEGACY_NOTEBOOK_NAMES: dict[str, str] = {
 
 SYSTEM_DOC_KEYS = [
     "ai_guide",
-    "mcp_usage_guide",
-    "workspace_index_guide",
     "workspace_index",
     "about",
     "privacy_rules",
@@ -36,7 +34,6 @@ LEGACY_DOC_NAMES: dict[str, list[str]] = {
         "AI 使用指南",
         "AI Guide",
     ],
-    "mcp_usage_guide": ["MCP使用指南"],
     "about": [
         "关于思源代理桥",
         "About SiYuan Agent Bridge",
@@ -48,14 +45,6 @@ SYSTEM_DOC_NAMES: dict[str, dict[str, str]] = {
     "ai_guide": {
         "zh-CN": "用户个性化要求",
         "en": "User Preferences",
-    },
-    "mcp_usage_guide": {
-        "zh-CN": "MCP 使用指南",
-        "en": "MCP Usage Guide",
-    },
-    "workspace_index_guide": {
-        "zh-CN": "工作空间索引创建指南",
-        "en": "Workspace Index Guide",
     },
     "workspace_index": {
         "zh-CN": "工作空间索引",
@@ -155,52 +144,6 @@ PRIVACY_RULES_TEMPLATES: dict[str, str] = {
         "| read_only | 20260503123456-abcdefg | Example: Important Reference | Read-only |\n"
     ),
 }
-
-ABOUT_TEMPLATES: dict[str, str] = {
-    "zh-CN": (
-        "<!-- template_version: 6 -->\n\n"
-        "本文档由思源桥自动维护。插件激活或模板升级时，系统会按原文档 ID 恢复标准标题并覆盖正文。请不要在这里记录重要内容。\n\n"
-        "思源桥是连接思源笔记和 AI 助手的本地桥接工具。它让 AI 在隐私规则保护下阅读、搜索和维护你的知识库。\n\n"
-        "## 日常使用\n\n"
-        "你可以直接让 AI 查找、阅读或整理思源中的资料。需要修改笔记时，AI 会先定位目标内容；写入前自动创建思源工作空间快照。"
-        "删除被其他笔记引用的块时，系统会先检查反链并默认拒绝，避免无意破坏引用。\n\n"
-        "## 系统笔记本\n\n"
-        "插件激活时会自动创建和维护以下文档，并在本地 JSON 中记录它们的文档 ID：\n\n"
-        "- **MCP 使用指南**：补充 AI 使用思源桥时需要遵循的原则。你可以修改，也可以在插件面板重置。\n"
-        "- **用户个性化要求**：你写给 AI 的长期要求。系统只确保文档存在，不覆盖正文。\n"
-        "- **工作空间索引**：AI 创建的语义导航，帮助新会话快速定位资料。\n"
-        "- **工作空间索引创建指南**：创建和更新索引时遵循的规则。你可以修改，也可以在插件面板重置。\n"
-        "- **隐私规则**：控制哪些笔记对 AI 隐藏或只读。只有这篇文档对 AI 硬隔离。\n"
-        "- **关于思源桥**：就是本文档。标题和正文由插件维护，升级时可能覆盖。\n\n"
-        "除隐私规则外，系统笔记本可以像普通笔记本一样被 AI 读取和维护。\n\n"
-        "更多信息请阅读项目 README、项目网站，或联系开发者。\n"
-    ),
-    "en": (
-        "<!-- template_version: 6 -->\n\n"
-        "This document is maintained by SiYuan Bridge. When the plugin is activated or its template is upgraded, "
-        "the system restores the standard title and overwrites the body while preserving the document ID. "
-        "Do not store important content here.\n\n"
-        "SiYuan Bridge is a local bridge between SiYuan notes and AI agents. "
-        "It lets AI read, search, and maintain your knowledge base under privacy rules.\n\n"
-        "## Everyday use\n\n"
-        "You can ask AI to find, read, or organize material in SiYuan. Before modifying notes, AI locates the target content; "
-        "a SiYuan workspace snapshot is created before writing. If deleting a block would break references from other notes, "
-        "backlink protection refuses the operation by default.\n\n"
-        "## System notebook\n\n"
-        "When activated, the plugin automatically creates and maintains the following documents and records their document IDs in a local JSON file:\n\n"
-        "- **MCP Usage Guide:** additional principles for using SiYuan Bridge. You may edit it or reset it in the plugin panel.\n"
-        "- **User Preferences:** your long-term instructions for AI. The system ensures that it exists but does not overwrite its body.\n"
-        "- **Workspace Index:** AI-created semantic navigation for helping new sessions locate material.\n"
-        "- **Workspace Index Guide:** rules for creating and updating the index. You may edit it or reset it in the plugin panel.\n"
-        "- **Privacy Rules:** controls which notes are hidden or read-only. This is the only document hard-isolated from AI.\n"
-        "- **About SiYuan Bridge:** this document. Its title and body are maintained by the plugin and may be overwritten during upgrades.\n\n"
-        "Except for Privacy Rules, the system notebook can be read and maintained by AI like an ordinary notebook.\n\n"
-        "For more details, read the project README, visit the project website, or contact the developer.\n"
-    ),
-}
-
-ABOUT_TEMPLATE_VERSION_MARKER = "<!-- template_version: 6 -->"
-
 
 @dataclass(frozen=True)
 class LanguageConfig:

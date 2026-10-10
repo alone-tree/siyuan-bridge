@@ -84,8 +84,6 @@ class StartupPacketTests(unittest.TestCase):
             notebook_name="思源桥",
             document_ids={
                 "ai_guide": ("preferences-id",),
-                "mcp_usage_guide": ("mcp-guide-id",),
-                "workspace_index_guide": ("index-guide-id",),
                 "workspace_index": ("index-id",),
                 "about": ("about-id",),
                 "privacy_rules": ("privacy-id",),
@@ -94,6 +92,7 @@ class StartupPacketTests(unittest.TestCase):
             workspace_index_markdown="# 我的工作空间索引",
             privacy_rules=PrivacyRules(ignore=[], allow=[]),
             mcp_usage_guide_markdown="这是完整 MCP 使用指南。",
+            workspace_index_guide_path=r"D:\bridge\templates\guides\workspace-index-guide.zh-CN.md",
             workspace_index_updated=updated,
             workspace_index_is_placeholder=placeholder,
             missing_document_keys=missing_document_keys,
@@ -145,7 +144,7 @@ class StartupPacketTests(unittest.TestCase):
         result = mcp_server.McpServer(self.root).siyuan_start({})
 
         self.assertIn("工作空间索引已经", result)
-        self.assertIn("《工作空间索引创建指南》", result)
+        self.assertIn("workspace-index-guide.zh-CN.md", result)
 
     def test_missing_non_privacy_document_warns_but_start_continues(self):
         mcp_server.load_agent_notebook = lambda *_args, **_kwargs: self._state(

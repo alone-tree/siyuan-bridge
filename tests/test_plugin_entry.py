@@ -55,13 +55,6 @@ class PluginEntryContractTests(unittest.TestCase):
         self.assertNotIn("登记表", lifecycle)
         self.assertNotIn("reconcileSystemDocumentRegistry", lifecycle)
 
-    def test_managed_template_hash_normalizes_line_endings(self):
-        root_text = INDEX_JS.read_text(encoding="utf-8")
-        source_text = SRC_INDEX_JS.read_text(encoding="utf-8")
-        marker = "sha256Text(normalizeLineEndings(template))"
-        self.assertIn(marker, root_text)
-        self.assertIn(marker, source_text)
-
     def test_reference_source_contains_runtime_storage_contract(self):
         source_text = SRC_INDEX_JS.read_text(encoding="utf-8")
         for marker in (

@@ -14,11 +14,13 @@ This guide only supplements principles that tool descriptions do not explain cle
 
 ## System notebook
 
-- **MCP Usage Guide:** additional MCP usage principles; user-editable.
+The system notebook maintains exactly four documents:
+
 - **User Preferences:** the user's long-term instructions for AI; follow them and do not proactively rewrite them.
 - **Workspace Index:** navigation for new sessions, created or updated by AI when requested.
-- **Workspace Index Guide:** rules for creating and updating the index; user-editable.
 - **About SiYuan Bridge:** user-facing product information that upgrades may overwrite.
 - **Privacy Rules:** maintained by the user and inaccessible to AI.
 
 Except for Privacy Rules, documents in the system notebook behave like ordinary visible documents.
+
+Before creating or updating the Workspace Index, read the built-in index guide at the path given in the startup packet. Both this MCP usage guide and that index guide ship with the plugin version; neither is user-maintained content.

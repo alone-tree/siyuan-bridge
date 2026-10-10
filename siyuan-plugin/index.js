@@ -22,15 +22,12 @@ const SYSTEM_NOTEBOOK_NAMES = {
 const LEGACY_SYSTEM_NOTEBOOK_NAMES = ["思源代理桥", "SiYuan Agent Bridge"];
 const SYSTEM_DOC_NAMES = {
   ai_guide: {"zh-CN": "用户个性化要求", en: "User Preferences"},
-  mcp_usage_guide: {"zh-CN": "MCP 使用指南", en: "MCP Usage Guide"},
-  workspace_index_guide: {"zh-CN": "工作空间索引创建指南", en: "Workspace Index Guide"},
   workspace_index: {"zh-CN": "工作空间索引", en: "Workspace Index"},
   about: {"zh-CN": "关于思源桥", en: "About SiYuan Bridge"},
   privacy_rules: {"zh-CN": "隐私规则", en: "Privacy Rules"},
 };
 const LEGACY_SYSTEM_DOC_NAMES = {
   ai_guide: ["AI 使用指南", "AI Guide"],
-  mcp_usage_guide: ["MCP使用指南"],
   about: ["关于思源代理桥", "About SiYuan Agent Bridge", "关于Siyuan Agent Bridge"],
 };
 const SYSTEM_BOOTSTRAP_FILES = {
@@ -774,14 +771,6 @@ function renderHome() {
       </div>
 
       <div class="siyuan-bridge-home__section">
-        <div class="siyuan-bridge-home__section-title">系统指南</div>
-        <p class="siyuan-bridge-home__hint">指南允许你在思源中修改。重置会保留原文档 ID，并恢复为当前插件内置内容。</p>
-        <div data-area="system-guides">
-          <div class="siyuan-bridge-home__loading">加载中...</div>
-        </div>
-      </div>
-
-      <div class="siyuan-bridge-home__section">
         <div class="siyuan-bridge-home__section-title">提交反馈</div>
         <div class="siyuan-bridge-home__feedback">
           <label class="siyuan-bridge-home__field">
@@ -820,7 +809,6 @@ function renderHome() {
 function bindHome(root, plugin) {
   loadAndRenderNotifications(root, plugin);
   loadTelemetryConfig(root, plugin);
-  loadAndRenderSystemGuides(root, plugin);
   bindBlockIndexToggle(root, plugin);
   bindInlineImagesToggle(root, plugin);
 
@@ -866,10 +854,6 @@ function bindHome(root, plugin) {
     }
     if (action === "submit-feedback") {
       await handleSubmitFeedback(root, plugin);
-    }
-    if (action === "reset-system-guide") {
-      const guideKey = target.getAttribute("data-guide-key") || "";
-      await resetSystemGuide(root, plugin, guideKey);
     }
   });
 }
@@ -934,104 +918,6 @@ async function querySystemDocs(notebookId) {
   return Array.isArray(docs) ? docs : [];
 }
 
-async function loadManagedGuideTemplate(guideKey, language) {
-  const manifest = JSON.parse(await getFile(`${SYSTEM_TEMPLATE_ROOT}/manifest.json`));
-  const templateInfo = manifest?.templates?.[guideKey];
-  const filename = templateInfo?.files?.[language] || templateInfo?.files?.["zh-CN"];
-  if (!filename) throw new Error("内置模板缺失");
-  const markdown = await getFile(`${SYSTEM_TEMPLATE_ROOT}/${filename}`);
-  return {templateInfo, markdown};
-}
-
-async function loadAndRenderSystemGuides(root, plugin) {
-  const area = root.querySelector("[data-area='system-guides']");
-  if (!area) return;
-  try {
-    const bridgeConfig = await readBridgeConfig(plugin);
-    const language = bridgeConfig.config?.language === "en" ? "en" : "zh-CN";
-    const notebook = await findSystemNotebook();
-    if (!notebook) {
-      area.innerHTML = `<p class="siyuan-bridge-home__hint">系统笔记本尚未初始化，请重新启用插件后重试。</p>`;
-      return;
-    }
-    const docs = await querySystemDocs(String(notebook.id || ""));
-    const rows = [];
-    for (const [key, label] of [
-      ["mcp_usage_guide", "MCP 使用指南"],
-      ["workspace_index_guide", "工作空间索引创建指南"],
-    ]) {
-      const matches = findSystemDocs(docs, key);
-      const {templateInfo, markdown} = await loadManagedGuideTemplate(key, language);
-      const templateHash = await sha256Text(normalizeManagedMarkdown(markdown));
-      const knownHashes = new Set([
-        templateHash,
-        ...(templateInfo?.historical_normalized_sha256?.[language] || []),
-      ]);
-      let modified = 0;
-      for (const doc of matches) {
-        const current = await sha256Text(normalizeManagedMarkdown(await exportSystemDocument(doc.id)));
-        if (!knownHashes.has(current)) modified += 1;
-      }
-      const status = matches.length === 0
-        ? "尚未初始化"
-        : modified > 0
-          ? `${matches.length} 篇，其中 ${modified} 篇用户已修改`
-          : `${matches.length} 篇，系统默认版本 v${Number(templateInfo?.version || 1)}`;
-      rows.push(`
-        <div class="siyuan-bridge-home__guide-row">
-          <div>
-            <div class="siyuan-bridge-home__guide-name">${label}</div>
-            <div class="siyuan-bridge-home__hint">${escapeHtml(status)}</div>
-          </div>
-          <button class="b3-button b3-button--outline"
-                  data-action="reset-system-guide" data-guide-key="${key}"
-                  ${matches.length > 0 ? "" : "disabled"}>重置</button>
-        </div>`);
-    }
-    area.innerHTML = rows.join("");
-  } catch (_error) {
-    area.innerHTML = `<p class="siyuan-bridge-home__hint">无法读取系统指南状态，请重新启用插件后重试。</p>`;
-  }
-}
-
-async function resetSystemGuide(root, plugin, guideKey) {
-  const labels = {
-    mcp_usage_guide: "MCP 使用指南",
-    workspace_index_guide: "工作空间索引创建指南",
-  };
-  const label = labels[guideKey];
-  if (!label) return;
-  try {
-    const notebook = await findSystemNotebook();
-    if (!notebook) {
-      throw new Error("尚未找到系统笔记本，请重新启用插件后重试");
-    }
-    const docs = await querySystemDocs(String(notebook.id || ""));
-    const matches = findSystemDocs(docs, guideKey);
-    if (matches.length === 0) {
-      throw new Error("尚未找到指南文档，请重新启用插件后重试");
-    }
-    if (!window.confirm(
-      `确定要把《${label}》的 ${matches.length} 篇文档全部重置为当前默认内容吗？文档 ID 会保留。`
-    )) return;
-    const bridgeConfig = await readBridgeConfig(plugin);
-    const language = bridgeConfig.config?.language === "en" ? "en" : "zh-CN";
-    const {markdown} = await loadManagedGuideTemplate(guideKey, language);
-    for (const doc of matches) {
-      await callSiyuanApi("/api/block/updateBlock", {
-        id: doc.id,
-        dataType: "markdown",
-        data: markdown,
-      });
-    }
-    await loadAndRenderSystemGuides(root, plugin);
-    showMessage(`《${label}》的 ${matches.length} 篇文档已重置，原文档 ID 保持不变`);
-  } catch (error) {
-    console.error("Failed to reset system guide:", error);
-    showMessage(`重置失败：${error?.message || error}`, -1, "error");
-  }
-}
-
 function normalizeLineEndings(text) {
   return String(text || "").replaceAll("\r\n", "\n").replaceAll("\r", "\n");
 }
@@ -1079,31 +965,18 @@ async function ensureSystemNotebook(plugin) {
     const liveDocs = await querySystemDocs(notebookId);
     const documentGroups = {};
 
-    // Privacy Rules is the safety boundary. Maintain it before optional guide
-    // maintenance so a template problem cannot take the whole bridge offline.
+    // Privacy Rules is the safety boundary. Maintain it before the other
+    // documents so a template problem cannot take the whole bridge offline.
     documentGroups.privacy_rules = await ensureSimpleSystemDocument(
       liveDocs, notebookId, language, "privacy_rules"
     );
 
-    let manifest = null;
     const maintenanceSteps = [
       ["用户个性化要求", async () => {
         documentGroups.ai_guide = await ensureAiPreferences(liveDocs, notebookId, language);
       }],
       ["关于思源桥", async () => {
         documentGroups.about = await ensureAboutDocument(liveDocs, notebookId, language);
-      }],
-      ["MCP 使用指南", async () => {
-        manifest ||= JSON.parse(await getFile(`${SYSTEM_TEMPLATE_ROOT}/manifest.json`));
-        documentGroups.mcp_usage_guide = await ensureManagedGuide(
-          liveDocs, notebookId, language, manifest, "mcp_usage_guide"
-        );
-      }],
-      ["工作空间索引创建指南", async () => {
-        manifest ||= JSON.parse(await getFile(`${SYSTEM_TEMPLATE_ROOT}/manifest.json`));
-        documentGroups.workspace_index_guide = await ensureManagedGuide(
-          liveDocs, notebookId, language, manifest, "workspace_index_guide"
-        );
       }],
       ["工作空间索引", async () => {
         documentGroups.workspace_index = await ensureSimpleSystemDocument(
@@ -1252,50 +1125,9 @@ async function ensureSimpleSystemDocument(docs, notebookId, language, key) {
   return matches;
 }
 
-async function ensureManagedGuide(docs, notebookId, language, manifest, key) {
-  const templateInfo = manifest?.templates?.[key];
-  const filename = templateInfo?.files?.[language]
-    || templateInfo?.files?.["zh-CN"];
-  if (!filename) throw new Error(`内置指南模板缺失：${key}`);
-  const template = await getFile(`${SYSTEM_TEMPLATE_ROOT}/${filename}`);
-  const sourceHash = await sha256Text(normalizeLineEndings(template));
-  const expectedSourceHash = String(
-    templateInfo?.source_sha256?.[language]
-      || templateInfo?.source_sha256?.["zh-CN"]
-      || ""
-  );
-  if (expectedSourceHash && expectedSourceHash !== sourceHash) {
-    throw new Error(`内置指南模板哈希不匹配：${filename}`);
-  }
-
-  let matches = findSystemDocs(docs, key);
-  if (matches.length === 0) {
-    matches = [await createSystemDocument(
-      docs, notebookId, SYSTEM_DOC_NAMES[key][language], template
-    )];
-  }
-  const templateHash = await sha256Text(normalizeManagedMarkdown(template));
-  const knownHashes = new Set([
-    templateHash,
-    ...(templateInfo?.historical_normalized_sha256?.[language] || []),
-  ]);
-  for (const doc of matches) {
-    const markdown = await exportSystemDocument(doc.id);
-    const currentHash = await sha256Text(normalizeManagedMarkdown(markdown));
-    // Upgrade only when the body still matches the current or a historical
-    // template; anything else counts as a user modification and stays.
-    if (knownHashes.has(currentHash) && currentHash !== templateHash) {
-      await updateSystemDocument(doc.id, template);
-    }
-  }
-  return matches;
-}
-
 function showDuplicateSystemDocuments(documentGroups) {
   const labels = {
     ai_guide: "用户个性化要求",
-    mcp_usage_guide: "MCP 使用指南",
-    workspace_index_guide: "工作空间索引创建指南",
     workspace_index: "工作空间索引",
     about: "关于思源桥",
     privacy_rules: "隐私规则",

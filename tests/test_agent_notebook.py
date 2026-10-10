@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from source_code.agent_notebook import (
     PrivacyRulesUnavailableError,
@@ -51,12 +53,21 @@ class FakeSystemClient:
 class AgentNotebookReadTests(unittest.TestCase):
     def setUp(self):
         self.client = FakeSystemClient()
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        guides = self.root / "templates" / "guides"
+        guides.mkdir(parents=True)
+        (guides / "mcp-usage-guide.zh-CN.md").write_text("内置中文指南", encoding="utf-8")
+        (guides / "mcp-usage-guide.en.md").write_text("built-in english guide", encoding="utf-8")
+        (guides / "workspace-index-guide.zh-CN.md").write_text("索引指南", encoding="utf-8")
+        (guides / "workspace-index-guide.en.md").write_text("index guide", encoding="utf-8")
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
 
     def _complete_documents(self):
         data = {
             "ai_guide": ("pref-1", "用户个性化要求", "要求一"),
-            "mcp_usage_guide": ("mcp-1", "MCP 使用指南", "指南一"),
-            "workspace_index_guide": ("wig-1", "工作空间索引创建指南", "创建说明"),
             "workspace_index": ("index-1", "工作空间索引", "索引一"),
             "about": ("about-1", "关于思源桥", "关于"),
             "privacy_rules": ("privacy-1", "隐私规则", ""),
@@ -64,24 +75,59 @@ class AgentNotebookReadTests(unittest.TestCase):
         for key, (doc_id, title, markdown) in data.items():
             self.client.add_doc(doc_id, title, markdown)
 
-    def test_reads_documents_by_name_without_any_state_file(self):
+    def test_reads_four_documents_by_name_without_any_state_file(self):
         self._complete_documents()
 
-        state = load_agent_notebook(self.client, None, "zh-CN")
+        state = load_agent_notebook(self.client, self.root, "zh-CN")
 
         self.assertEqual(state.notebook_id, "system-nb")
         self.assertEqual(state.notebook_name, "思源桥")
         self.assertEqual(state.ai_guide_markdown, "要求一")
-        self.assertEqual(state.mcp_usage_guide_markdown, "指南一")
         self.assertEqual(state.privacy_rules_doc_ids, ("privacy-1",))
         self.assertEqual(state.missing_document_keys, ())
+
+    def test_guides_come_from_built_in_assets_not_from_siyuan(self):
+        self._complete_documents()
+
+        state = load_agent_notebook(self.client, self.root, "zh-CN")
+
+        self.assertEqual(state.mcp_usage_guide_markdown, "内置中文指南")
+        self.assertTrue(
+            state.workspace_index_guide_path.endswith("workspace-index-guide.zh-CN.md")
+        )
+        self.assertEqual(
+            state.workspace_index_guide_path,
+            str((self.root / "templates" / "guides" / "workspace-index-guide.zh-CN.md").absolute()),
+        )
+        # 系统笔记本里的同名旧文档不再被读取为指南。
+        self.assertNotIn("mcp_usage_guide", state.document_ids)
+        self.assertNotIn("workspace_index_guide", state.document_ids)
+
+    def test_english_language_selects_english_guide_assets(self):
+        self._complete_documents()
+        self.client.notebooks = [{"id": "system-nb", "name": "SiYuan Bridge", "closed": False}]
+
+        state = load_agent_notebook(self.client, self.root, None)
+
+        self.assertEqual(state.language, "en")
+        self.assertEqual(state.mcp_usage_guide_markdown, "built-in english guide")
+        self.assertTrue(state.workspace_index_guide_path.endswith("workspace-index-guide.en.md"))
+
+    def test_missing_guide_assets_do_not_break_startup(self):
+        self._complete_documents()
+        (self.root / "templates" / "guides" / "mcp-usage-guide.zh-CN.md").unlink()
+
+        state = load_agent_notebook(self.client, self.root, "zh-CN")
+
+        self.assertEqual(state.mcp_usage_guide_markdown, "")
+        self.assertTrue(state.workspace_index_guide_path.endswith("workspace-index-guide.zh-CN.md"))
 
     def test_merges_multiple_documents_with_same_name(self):
         self._complete_documents()
         self.client.add_doc("pref-2", "用户个性化要求", "要求二")
         self.client.add_doc("privacy-2", "隐私规则", "")
 
-        state = load_agent_notebook(self.client, None)
+        state = load_agent_notebook(self.client, self.root)
 
         self.assertEqual(state.document_ids["ai_guide"], ("pref-1", "pref-2"))
         self.assertEqual(state.ai_guide_markdown, "要求一\n\n---\n\n要求二")
@@ -94,27 +140,18 @@ class AgentNotebookReadTests(unittest.TestCase):
         self.client.add_doc("legacy-pref", "AI Guide", "旧要求")
         self.client.add_doc("legacy-privacy", "Privacy Rules", "")
 
-        state = load_agent_notebook(self.client, None)
+        state = load_agent_notebook(self.client, self.root)
 
         self.assertEqual(state.document_ids["ai_guide"], ("legacy-pref",))
         self.assertEqual(state.ai_guide_markdown, "旧要求")
         self.assertEqual(state.privacy_rules_doc_ids, ("legacy-privacy",))
         self.assertEqual(state.missing_document_keys, ())
 
-    def test_language_follows_notebook_name(self):
-        self._complete_documents()
-        self.client.notebooks = [{"id": "system-nb", "name": "SiYuan Bridge", "closed": False}]
-
-        state = load_agent_notebook(self.client, None, None)
-
-        self.assertEqual(state.language, "en")
-        self.assertEqual(state.notebook_name, "SiYuan Bridge")
-
     def test_legacy_notebook_name_is_recognized(self):
         self._complete_documents()
         self.client.notebooks = [{"id": "legacy-nb", "name": "SiYuan Agent Bridge", "closed": False}]
 
-        state = load_agent_notebook(self.client, None)
+        state = load_agent_notebook(self.client, self.root)
 
         self.assertEqual(state.notebook_id, "legacy-nb")
 
@@ -135,7 +172,7 @@ class AgentNotebookReadTests(unittest.TestCase):
 
         self.client.query_sql = query_sql
 
-        state = load_agent_notebook(self.client, None)
+        state = load_agent_notebook(self.client, self.root)
 
         self.assertEqual(state.notebook_id, "nb-first")
         self.assertEqual(seen_boxes, ["nb-first"])
@@ -144,7 +181,7 @@ class AgentNotebookReadTests(unittest.TestCase):
         self._complete_documents()
         del self.client.docs["about-1"]
 
-        state = load_agent_notebook(self.client, None)
+        state = load_agent_notebook(self.client, self.root)
 
         self.assertIn("about", state.missing_document_keys)
         self.assertEqual(state.privacy_rules_doc_ids, ("privacy-1",))
@@ -154,13 +191,13 @@ class AgentNotebookReadTests(unittest.TestCase):
         del self.client.docs["privacy-1"]
 
         with self.assertRaisesRegex(PrivacyRulesUnavailableError, "禁用并重新启用"):
-            load_agent_notebook(self.client, None)
+            load_agent_notebook(self.client, self.root)
 
     def test_missing_system_notebook_fails_closed(self):
         self.client.notebooks = [{"id": "other", "name": "普通笔记本", "closed": False}]
 
         with self.assertRaisesRegex(PrivacyRulesUnavailableError, "禁用并重新启用"):
-            load_agent_notebook(self.client, None)
+            load_agent_notebook(self.client, self.root)
 
     def test_renamed_privacy_document_is_no_longer_recognized(self):
         # 行为变化（需求 3.3）：改名的 Privacy Rules 文档脱离系统文档身份。
@@ -169,7 +206,18 @@ class AgentNotebookReadTests(unittest.TestCase):
         renamed["hpath"] = "/我的隐私备份"
 
         with self.assertRaises(PrivacyRulesUnavailableError):
-            load_agent_notebook(self.client, None)
+            load_agent_notebook(self.client, self.root)
+
+    def test_retired_guide_documents_stay_ordinary_documents(self):
+        # 1.11.2 起 MCP 使用指南与索引创建指南不再属于系统文档，同名文档按普通文档处理。
+        self._complete_documents()
+        self.client.add_doc("old-guide", "MCP 使用指南", "旧版指南")
+        self.client.add_doc("old-index-guide", "工作空间索引创建指南", "旧版索引指南")
+
+        state = load_agent_notebook(self.client, self.root)
+
+        self.assertEqual(state.missing_document_keys, ())
+        self.assertEqual(state.mcp_usage_guide_markdown, "内置中文指南")
 
 
 class PrivacyRulesNameMatchTests(unittest.TestCase):
