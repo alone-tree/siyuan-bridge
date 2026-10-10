@@ -449,6 +449,18 @@ npx wrangler d1 execute siyuan_bridge --remote \
   --command "INSERT INTO notifications (id, title, url, created_at) VALUES ('v0.3.0', '思源桥 v0.3.0 已发布', 'https://github.com/alone-tree/siyuan-bridge/releases', '2026-06-07T00:00:00Z');"
 ```
 
+插入含中文的 SQL 时，建议把语句写进 UTF-8 文件后用 `--file` 执行，避免控制台编码转码。
+
+### 维护用 API token（公司电脑）
+
+wrangler 非交互执行需要 `CLOUDFLARE_API_TOKEN`。公司电脑维护用 token「思源桥D1-公司电脑」（2026-10-10 创建）：
+
+- 权限（All accounts）：D1:Read、D1:Edit、Workers Scripts:Read、Workers Scripts:Edit、Account Settings:Read
+- 有效期：2026-10-10 至 2027-10-10，过期需在 Cloudflare 面板重建
+- 用途：`wrangler d1 execute --remote` 插入通知等维护操作；内联 SQL 建议走 `--file`
+- token 本体不进文档、不进 git、不进 HermesSync；使用时临时设置 `CLOUDFLARE_API_TOKEN` 环境变量。家里电脑的「家里电脑管理权」token 无 D1 权限，做不了这类操作（见 cloudflare-ops 技能）
+- token 明文若在对话中展示过，可随时在面板删除重建（权限不变）
+
 ### 部署 Worker
 
 ```bash
