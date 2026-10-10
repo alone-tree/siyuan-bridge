@@ -18,6 +18,9 @@ ENV_LANGUAGE = "SIYUAN_AGENT_LANGUAGE"
 DEFAULT_URLS = ("http://127.0.0.1:6806", "http://localhost:6806")
 
 
+MB = 1024 * 1024
+
+
 @dataclass(frozen=True)
 class Profile:
     name: str
@@ -30,6 +33,18 @@ class Config:
     language: str
     root: Path
     read_inline_images: bool = False
+    # None 表示 config.local.json 未设置 inline_image_budget_mb，
+    # 由读侧回退到内置默认值（mcp_server.INLINE_RESPONSE_BUDGET_BYTES）。
+    inline_image_budget_bytes: int | None = None
+
+
+def _inline_image_budget_bytes(local: dict[str, Any]) -> int | None:
+    raw = local.get("inline_image_budget_mb")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    if raw < 0:
+        return None
+    return int(round(float(raw) * MB))
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -70,6 +85,7 @@ def load_config(root: Path | None = None) -> Config:
         language=language,
         root=project_root,
         read_inline_images=local.get("read_inline_images") is True,
+        inline_image_budget_bytes=_inline_image_budget_bytes(local),
     )
 
 

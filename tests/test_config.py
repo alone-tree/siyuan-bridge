@@ -48,6 +48,22 @@ class ConfigTests(unittest.TestCase):
             ),
         )
 
+    def test_load_config_reads_inline_image_budget(self):
+        path = self.root / "config.local.json"
+
+        path.write_text(json.dumps({"inline_image_budget_mb": 4}), encoding="utf-8")
+        self.assertEqual(load_config(self.root).inline_image_budget_bytes, 4 * 1024 * 1024)
+
+        path.write_text(json.dumps({"inline_image_budget_mb": 0}), encoding="utf-8")
+        self.assertEqual(load_config(self.root).inline_image_budget_bytes, 0)
+
+        for raw in (None, "", "4", True, -1, []):
+            path.write_text(json.dumps({"inline_image_budget_mb": raw}), encoding="utf-8")
+            self.assertIsNone(load_config(self.root).inline_image_budget_bytes, raw)
+
+        path.write_text(json.dumps({}), encoding="utf-8")
+        self.assertIsNone(load_config(self.root).inline_image_budget_bytes)
+
     def test_detect_active_profile_reports_missing_profiles(self):
         with self.assertRaises(SiYuanConnectionError) as ctx:
             detect_active_profile(Config(profiles=(), language="", root=self.root))

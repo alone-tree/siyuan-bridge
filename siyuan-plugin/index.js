@@ -14,7 +14,9 @@ const DEFAULT_CONFIG = {
   profiles: [{name: "当前工作空间", token: ""}],
   language: "zh-CN",
   read_inline_images: false,
+  inline_image_budget_mb: 9,
 };
+const IMAGE_BUDGET_HELP = "若 AI 选择读取文档时同步读图，则图片会作为同一次 MCP 调用的结果一并发送给 AI。大部分 AI Agent 平台会限制单次 MCP 调用的结果不超过 10 MB，超过即断连。如无必要请勿修改此项。";
 const SYSTEM_NOTEBOOK_NAMES = {
   "zh-CN": "思源桥",
   en: "SiYuan Bridge",
@@ -778,7 +780,7 @@ function renderHome() {
           <input class="b3-switch" type="checkbox" data-inline-images="checkbox" />
         </div>
         <p class="siyuan-bridge-home__hint">
-          开启后 AI 读取文档时随文字一起返回图片内容。重新连接思源桥 MCP 后生效。
+          开启后 AI 读取文档时随文字一起返回图片内容，下一次读取即生效。
         </p>
       </div>
 
@@ -902,7 +904,7 @@ function bindInlineImagesToggle(root, plugin) {
       const config = result.config || JSON.parse(JSON.stringify(DEFAULT_CONFIG));
       config.read_inline_images = next;
       await saveBridgeConfig(plugin, config);
-      showMessage(next ? "已开启读文档时返回图片，重新连接思源桥 MCP 后生效" : "已关闭读文档时返回图片，重新连接思源桥 MCP 后生效");
+      showMessage(next ? "已开启读文档时返回图片，下一次读取即生效" : "已关闭读文档时返回图片，下一次读取即生效");
     } catch (error) {
       checkbox.checked = !next;
       console.warn("Siyuan Bridge inline images toggle save failed", error);
@@ -1323,18 +1325,15 @@ async function getPluginContext() {
   const systemConf = await getSystemConf();
   const activeWorkspaceDir = await getActiveWorkspaceDir();
   const workspaceDir = activeWorkspaceDir || systemConf.workspaceDir || "";
-  const guessedPluginDir = workspaceDir ? joinPath(workspaceDir, "data", "plugins", PLUGIN_NAME) : "";
-  const guessedBridgeDir = guessedPluginDir ? joinPath(guessedPluginDir, "bridge") : "";
-  const guessedRunMcp = guessedBridgeDir
-    ? joinPath(guessedBridgeDir, "scripts", "run_mcp.py")
+  const bridgeDir = workspaceDir ? joinPath(workspaceDir, "data", "plugins", PLUGIN_NAME, "bridge") : "";
+  const runMcpPath = bridgeDir
+    ? joinPath(bridgeDir, "scripts", "run_mcp.py")
     : "";
   return {
     currentWorkspaceName: workspaceDir ? workspaceDir.split(/[\\/]/).filter(Boolean).pop() || "当前工作空间" : "当前工作空间",
     currentToken: systemConf.token || "",
     workspaceDir,
-    pluginDir: guessedPluginDir,
-    bridgeDir: guessedBridgeDir,
-    runMcpPath: guessedRunMcp,
+    runMcpPath,
     pythonCommand: "python",
     serverName: "siyuan-bridge",
   };
@@ -1354,6 +1353,17 @@ async function readBridgeConfig(plugin) {
   return {config: null, exists: false};
 }
 
+function normalizeImageBudgetMb(value) {
+  if (value === undefined || value === null || value === "") {
+    return DEFAULT_CONFIG.inline_image_budget_mb;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_CONFIG.inline_image_budget_mb;
+  }
+  return parsed;
+}
+
 function normalizeConfig(config) {
   const profiles = Array.isArray(config.profiles) && config.profiles.length
     ? config.profiles
@@ -1365,6 +1375,7 @@ function normalizeConfig(config) {
     })),
     language: String(config.language || "zh-CN"),
     read_inline_images: config.read_inline_images === true,
+    inline_image_budget_mb: normalizeImageBudgetMb(config.inline_image_budget_mb),
   };
 }
 
@@ -1405,62 +1416,61 @@ async function ensureDefaultBridgeConfig(plugin) {
 }
 
 // ---------------------------------------------------------------------------
-// MCP Settings Dialog (unchanged)
+// MCP Settings Dialog
 // ---------------------------------------------------------------------------
 
 function renderSettings(config, context) {
   const escapedConfig = escapeAttr(JSON.stringify(config));
+  const budgetMb = normalizeImageBudgetMb(config.inline_image_budget_mb);
   return `
     <div class="siyuan-bridge" data-config="${escapedConfig}">
       <div class="siyuan-bridge__section">
-        <label class="siyuan-bridge__field">
-          <span class="siyuan-bridge__label">Python 命令</span>
-          <input class="b3-text-field fn__block" data-field="pythonCommand" value="${escapeAttr(context.pythonCommand)}" placeholder="python" />
-        </label>
-        <label class="siyuan-bridge__field">
-          <span class="siyuan-bridge__label">MCP Server 名称</span>
-          <input class="b3-text-field fn__block" data-field="serverName" value="${escapeAttr(context.serverName)}" placeholder="siyuan-bridge" />
-        </label>
-      </div>
-
-      <div class="siyuan-bridge__section">
-        <label class="siyuan-bridge__field">
-          <span class="siyuan-bridge__label">插件目录</span>
-          <input class="b3-text-field fn__block" data-field="pluginDir" value="${escapeAttr(context.pluginDir)}" />
-        </label>
-        <label class="siyuan-bridge__field">
-          <span class="siyuan-bridge__label">Bridge 目录</span>
-          <input class="b3-text-field fn__block" data-field="bridgeDir" value="${escapeAttr(context.bridgeDir)}" />
-        </label>
-        <label class="siyuan-bridge__field">
-          <span class="siyuan-bridge__label">MCP 启动脚本</span>
-          <input class="b3-text-field fn__block" data-field="runMcpPath" value="${escapeAttr(context.runMcpPath)}" />
-        </label>
-      </div>
-
-      <div class="siyuan-bridge__section">
         <div class="siyuan-bridge__header">
-          <span>工作空间 Profiles</span>
-          <button class="b3-button b3-button--outline" data-action="add-profile">添加工作空间</button>
+          <span>工作空间配置</span>
         </div>
         <div data-profiles>${renderProfiles(config.profiles)}</div>
+        <p class="siyuan-bridge__hint">一行一个工作空间：名称 + 访问令牌，AI 用它认出你当前打开的是哪个工作空间。</p>
+        <div class="siyuan-bridge__actions siyuan-bridge__actions--start">
+          <button class="b3-button b3-button--text" data-action="add-profile">+ 添加工作空间</button>
+        </div>
       </div>
 
       <div class="siyuan-bridge__section">
-        <div class="siyuan-bridge__header">
-          <span>MCP JSON</span>
-          <div class="siyuan-bridge__header-actions">
-            <button class="b3-button b3-button--outline" data-action="copy-json">复制 JSON</button>
-            <button class="b3-button" data-action="copy-for-ai">复制给 AI</button>
-          </div>
+        <div class="siyuan-bridge__actions siyuan-bridge__actions--start">
+          <button class="b3-button" data-action="copy-json">复制 MCP 配置 JSON</button>
+          <button class="b3-button b3-button--outline" data-action="copy-for-ai">复制给 AI</button>
         </div>
-        <textarea class="b3-text-field siyuan-bridge__json" data-field="mcpJson" readonly></textarea>
+        <p class="siyuan-bridge__hint">复制后粘给你的 AI 工具，让它注册这个 MCP。「复制给 AI」会连同一句注册说明一起复制。</p>
       </div>
 
-      <div class="siyuan-bridge__actions">
-        <button class="b3-button" data-action="save">保存配置</button>
-        <button class="b3-button b3-button--outline" data-action="refresh-json">刷新 JSON</button>
-      </div>
+      <details class="siyuan-bridge__fold">
+        <summary class="siyuan-bridge__fold-title">MCP JSON 原文</summary>
+        <div class="siyuan-bridge__fold-body">
+          <textarea class="b3-text-field siyuan-bridge__json" data-field="mcpJson" readonly></textarea>
+        </div>
+      </details>
+
+      <details class="siyuan-bridge__fold">
+        <summary class="siyuan-bridge__fold-title">高级配置</summary>
+        <div class="siyuan-bridge__fold-body">
+          <label class="siyuan-bridge__field">
+            <span class="siyuan-bridge__label">Python 命令</span>
+            <input class="b3-text-field fn__block" data-field="pythonCommand" value="${escapeAttr(context.pythonCommand)}" placeholder="python" />
+          </label>
+          <label class="siyuan-bridge__field">
+            <span class="siyuan-bridge__label">MCP 名称</span>
+            <input class="b3-text-field fn__block" data-field="serverName" value="${escapeAttr(context.serverName)}" placeholder="siyuan-bridge" />
+          </label>
+          <label class="siyuan-bridge__field">
+            <span class="siyuan-bridge__label">单次读取时总图片体积上限<span class="siyuan-bridge__help" data-help="${escapeAttr(IMAGE_BUDGET_HELP)}">?</span></span>
+            <span class="siyuan-bridge__inline">
+              <input class="b3-text-field" data-field="imageBudgetMb" type="number" min="0" step="any" value="${escapeAttr(String(budgetMb))}" />
+              <span class="siyuan-bridge__unit">MB</span>
+            </span>
+          </label>
+          <p class="siyuan-bridge__hint">Python 命令与 MCP 名称只影响复制出来的配置，不写入插件配置；其余改动自动保存。</p>
+        </div>
+      </details>
     </div>
   `;
 }
@@ -1480,6 +1490,14 @@ function bindSettings(root, plugin, config, context) {
   const state = {
     config: normalizeConfig(config),
     context: {...context},
+  };
+  let saveTimer = 0;
+
+  const scheduleSave = () => {
+    window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(() => {
+      saveBridgeConfig(plugin, state.config);
+    }, 500);
   };
 
   const refreshProfiles = () => {
@@ -1504,9 +1522,28 @@ function bindSettings(root, plugin, config, context) {
       const field = target.getAttribute("data-profile-field");
       if (field === "name" || field === "token") {
         state.config.profiles[index][field] = target.value;
+        scheduleSave();
+      }
+    }
+    if (target.getAttribute("data-field") === "imageBudgetMb") {
+      const parsed = Number(target.value);
+      if (target.value.trim() !== "" && Number.isFinite(parsed) && parsed >= 0) {
+        state.config.inline_image_budget_mb = parsed;
+        scheduleSave();
       }
     }
     refreshJson();
+  });
+
+  container.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) || target.getAttribute("data-field") !== "imageBudgetMb") {
+      return;
+    }
+    const parsed = Number(target.value);
+    if (target.value.trim() === "" || !Number.isFinite(parsed) || parsed < 0) {
+      target.value = String(state.config.inline_image_budget_mb);
+    }
   });
 
   container.addEventListener("click", async (event) => {
@@ -1521,6 +1558,7 @@ function bindSettings(root, plugin, config, context) {
     if (action === "add-profile") {
       state.config.profiles.push({name: `工作空间 ${state.config.profiles.length + 1}`, token: ""});
       refreshProfiles();
+      scheduleSave();
     }
     if (action === "remove-profile") {
       const profileEl = target.closest("[data-profile-index]");
@@ -1528,12 +1566,8 @@ function bindSettings(root, plugin, config, context) {
       if (index > 0) {
         state.config.profiles.splice(index, 1);
         refreshProfiles();
+        scheduleSave();
       }
-    }
-    if (action === "refresh-json") {
-      await refreshDetectedPaths(container, plugin, state);
-      refreshJson();
-      showMessage("已按当前电脑刷新 MCP 路径和 Token");
     }
     if (action === "copy-json") {
       refreshJson();
@@ -1547,40 +1581,18 @@ function bindSettings(root, plugin, config, context) {
       await navigator.clipboard.writeText(`${prompt}\n\n${mcpJson}`);
       showMessage("MCP 配置已复制给 AI");
     }
-    if (action === "save") {
-      readContext(container, state);
-      await saveBridgeConfig(plugin, state.config);
-      refreshJson();
-      showMessage("思源桥配置已保存");
-    }
   });
 
   refreshJson();
 }
 
 function readContext(container, state) {
-  for (const key of ["pythonCommand", "serverName", "pluginDir", "bridgeDir", "runMcpPath"]) {
+  for (const key of ["pythonCommand", "serverName"]) {
     const input = container.querySelector(`[data-field='${key}']`);
     if (input instanceof HTMLInputElement) {
       state.context[key] = input.value.trim();
     }
   }
-}
-
-async function refreshDetectedPaths(container, plugin, state) {
-  const detected = await getPluginContext();
-  for (const key of ["currentWorkspaceName", "currentToken", "workspaceDir", "pluginDir", "bridgeDir", "runMcpPath"]) {
-    state.context[key] = detected[key];
-  }
-  for (const key of ["pluginDir", "bridgeDir", "runMcpPath"]) {
-    const input = container.querySelector(`[data-field='${key}']`);
-    if (input instanceof HTMLInputElement) {
-      input.value = state.context[key] || "";
-    }
-  }
-  state.config = applyCurrentWorkspaceDefaults(state.config, state.context);
-  container.querySelector("[data-profiles]").innerHTML = renderProfiles(state.config.profiles);
-  await saveBridgeConfig(plugin, state.config);
 }
 
 async function saveBridgeConfig(plugin, config) {

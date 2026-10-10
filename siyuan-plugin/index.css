@@ -52,6 +52,109 @@
   resize: vertical;
 }
 
+.siyuan-bridge__hint {
+  color: var(--b3-theme-on-surface-light);
+  font-size: 13px;
+  line-height: 20px;
+  margin: 0;
+}
+
+.siyuan-bridge__actions--start {
+  justify-content: flex-start;
+}
+
+.siyuan-bridge__fold {
+  border-top: 1px solid var(--b3-border-color);
+  padding-top: 16px;
+}
+
+.siyuan-bridge__fold-title {
+  align-items: center;
+  color: var(--b3-theme-on-surface);
+  cursor: pointer;
+  display: flex;
+  font-size: 14px;
+  font-weight: 600;
+  gap: 6px;
+  line-height: 22px;
+  list-style: none;
+}
+
+.siyuan-bridge__fold-title::-webkit-details-marker {
+  display: none;
+}
+
+.siyuan-bridge__fold-title::before {
+  color: var(--b3-theme-on-surface-light);
+  content: "▸";
+  font-size: 12px;
+}
+
+.siyuan-bridge__fold[open] > .siyuan-bridge__fold-title::before {
+  content: "▾";
+}
+
+.siyuan-bridge__fold-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+}
+
+.siyuan-bridge__inline {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.siyuan-bridge__inline input {
+  width: 96px;
+}
+
+.siyuan-bridge__unit {
+  color: var(--b3-theme-on-surface-light);
+  font-size: 13px;
+}
+
+.siyuan-bridge__help {
+  align-items: center;
+  border: 1px solid var(--b3-theme-on-surface-light);
+  border-radius: 50%;
+  color: var(--b3-theme-on-surface-light);
+  cursor: help;
+  display: inline-flex;
+  font-size: 10px;
+  height: 14px;
+  justify-content: center;
+  line-height: 1;
+  margin-left: 4px;
+  position: relative;
+  width: 14px;
+}
+
+.siyuan-bridge__help::after {
+  background: var(--b3-tooltips-background, #333);
+  border-radius: 4px;
+  color: var(--b3-tooltips-color, #fff);
+  content: attr(data-help);
+  display: none;
+  font-size: 12px;
+  font-weight: 400;
+  left: 0;
+  line-height: 1.6;
+  padding: 8px 10px;
+  position: absolute;
+  top: 22px;
+  white-space: normal;
+  width: 320px;
+  z-index: 2;
+}
+
+.siyuan-bridge__help:hover::after,
+.siyuan-bridge__help:focus::after {
+  display: block;
+}
+
 /* ========================================
    Home Dialog
    ======================================== */

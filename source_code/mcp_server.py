@@ -3290,14 +3290,15 @@ class McpServer:
         doc = self.resolve_visible_document(args)
         client = self._require_active_client()
         include_block_ids = bool(args.get("include_block_ids"))
-        inline_images = load_config(self.root).read_inline_images
+        config = load_config(self.root)
         return self._read_document_block_window(
             doc,
             client,
             include_block_ids,
             args,
-            inline_images=inline_images,
+            inline_images=config.read_inline_images,
             allow_large=bool(args.get("include_large_images")),
+            budget_bytes=config.inline_image_budget_bytes,
         )
 
     def _read_document_block_window(
@@ -3309,8 +3310,11 @@ class McpServer:
         *,
         inline_images: bool = False,
         allow_large: bool = False,
+        budget_bytes: int | None = None,
     ) -> str:
         """New block window reading path — uses getChildBlocks for display order."""
+        # None 表示 config.local.json 未设置 inline_image_budget_mb，回退到内置默认值。
+        budget = INLINE_RESPONSE_BUDGET_BYTES if budget_bytes is None else budget_bytes
         doc_id = str(doc.get("id"))
         notebook_id = str(doc.get("notebook_id", ""))
 
@@ -3357,7 +3361,7 @@ class McpServer:
                     client=client,
                     doc_id=doc_id,
                     allow_large=allow_large,
-                    budget_bytes=INLINE_RESPONSE_BUDGET_BYTES,
+                    budget_bytes=budget,
                 )
                 self._pending_read_images = images or None
             markdown = rewrite_local_asset_links(markdown, doc_id, self.root)
@@ -3375,7 +3379,7 @@ class McpServer:
             if attachment_count:
                 header_lines.append(f"附件：{attachment_count} 个已提取到 {attachment_root_dir(self.root, doc_id).resolve()}")
             if image_stats and image_stats.get("over_budget"):
-                header_lines.append(build_inline_image_budget_note(image_stats, INLINE_RESPONSE_BUDGET_BYTES))
+                header_lines.append(build_inline_image_budget_note(image_stats, budget))
             return "\n".join(["\n".join(header_lines), "", "---", "", markdown])
 
         # Compute stats
@@ -3431,7 +3435,7 @@ class McpServer:
             return markdown
 
         def inline_one_block(markdown: str) -> tuple[str, list[dict[str, str]], dict[str, int]]:
-            remaining = max(0, INLINE_RESPONSE_BUDGET_BYTES - image_bytes_used)
+            remaining = max(0, budget - image_bytes_used)
             return inline_images_into_markdown(
                 markdown,
                 root=self.root,
@@ -3546,7 +3550,7 @@ class McpServer:
         if attachment_count:
             header_lines.append(f"附件：{attachment_count} 个已提取到 {attachment_root_dir(self.root, doc_id).resolve()}")
         if image_stats and image_stats.get("over_budget"):
-            header_lines.append(build_inline_image_budget_note(image_stats, INLINE_RESPONSE_BUDGET_BYTES))
+            header_lines.append(build_inline_image_budget_note(image_stats, budget))
         header = "\n".join(header_lines)
 
         # Build outline (always full document outline with block positions)

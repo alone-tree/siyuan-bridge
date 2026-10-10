@@ -5430,7 +5430,11 @@ class McpServerReadEmbeddedBlocksTests(unittest.TestCase):
             asset_bytes=b"\x89PNG\r\n" + b"x" * 32,
         )
 
-        with mock.patch.object(mcp_server, "load_config", return_value=mock.Mock(read_inline_images=True)):
+        with mock.patch.object(
+            mcp_server,
+            "load_config",
+            return_value=mock.Mock(read_inline_images=True, inline_image_budget_bytes=None),
+        ):
             with mock.patch.object(mcp_server, "INLINE_RESPONSE_BUDGET_BYTES", 4):
                 _, result = self._read(client, token_budget=10000)
 
@@ -5626,6 +5630,20 @@ class McpServerReadInlineImagesTests(unittest.TestCase):
         self.assertIn("[图片未返回：超出单笔", self._text(content))
         self.assertIn("include_large_images=true", self._text(content))
         self.assertIn("chart.png", self._text(content))
+
+    def test_config_image_budget_overrides_builtin_default(self):
+        blocks = self._blocks([("p1", "![chart](assets/chart.png)")])
+        server = self._make_server(blocks, "![chart](assets/chart.png)")
+        self.write_config({
+            "profiles": [{"name": "t", "token": "t"}],
+            "read_inline_images": True,
+            "inline_image_budget_mb": 0,
+        })
+        response = server.call_tool(1, "siyuan_read", {"document_id": "doc1"})
+        content = response["result"]["content"]
+        self.assertTrue(all(item["type"] == "text" for item in content))
+        self.assertIn("[图片未返回：超出单笔", self._text(content))
+        self.assertIn("0 字节", self._text(content))
 
     def test_oversized_image_inlined_after_confirm(self):
         blocks = self._blocks([("p1", "![chart](assets/chart.png)")])
