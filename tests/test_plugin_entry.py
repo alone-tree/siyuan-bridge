@@ -28,12 +28,12 @@ class PluginEntryContractTests(unittest.TestCase):
         text = INDEX_JS.read_text(encoding="utf-8")
         self.assertIn('const CONFIG_STORAGE = "config.local.json"', text)
         self.assertIn('const TELEMETRY_STORAGE = "telemetry.json"', text)
-        self.assertIn('const SYSTEM_STATE_STORAGE = "system_state.json"', text)
+        self.assertNotIn("SYSTEM_STATE_STORAGE", text)
+        self.assertNotIn("system_state.json", text)
         self.assertIn("await plugin.loadData(storageName)", text)
         self.assertIn("await plugin.saveData(storageName, parsed)", text)
         self.assertIn("await plugin.saveData(CONFIG_STORAGE, normalized)", text)
         self.assertIn("await plugin.saveData(TELEMETRY_STORAGE, existing)", text)
-        self.assertIn("await plugin.saveData(SYSTEM_STATE_STORAGE, state)", text)
         self.assertIn("TELEMETRY_ID_PATH", text)
         self.assertIn("LEGACY_TELEMETRY_ID_PATH", text)
         self.assertIn("await loadTelemetryIdFallback()", text)
@@ -41,17 +41,19 @@ class PluginEntryContractTests(unittest.TestCase):
         self.assertNotIn("putFile(TELEMETRY_PATH", text)
         self.assertNotIn("putFile(SYSTEM_STATE_PATH", text)
 
-    def test_privacy_registry_is_persisted_before_optional_guides(self):
+    def test_system_notebook_maintains_by_name_without_registry(self):
         text = INDEX_JS.read_text(encoding="utf-8")
         start = text.index("async function ensureSystemNotebook(plugin)")
-        end = text.index("async function loadSystemState(plugin)", start)
+        end = text.index("function systemDocTitle(doc)", start)
         lifecycle = text[start:end]
+        self.assertIn("await findSystemNotebook()", lifecycle)
         privacy = lifecycle.index('"privacy_rules"')
-        first_persist = lifecycle.index("await persistState();")
         managed_guide = lifecycle.index("const maintenanceSteps")
-        self.assertLess(privacy, first_persist)
-        self.assertLess(first_persist, managed_guide)
-        self.assertIn("reconcileSystemDocumentRegistry(documentCache, rescanned)", lifecycle)
+        # 登记表取消后，Privacy Rules 仍是第一个维护的系统文档。
+        self.assertLess(privacy, managed_guide)
+        self.assertNotIn("persistState", lifecycle)
+        self.assertNotIn("登记表", lifecycle)
+        self.assertNotIn("reconcileSystemDocumentRegistry", lifecycle)
 
     def test_managed_template_hash_normalizes_line_endings(self):
         root_text = INDEX_JS.read_text(encoding="utf-8")
@@ -67,8 +69,9 @@ class PluginEntryContractTests(unittest.TestCase):
             "async function ensureSystemNotebook(plugin)",
             "await plugin.saveData(CONFIG_STORAGE, normalized)",
             "await plugin.saveData(TELEMETRY_STORAGE, existing)",
-            "await plugin.saveData(SYSTEM_STATE_STORAGE, state)",
+            "async function findSystemNotebook()",
             "async function loadTelemetryIdFallback()",
             "await loadTelemetryIdFallback()",
         ):
             self.assertIn(marker, source_text)
+        self.assertNotIn("system_state.json", source_text)

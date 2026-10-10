@@ -4,12 +4,10 @@ const {Dialog, Plugin, showMessage, getAllEditor} = require("siyuan");
 const PLUGIN_NAME = "siyuan-bridge";
 const CONFIG_STORAGE = "config.local.json";
 const TELEMETRY_STORAGE = "telemetry.json";
-const SYSTEM_STATE_STORAGE = "system_state.json";
 const LEGACY_CONFIG_PATH = `/data/plugins/${PLUGIN_NAME}/bridge/config.local.json`;
 const LEGACY_TELEMETRY_PATH = `/data/plugins/${PLUGIN_NAME}/bridge/telemetry.json`;
 const TELEMETRY_ID_PATH = `/data/storage/petal/${PLUGIN_NAME}/stats/telemetry_id`;
 const LEGACY_TELEMETRY_ID_PATH = `/data/plugins/${PLUGIN_NAME}/bridge/stats/telemetry_id`;
-const LEGACY_SYSTEM_STATE_PATH = `/data/plugins/${PLUGIN_NAME}/bridge/knowledge_base/system_state.json`;
 const SYSTEM_TEMPLATE_ROOT = `/data/plugins/${PLUGIN_NAME}/bridge/templates/system-docs`;
 const DEFAULT_ENDPOINT = "https://siyuanbridgetelemetry.zingerplayground.top";
 const DEFAULT_CONFIG = {
@@ -57,7 +55,6 @@ const LEGACY_AI_GUIDE_HASHES = new Set([
   "39576ef97d8e9d319aa346ddd80265629b8f72d8de9fb08447f08ed2954205df",
   "a3e3c01d4925547b747e5342fafbfff8dab0e77eaa345db6eab49e2aed3412a9",
 ]);
-const SYSTEM_STATE_SCHEMA_VERSION = 2;
 
 const SKIP_BLOCK_TYPES = new Set(["d"]);
 const SUBTREE_MARKDOWN_BLOCK_TYPES = new Set(["i", "l", "t"]);
@@ -918,29 +915,69 @@ function bindInlineImagesToggle(root, plugin) {
   });
 }
 
+async function findSystemNotebook() {
+  const data = await callSiyuanApi("/api/notebook/lsNotebooks", {});
+  const notebooks = Array.isArray(data?.notebooks) ? data.notebooks : Array.isArray(data) ? data : [];
+  const matchByName = (names) => notebooks.find((notebook) =>
+    names.some((name) => name.toLowerCase() === String(notebook?.name || "").toLowerCase())
+  );
+  return matchByName(Object.values(SYSTEM_NOTEBOOK_NAMES))
+    || matchByName(LEGACY_SYSTEM_NOTEBOOK_NAMES)
+    || null;
+}
+
+async function querySystemDocs(notebookId) {
+  const docs = await callSiyuanApi("/api/query/sql", {
+    stmt: "SELECT id, box, hpath, updated FROM blocks "
+      + `WHERE type='d' AND box='${String(notebookId).replaceAll("'", "''")}'`,
+  });
+  return Array.isArray(docs) ? docs : [];
+}
+
+async function loadManagedGuideTemplate(guideKey, language) {
+  const manifest = JSON.parse(await getFile(`${SYSTEM_TEMPLATE_ROOT}/manifest.json`));
+  const templateInfo = manifest?.templates?.[guideKey];
+  const filename = templateInfo?.files?.[language] || templateInfo?.files?.["zh-CN"];
+  if (!filename) throw new Error("内置模板缺失");
+  const markdown = await getFile(`${SYSTEM_TEMPLATE_ROOT}/${filename}`);
+  return {templateInfo, markdown};
+}
+
 async function loadAndRenderSystemGuides(root, plugin) {
   const area = root.querySelector("[data-area='system-guides']");
   if (!area) return;
   try {
-    const {workspace} = await getCurrentSystemWorkspace(plugin);
-    if (!workspace) {
+    const bridgeConfig = await readBridgeConfig(plugin);
+    const language = bridgeConfig.config?.language === "en" ? "en" : "zh-CN";
+    const notebook = await findSystemNotebook();
+    if (!notebook) {
       area.innerHTML = `<p class="siyuan-bridge-home__hint">系统笔记本尚未初始化，请重新启用插件后重试。</p>`;
       return;
     }
-    const documents = workspace.documents || {};
-    const rows = [
+    const docs = await querySystemDocs(String(notebook.id || ""));
+    const rows = [];
+    for (const [key, label] of [
       ["mcp_usage_guide", "MCP 使用指南"],
       ["workspace_index_guide", "工作空间索引创建指南"],
-    ].map(([key, label]) => {
-      const entries = registryEntries(documents[key]);
-      const modified = entries.filter((entry) => entry.user_modified).length;
-      const versions = entries.map((entry) => Number(entry.template_version || 1));
-      const status = entries.length === 0
+    ]) {
+      const matches = findSystemDocs(docs, key);
+      const {templateInfo, markdown} = await loadManagedGuideTemplate(key, language);
+      const templateHash = await sha256Text(normalizeManagedMarkdown(markdown));
+      const knownHashes = new Set([
+        templateHash,
+        ...(templateInfo?.historical_normalized_sha256?.[language] || []),
+      ]);
+      let modified = 0;
+      for (const doc of matches) {
+        const current = await sha256Text(normalizeManagedMarkdown(await exportSystemDocument(doc.id)));
+        if (!knownHashes.has(current)) modified += 1;
+      }
+      const status = matches.length === 0
         ? "尚未初始化"
         : modified > 0
-          ? `${entries.length} 篇，其中 ${modified} 篇用户已修改`
-          : `${entries.length} 篇，系统默认版本 v${Math.max(...versions)}`;
-      return `
+          ? `${matches.length} 篇，其中 ${modified} 篇用户已修改`
+          : `${matches.length} 篇，系统默认版本 v${Number(templateInfo?.version || 1)}`;
+      rows.push(`
         <div class="siyuan-bridge-home__guide-row">
           <div>
             <div class="siyuan-bridge-home__guide-name">${label}</div>
@@ -948,9 +985,9 @@ async function loadAndRenderSystemGuides(root, plugin) {
           </div>
           <button class="b3-button b3-button--outline"
                   data-action="reset-system-guide" data-guide-key="${key}"
-                  ${entries.length > 0 ? "" : "disabled"}>重置</button>
-        </div>`;
-    });
+                  ${matches.length > 0 ? "" : "disabled"}>重置</button>
+        </div>`);
+    }
     area.innerHTML = rows.join("");
   } catch (_error) {
     area.innerHTML = `<p class="siyuan-bridge-home__hint">无法读取系统指南状态，请重新启用插件后重试。</p>`;
@@ -965,58 +1002,34 @@ async function resetSystemGuide(root, plugin, guideKey) {
   const label = labels[guideKey];
   if (!label) return;
   try {
-    const {state, workspace} = await getCurrentSystemWorkspace(plugin);
-    const entries = registryEntries(workspace?.documents?.[guideKey]);
-    if (entries.length === 0) {
-      throw new Error("尚未找到系统文档 ID，请重新启用插件后重试");
+    const notebook = await findSystemNotebook();
+    if (!notebook) {
+      throw new Error("尚未找到系统笔记本，请重新启用插件后重试");
+    }
+    const docs = await querySystemDocs(String(notebook.id || ""));
+    const matches = findSystemDocs(docs, guideKey);
+    if (matches.length === 0) {
+      throw new Error("尚未找到指南文档，请重新启用插件后重试");
     }
     if (!window.confirm(
-      `确定要把《${label}》的 ${entries.length} 篇已登记文档全部重置为当前默认内容吗？文档 ID 会保留。`
+      `确定要把《${label}》的 ${matches.length} 篇文档全部重置为当前默认内容吗？文档 ID 会保留。`
     )) return;
     const bridgeConfig = await readBridgeConfig(plugin);
     const language = bridgeConfig.config?.language === "en" ? "en" : "zh-CN";
-    const manifest = JSON.parse(await getFile(`${SYSTEM_TEMPLATE_ROOT}/manifest.json`));
-    const templateInfo = manifest?.templates?.[guideKey];
-    const filename = templateInfo?.files?.[language] || templateInfo?.files?.["zh-CN"];
-    if (!filename) throw new Error("内置模板缺失");
-    const markdown = await getFile(`${SYSTEM_TEMPLATE_ROOT}/${filename}`);
-
-    for (const entry of entries) {
+    const {markdown} = await loadManagedGuideTemplate(guideKey, language);
+    for (const doc of matches) {
       await callSiyuanApi("/api/block/updateBlock", {
-        id: entry.id,
+        id: doc.id,
         dataType: "markdown",
         data: markdown,
       });
-      const actualMarkdown = await exportSystemDocument(entry.id);
-      entry.template_version = Number(templateInfo.version || 1);
-      entry.source_sha256 = String(templateInfo?.source_sha256?.[language] || "");
-      entry.rendered_sha256 = await sha256Text(normalizeManagedMarkdown(actualMarkdown));
-      entry.current_sha256 = entry.rendered_sha256;
-      entry.user_modified = false;
     }
-    workspace.documents[guideKey] = entries;
-    await saveSystemState(plugin, state);
     await loadAndRenderSystemGuides(root, plugin);
-    showMessage(`《${label}》的 ${entries.length} 篇文档已重置，原文档 ID 保持不变`);
+    showMessage(`《${label}》的 ${matches.length} 篇文档已重置，原文档 ID 保持不变`);
   } catch (error) {
     console.error("Failed to reset system guide:", error);
     showMessage(`重置失败：${error?.message || error}`, -1, "error");
   }
-}
-
-async function getCurrentSystemWorkspace(plugin) {
-  const state = await loadSystemState(plugin);
-  const data = await callSiyuanApi("/api/notebook/lsNotebooks", {});
-  const notebooks = Array.isArray(data?.notebooks) ? data.notebooks : Array.isArray(data) ? data : [];
-  const currentNames = new Set(["思源桥", "SiYuan Bridge"].map((name) => name.toLowerCase()));
-  const legacyNames = new Set(["思源代理桥", "SiYuan Agent Bridge"].map((name) => name.toLowerCase()));
-  const current = notebooks.find((notebook) => currentNames.has(String(notebook?.name || "").toLowerCase()));
-  const active = notebooks.find((notebook) => String(notebook?.id || "") === String(state.active_workspace_key || ""));
-  const legacy = notebooks.find((notebook) => legacyNames.has(String(notebook?.name || "").toLowerCase()));
-  const notebook = current || active || legacy;
-  const key = String(notebook?.id || "");
-  const workspace = state?.workspaces?.[key] || null;
-  return {state, workspace};
 }
 
 function normalizeLineEndings(text) {
@@ -1046,33 +1059,7 @@ async function sha256Text(text) {
 async function ensureSystemNotebook(plugin) {
   const bridgeConfig = await readBridgeConfig(plugin);
   const language = bridgeConfig.config?.language === "en" ? "en" : "zh-CN";
-  const state = await loadSystemState(plugin);
-  const notebooksData = await callSiyuanApi("/api/notebook/lsNotebooks", {});
-  const notebooks = Array.isArray(notebooksData?.notebooks)
-    ? notebooksData.notebooks
-    : Array.isArray(notebooksData)
-      ? notebooksData
-      : [];
-  const cachedKey = String(state.active_workspace_key || "");
-  const cachedNotebookId = String(
-    state?.workspaces?.[cachedKey]?.system_notebook?.id || ""
-  );
-  const currentNames = new Set(
-    Object.values(SYSTEM_NOTEBOOK_NAMES).map((name) => name.toLowerCase())
-  );
-  const currentNotebook = notebooks.find((notebook) =>
-    currentNames.has(String(notebook?.name || "").toLowerCase())
-  );
-  const cachedNotebook = notebooks.find((notebook) =>
-    String(notebook?.id || "") === cachedNotebookId
-  );
-  const legacyNotebook = notebooks.find((notebook) =>
-    LEGACY_SYSTEM_NOTEBOOK_NAMES.some((name) =>
-      name.toLowerCase() === String(notebook?.name || "").toLowerCase()
-    )
-  );
-
-  let notebook = cachedNotebook || currentNotebook || legacyNotebook;
+  let notebook = await findSystemNotebook();
   if (!notebook) {
     const created = await callSiyuanApi("/api/notebook/createNotebook", {
       name: SYSTEM_NOTEBOOK_NAMES[language],
@@ -1089,124 +1076,59 @@ async function ensureSystemNotebook(plugin) {
     await callSiyuanApi("/api/notebook/openNotebook", {notebook: notebookId});
   }
   try {
-    const safeNotebookId = notebookId.replaceAll("'", "''");
-    const docs = await callSiyuanApi("/api/query/sql", {
-      stmt: "SELECT id, box, hpath, updated FROM blocks "
-        + `WHERE type='d' AND box='${safeNotebookId}'`,
-    });
-    const liveDocs = Array.isArray(docs) ? docs : [];
-    const workspace = ensureSystemWorkspaceState(
-      state,
-      notebookId,
-      String(notebook?.name || SYSTEM_NOTEBOOK_NAMES[language])
-    );
-    const documentCache = workspace.documents;
-    const persistState = async () => {
-      workspace.refreshed_at = new Date().toISOString();
-      state.active_workspace_key = notebookId;
-      await saveSystemState(plugin, state);
-    };
+    const liveDocs = await querySystemDocs(notebookId);
+    const documentGroups = {};
 
-    // Privacy Rules is the safety boundary. Register it before optional guide
+    // Privacy Rules is the safety boundary. Maintain it before optional guide
     // maintenance so a template problem cannot take the whole bridge offline.
-    await ensureSimpleSystemDocument(
-      liveDocs, notebookId, language, documentCache, "privacy_rules"
+    documentGroups.privacy_rules = await ensureSimpleSystemDocument(
+      liveDocs, notebookId, language, "privacy_rules"
     );
-    await persistState();
 
     let manifest = null;
     const maintenanceSteps = [
-      ["用户个性化要求", () => ensureAiPreferences(
-        liveDocs, notebookId, language, documentCache
-      )],
-      ["关于思源桥", () => ensureAboutDocument(
-        liveDocs, notebookId, language, documentCache
-      )],
+      ["用户个性化要求", async () => {
+        documentGroups.ai_guide = await ensureAiPreferences(liveDocs, notebookId, language);
+      }],
+      ["关于思源桥", async () => {
+        documentGroups.about = await ensureAboutDocument(liveDocs, notebookId, language);
+      }],
       ["MCP 使用指南", async () => {
         manifest ||= JSON.parse(await getFile(`${SYSTEM_TEMPLATE_ROOT}/manifest.json`));
-        await ensureManagedGuide(
-          liveDocs, notebookId, language, documentCache, manifest, "mcp_usage_guide"
+        documentGroups.mcp_usage_guide = await ensureManagedGuide(
+          liveDocs, notebookId, language, manifest, "mcp_usage_guide"
         );
       }],
       ["工作空间索引创建指南", async () => {
         manifest ||= JSON.parse(await getFile(`${SYSTEM_TEMPLATE_ROOT}/manifest.json`));
-        await ensureManagedGuide(
-          liveDocs, notebookId, language, documentCache, manifest, "workspace_index_guide"
+        documentGroups.workspace_index_guide = await ensureManagedGuide(
+          liveDocs, notebookId, language, manifest, "workspace_index_guide"
         );
       }],
-      ["工作空间索引", () => ensureWorkspaceIndex(
-        liveDocs, notebookId, language, documentCache
-      )],
+      ["工作空间索引", async () => {
+        documentGroups.workspace_index = await ensureSimpleSystemDocument(
+          liveDocs, notebookId, language, "workspace_index"
+        );
+      }],
     ];
     const failures = [];
     for (const [label, maintain] of maintenanceSteps) {
       try {
         await maintain();
-        await persistState();
       } catch (error) {
         failures.push(label);
         console.warn(`Siyuan Bridge failed to maintain ${label}`, error);
       }
     }
-    try {
-      const rescanned = await callSiyuanApi("/api/query/sql", {
-        stmt: "SELECT id, box, hpath, updated FROM blocks "
-          + `WHERE type='d' AND box='${safeNotebookId}'`,
-      });
-      if (!Array.isArray(rescanned)) {
-        throw new Error("系统文档扫描返回了无效数据");
-      }
-      reconcileSystemDocumentRegistry(documentCache, rescanned);
-      await persistState();
-    } catch (error) {
-      failures.push("系统文档登记表刷新");
-      console.warn("Siyuan Bridge failed to refresh the system document registry", error);
-    }
     if (failures.length > 0) {
       showMessage(`思源桥部分系统文档维护失败：${failures.join("、")}`, -1, "error");
     }
-    return documentCache;
+    return documentGroups;
   } finally {
     if (wasClosed) {
       await callSiyuanApi("/api/notebook/closeNotebook", {notebook: notebookId});
     }
   }
-}
-
-async function loadSystemState(plugin) {
-  const parsed = await loadPluginData(
-    plugin, SYSTEM_STATE_STORAGE, LEGACY_SYSTEM_STATE_PATH
-  );
-  if (parsed && typeof parsed === "object") {
-    return {
-      schema_version: SYSTEM_STATE_SCHEMA_VERSION,
-      active_workspace_key: String(parsed.active_workspace_key || ""),
-      workspaces: parsed.workspaces && typeof parsed.workspaces === "object"
-        ? parsed.workspaces
-        : {},
-    };
-  }
-  return {schema_version: SYSTEM_STATE_SCHEMA_VERSION, active_workspace_key: "", workspaces: {}};
-}
-
-async function saveSystemState(plugin, state) {
-  await plugin.saveData(SYSTEM_STATE_STORAGE, state);
-}
-
-function ensureSystemWorkspaceState(state, notebookId, notebookName) {
-  if (!state.workspaces || typeof state.workspaces !== "object") {
-    state.workspaces = {};
-  }
-  const workspace = state.workspaces[notebookId]
-    && typeof state.workspaces[notebookId] === "object"
-    ? state.workspaces[notebookId]
-    : {};
-  workspace.system_notebook = {id: notebookId, name: notebookName};
-  if (!workspace.documents || typeof workspace.documents !== "object") {
-    workspace.documents = {};
-  }
-  state.workspaces[notebookId] = workspace;
-  return workspace;
 }
 
 function systemDocTitle(doc) {
@@ -1215,33 +1137,12 @@ function systemDocTitle(doc) {
   return parts[parts.length - 1] || "";
 }
 
-function registryEntries(value) {
-  if (Array.isArray(value)) {
-    return value.filter((entry) => entry && typeof entry === "object" && entry.id);
-  }
-  return value && typeof value === "object" && value.id ? [value] : [];
-}
-
-function findSystemDocs(docs, key, documentCache) {
-  const entries = registryEntries(documentCache[key]);
+function findSystemDocs(docs, key) {
   const names = new Set([
     ...Object.values(SYSTEM_DOC_NAMES[key] || {}),
     ...(LEGACY_SYSTEM_DOC_NAMES[key] || []),
   ].map((name) => String(name).toLowerCase()));
-  const result = [];
-  const seen = new Set();
-  const add = (doc) => {
-    const id = String(doc?.id || "");
-    if (id && !seen.has(id)) {
-      seen.add(id);
-      result.push(doc);
-    }
-  };
-  entries.forEach((entry) => add(docs.find((doc) => String(doc?.id || "") === String(entry.id))));
-  docs.forEach((doc) => {
-    if (names.has(systemDocTitle(doc).toLowerCase())) add(doc);
-  });
-  return result;
+  return docs.filter((doc) => names.has(systemDocTitle(doc).toLowerCase()));
 }
 
 async function createSystemDocument(docs, notebookId, title, markdown) {
@@ -1286,44 +1187,16 @@ async function loadBootstrapTemplate(key, language) {
   return getFile(`${SYSTEM_TEMPLATE_ROOT}/${filename}`);
 }
 
-function systemDocumentRecord(doc, extra = {}) {
-  return {
-    id: String(doc?.id || ""),
-    name: systemDocTitle(doc),
-    ...extra,
-  };
-}
-
-function cachedRecordsById(documentCache, key) {
-  return new Map(registryEntries(documentCache[key]).map((entry) => [String(entry.id), entry]));
-}
-
-function recordSystemDocuments(documentCache, key, records) {
-  documentCache[key] = records.filter((entry) => entry?.id);
-}
-
-function reconcileSystemDocumentRegistry(documentCache, docs) {
-  for (const key of Object.keys(SYSTEM_DOC_NAMES)) {
-    const cached = cachedRecordsById(documentCache, key);
-    const records = findSystemDocs(docs, key, documentCache).map((doc) => ({
-      ...(cached.get(String(doc.id)) || {}),
-      ...systemDocumentRecord(doc),
-    }));
-    recordSystemDocuments(documentCache, key, records);
-  }
-}
-
-async function ensureAiPreferences(docs, notebookId, language, documentCache) {
+async function ensureAiPreferences(docs, notebookId, language) {
   const key = "ai_guide";
   const template = await loadBootstrapTemplate(key, language);
-  let matches = findSystemDocs(docs, key, documentCache);
+  let matches = findSystemDocs(docs, key);
   if (matches.length === 0) {
     matches = [await createSystemDocument(
       docs, notebookId, SYSTEM_DOC_NAMES[key][language], template
     )];
   }
   const legacyNames = new Set((LEGACY_SYSTEM_DOC_NAMES[key] || []).map((name) => name.toLowerCase()));
-  const records = [];
   for (const doc of matches) {
     if (legacyNames.has(systemDocTitle(doc).toLowerCase())) {
       await callSiyuanApi("/api/filetree/renameDocByID", {
@@ -1335,26 +1208,22 @@ async function ensureAiPreferences(docs, notebookId, language, documentCache) {
     let markdown = await exportSystemDocument(doc.id);
     const currentHash = await sha256Text(normalizeManagedMarkdown(markdown));
     if (LEGACY_AI_GUIDE_HASHES.has(currentHash)) {
-      markdown = await updateSystemDocument(doc.id, template);
+      await updateSystemDocument(doc.id, template);
     }
-    records.push(systemDocumentRecord(doc));
   }
-  recordSystemDocuments(documentCache, key, records);
+  return matches;
 }
 
-async function ensureAboutDocument(docs, notebookId, language, documentCache) {
+async function ensureAboutDocument(docs, notebookId, language) {
   const key = "about";
   const template = await loadBootstrapTemplate(key, language);
-  const sourceHash = await sha256Text(template);
   const templateHash = await sha256Text(normalizeManagedMarkdown(template));
-  const cached = cachedRecordsById(documentCache, key);
-  let matches = findSystemDocs(docs, key, documentCache);
+  let matches = findSystemDocs(docs, key);
   if (matches.length === 0) {
     matches = [await createSystemDocument(
       docs, notebookId, SYSTEM_DOC_NAMES[key][language], template
     )];
   }
-  const records = [];
   for (const doc of matches) {
     if (systemDocTitle(doc) !== SYSTEM_DOC_NAMES[key][language]) {
       await callSiyuanApi("/api/filetree/renameDocByID", {
@@ -1363,41 +1232,27 @@ async function ensureAboutDocument(docs, notebookId, language, documentCache) {
       });
       doc.hpath = `/${SYSTEM_DOC_NAMES[key][language]}`;
     }
-    let markdown = await exportSystemDocument(doc.id);
+    const markdown = await exportSystemDocument(doc.id);
     const currentHash = await sha256Text(normalizeManagedMarkdown(markdown));
-    const entry = cached.get(String(doc.id)) || {};
-    const baselineMatches = String(entry.rendered_sha256 || "") === currentHash
-      && String(entry.source_sha256 || "") === sourceHash;
-    if (!baselineMatches && currentHash !== templateHash) {
-      markdown = await updateSystemDocument(doc.id, template);
+    if (currentHash !== templateHash) {
+      await updateSystemDocument(doc.id, template);
     }
-    records.push(systemDocumentRecord(doc, {
-      source_sha256: sourceHash,
-      rendered_sha256: await sha256Text(normalizeManagedMarkdown(markdown)),
-      developer_controlled: true,
-    }));
   }
-  recordSystemDocuments(documentCache, key, records);
+  return matches;
 }
 
-async function ensureSimpleSystemDocument(
-  docs, notebookId, language, documentCache, key
-) {
-  let matches = findSystemDocs(docs, key, documentCache);
+async function ensureSimpleSystemDocument(docs, notebookId, language, key) {
+  let matches = findSystemDocs(docs, key);
   if (matches.length === 0) {
     const template = await loadBootstrapTemplate(key, language);
     matches = [await createSystemDocument(
       docs, notebookId, SYSTEM_DOC_NAMES[key][language], template
     )];
   }
-  recordSystemDocuments(
-    documentCache, key, matches.map((doc) => systemDocumentRecord(doc))
-  );
+  return matches;
 }
 
-async function ensureManagedGuide(
-  docs, notebookId, language, documentCache, manifest, key
-) {
+async function ensureManagedGuide(docs, notebookId, language, manifest, key) {
   const templateInfo = manifest?.templates?.[key];
   const filename = templateInfo?.files?.[language]
     || templateInfo?.files?.["zh-CN"];
@@ -1413,97 +1268,30 @@ async function ensureManagedGuide(
     throw new Error(`内置指南模板哈希不匹配：${filename}`);
   }
 
-  const cached = cachedRecordsById(documentCache, key);
-  let matches = findSystemDocs(docs, key, documentCache);
+  let matches = findSystemDocs(docs, key);
   if (matches.length === 0) {
     matches = [await createSystemDocument(
       docs, notebookId, SYSTEM_DOC_NAMES[key][language], template
     )];
   }
-  const records = [];
-  for (const doc of matches) {
-    const entry = cached.get(String(doc.id)) || {};
-    let markdown = await exportSystemDocument(doc.id);
-    const currentHash = await sha256Text(normalizeManagedMarkdown(markdown));
-    if (entry.user_modified === true) {
-      records.push(await managedGuideRecord(
-        doc, templateInfo, sourceHash, markdown, true, String(entry.rendered_sha256 || "")
-      ));
-      continue;
-    }
-    const baselineHash = String(entry.rendered_sha256 || "");
-    if (baselineHash && currentHash !== baselineHash) {
-      records.push(await managedGuideRecord(
-        doc, templateInfo, sourceHash, markdown, true, baselineHash
-      ));
-      continue;
-    }
-    const templateVersion = Number(templateInfo.version || 1);
-    if (baselineHash) {
-      const templateChanged = Number(entry.template_version || 0) !== templateVersion
-        || String(entry.source_sha256 || "") !== sourceHash;
-      if (templateChanged) markdown = await updateSystemDocument(doc.id, template);
-      records.push(await managedGuideRecord(doc, templateInfo, sourceHash, markdown));
-      continue;
-    }
-    const templateHash = await sha256Text(normalizeManagedMarkdown(template));
-    const knownHashes = new Set([
-      templateHash,
-      ...(templateInfo?.historical_normalized_sha256?.[language] || []),
-    ]);
-    if (knownHashes.has(currentHash)) {
-      if (currentHash !== templateHash) markdown = await updateSystemDocument(doc.id, template);
-      records.push(await managedGuideRecord(doc, templateInfo, sourceHash, markdown));
-    } else {
-      records.push(await managedGuideRecord(doc, templateInfo, sourceHash, markdown, true, ""));
-    }
-  }
-  recordSystemDocuments(documentCache, key, records);
-}
-
-async function managedGuideRecord(
-  doc,
-  templateInfo,
-  sourceHash,
-  markdown,
-  userModified = false,
-  baselineHash = null
-) {
-  const currentHash = await sha256Text(normalizeManagedMarkdown(markdown));
-  return systemDocumentRecord(doc, {
-    template_version: Number(templateInfo.version || 1),
-    source_sha256: sourceHash,
-    rendered_sha256: baselineHash === null ? currentHash : baselineHash,
-    current_sha256: currentHash,
-    user_modified: userModified,
-  });
-}
-
-async function ensureWorkspaceIndex(docs, notebookId, language, documentCache) {
-  const key = "workspace_index";
-  const placeholder = await loadBootstrapTemplate(key, language);
-  let matches = findSystemDocs(docs, key, documentCache);
-  if (matches.length === 0) {
-    matches = [await createSystemDocument(
-      docs, notebookId, SYSTEM_DOC_NAMES[key][language], placeholder
-    )];
-  }
-  const placeholderHash = await sha256Text(normalizeManagedMarkdown(placeholder));
-  const records = [];
+  const templateHash = await sha256Text(normalizeManagedMarkdown(template));
+  const knownHashes = new Set([
+    templateHash,
+    ...(templateInfo?.historical_normalized_sha256?.[language] || []),
+  ]);
   for (const doc of matches) {
     const markdown = await exportSystemDocument(doc.id);
-    const rows = await callSiyuanApi("/api/query/sql", {
-      stmt: `SELECT updated FROM blocks WHERE id='${String(doc.id).replaceAll("'", "''")}' LIMIT 1`,
-    });
-    records.push(systemDocumentRecord(doc, {
-      placeholder: await sha256Text(normalizeManagedMarkdown(markdown)) === placeholderHash,
-      updated: Array.isArray(rows) ? String(rows[0]?.updated || "") : "",
-    }));
+    const currentHash = await sha256Text(normalizeManagedMarkdown(markdown));
+    // Upgrade only when the body still matches the current or a historical
+    // template; anything else counts as a user modification and stays.
+    if (knownHashes.has(currentHash) && currentHash !== templateHash) {
+      await updateSystemDocument(doc.id, template);
+    }
   }
-  recordSystemDocuments(documentCache, key, records);
+  return matches;
 }
 
-function showDuplicateSystemDocuments(documentCache) {
+function showDuplicateSystemDocuments(documentGroups) {
   const labels = {
     ai_guide: "用户个性化要求",
     mcp_usage_guide: "MCP 使用指南",
@@ -1513,7 +1301,7 @@ function showDuplicateSystemDocuments(documentCache) {
     privacy_rules: "隐私规则",
   };
   const duplicates = Object.entries(labels)
-    .map(([key, label]) => ({label, count: registryEntries(documentCache[key]).length}))
+    .map(([key, label]) => ({label, count: (documentGroups[key] || []).length}))
     .filter((item) => item.count > 1);
   if (duplicates.length === 0) return;
   const items = duplicates
@@ -1521,7 +1309,7 @@ function showDuplicateSystemDocuments(documentCache) {
     .join("");
   new Dialog({
     title: "发现重复的思源桥系统文档",
-    content: `<div class="b3-dialog__content"><p>以下系统文档存在多篇：</p><ul>${items}</ul><p>请检查内容后手动删除多余文档。删除后可以继续使用；禁用并重新启用思源桥插件可立即清理内部记录，否则下次插件激活时会自动清理。</p></div>`,
+    content: `<div class="b3-dialog__content"><p>以下系统文档存在多篇：</p><ul>${items}</ul><p>请检查内容后手动删除多余文档；插件会按文档名继续合并使用全部同名文档。</p></div>`,
     width: "520px",
   });
 }

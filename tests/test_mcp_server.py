@@ -1467,12 +1467,12 @@ class McpServerTests(unittest.TestCase):
     def test_find_sql_allows_read_only_but_hard_filters_privacy_rules(self):
         write_privacy_rules_cache(self.root, PrivacyRules(ignore=[], allow=[], permissions=[
             {"scope": "document", "id": "doc1", "permission": "read_only"}]))
+        # Privacy Rules 按名称硬过滤：名为「隐私规则」的文档一律不可见。
         client = FakeSearchClient([], sql_rows=[{"id": "public"}, {"id": "privacy"}])
+        client._hpaths["doc2"] = "/隐私规则"
         client._blocks["doc1"] = [{"id": "public", "type": "p", "markdown": "只读真实正文"}]
         client._blocks["doc2"] = [{"id": "privacy", "type": "p", "markdown": "规则秘密正文"}]
-        with mock.patch("source_code.agent_notebook.active_system_ids",
-                        return_value=("nb1", {"privacy_rules": {"doc2"}})):
-            output = self.run_find(client, {"query": "SELECT id FROM blocks", "mode": "sql"})
+        output = self.run_find(client, {"query": "SELECT id FROM blocks", "mode": "sql"})
         self.assertIn("只读真实正文", output)
         self.assertNotIn("规则秘密正文", output)
         self.assertNotIn("`doc2`", output)

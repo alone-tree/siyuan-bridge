@@ -75,7 +75,7 @@ async function testLegacyReadSurvivesMigrationWriteFailure() {
     async loadData() { return null; },
     async saveData() { throw new Error("readonly"); },
   };
-  const loaded = await api.loadPluginData(plugin, "system_state.json", "/legacy/state.json");
+  const loaded = await api.loadPluginData(plugin, "custom.json", "/legacy/custom.json");
   assert.strictEqual(loaded.source, "legacy-readonly");
 }
 

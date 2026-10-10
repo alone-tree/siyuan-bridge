@@ -22,8 +22,8 @@
 - 反馈：POST Worker `/api/feedback`。
 - 用户体验改进：通过 `Plugin.loadData/saveData` 读写插件数据区 `telemetry.json` 中的 `telemetry`。
 - 读取图片：「读文档时默认返回图片」开关，写入插件数据区 `config.local.json` 的 `read_inline_images`，安装默认关闭，保存后提示重新连接 MCP 生效。
-- 系统指南：读取插件数据区 `system_state.json`，显示两篇托管指南是否被用户修改，并提供保留文档 ID 的重置按钮。
-- 系统笔记本维护：插件每次激活时发现、创建和维护六类系统文档，并在发现重复文档时弹窗提示用户手动检查删除。
+- 系统指南：实时按文档名定位两篇托管指南，现场哈希判断是否被用户修改，并提供保留文档 ID 的重置按钮。
+- 系统笔记本维护：插件每次激活时按文档名发现、创建和维护六类系统文档，并在发现重复文档时弹窗提示用户手动检查删除。
 
 ## 插件数据
 
@@ -31,28 +31,28 @@
 
 - `config.local.json`：profiles、Token、内部语言配置、`read_inline_images` 图片内联开关。Token 不写入 MCP JSON。
 - `telemetry.json`：匿名 ID、遥测开关、本地副本开关、端点、代理。
-- `system_state.json`：插件维护的工作空间级注册表。schema v2 为每类文档保存多个 ID 和各自模板状态；Python Bridge 只读，不写此文件。
 - `block-index.json`：块序号显示开关。
+
+`system_state.json` 已弃用（v1.11.2 取消系统文档登记表）：插件和 Python Bridge 都不再写入或读取；残留文件静默保留在插件数据区，不主动清理。
 
 首次启用插件时，前端从思源 `/api/system/getConf` 读取当前工作空间 Token，并在缺失配置时自动创建插件数据区 `config.local.json`。旧版首次升级时，如果插件数据区对应文件不存在，前端会从 `bridge/` 或 `bridge/knowledge_base/` 只复制迁移旧文件；已有持久数据优先，旧文件不删除。`telemetry.json` 没有 `anonymous_id` 时，会先读取 petal 或旧插件目录里的 `stats/telemetry_id`，没有旧值才新建。
 
-同一次插件激活还会维护系统笔记本：先找到或创建 Privacy Rules 并立即保存登记表，再逐项独立维护其他系统文档；单篇指南维护失败不会使已登记的 Privacy Rules 失效。每个成功步骤都保存状态，最后重新扫描系统笔记本并重写登记表。更新已启用插件、启动思源或重新启用插件都会触发；打开设置页不会触发维护。
+同一次插件激活还会维护系统笔记本：先按 `lsNotebooks` 名称匹配（当前名 + 历史名）定位系统笔记本，缺失时创建；再在该笔记本内按文档名（当前名 + 历史名，大小写不敏感）维护六类系统文档。Privacy Rules 最先维护，之后其余五项各自独立维护；单篇指南维护失败不影响其他文档。全程不写任何登记状态；更新已启用插件、启动思源或重新启用插件都会触发；打开设置页不会触发维护。
+
+发现同类型多篇文档时全部继续使用，不自动删除或合并正文。插件在布局就绪后弹出一次 Dialog，列出重复类型和数量，提示用户手动删除；插件按文档名继续合并使用全部同名文档。
 
 通知区固定显示两条通知卡片的高度；第三条及后续通知保留在同一区域内，通过纵向滚动查看，不能继续撑高 Home Dialog。单条通知最多显示两行。
 
-发现同类型多篇文档时全部登记并继续使用，不自动删除或合并正文。插件在布局就绪后弹出一次 Dialog，列出重复类型和数量，提示用户手动删除；下次激活清理被删除的 ID。
-
 工作空间绝对路径不写入配置文件。每次打开 MCP 配置页或点击“刷新 JSON”时，前端调用 `/api/system/getWorkspaces`，选择 `closed=false` 的当前工作空间，重新生成本机插件目录、Bridge 目录、`run_mcp.py` 绝对路径和 MCP JSON。这样插件整体同步到另一台电脑后，设置页仍会显示另一台电脑自己的路径。
 
-两篇托管指南的模板来自 `bridge/templates/system-docs/`，与 Python Bridge 使用同一份源文件和 manifest。校验 manifest 的源文件 SHA-256 前统一把 CRLF/CR 转成 LF，避免 Windows 检出换行符差异误报模板损坏。重置流程：
+两篇托管指南的模板来自 `bridge/templates/system-docs/`，与 Python Bridge 使用同一份源文件和 manifest。校验 manifest 的源文件 SHA-256 前统一把 CRLF/CR 转成 LF，避免 Windows 检出换行符差异误报模板损坏。设置页打开时实时按文档名定位指南，导出正文计算哈希并与当前模板及 `manifest.historical_normalized_sha256` 比较，判断是否被用户修改。重置流程：
 
 1. 用户确认。
-2. 实时调用 `lsNotebooks` 找到当前系统笔记本，从以该笔记本 ID 分区的 JSON 记录中取得该类型的全部有效文档 ID。
-3. 调用 `updateBlock` 覆盖所有已登记文档正文，不删除或重建文档。
-4. 立即调用 `exportMdContent` 读回思源实际 Markdown。
-5. 重新计算实际正文 SHA-256，写回 `system_state.json`。
+2. 实时调用 `lsNotebooks` 按名称找到当前系统笔记本，再按文档名找到该类型的全部匹配文档。
+3. 调用 `updateBlock` 覆盖所有匹配文档正文，不删除或重建文档。
+4. 不写任何状态文件；重新渲染设置页状态即可。
 
-当前工作空间没有对应 JSON 记录时禁止重置，提示用户重新启用插件；不得通过 `siyuan_start` 修复，也不得回退到另一个 profile 的最近 ID。
+当前工作空间找不到系统笔记本或同名指南文档时禁止重置，提示用户重新启用插件；不得通过 `siyuan_start` 修复。
 
 ## 块序号显示
 
@@ -83,11 +83,11 @@ python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE% --fre
 - 根 `index.js` 只有 `require("siyuan")`，没有 `import`，也没有 `require("./xxx.js")`。
 - 插件能启用，设置齿轮存在。
 - 首次启用能在 `data/storage/petal/siyuan-bridge/` 生成 `config.local.json`。
-- 旧版文件存在且插件数据区为空时只复制迁移；目标已有数据时不覆盖旧值。
-- 首次启用能创建六类系统文档，并把每类文档记录为数组；指南模板失败时 Privacy Rules 登记仍已保存。
-- 已有 JSON ID、当前名称和历史名称匹配结果会取并集；只要还有一篇就不新建。
-- 重复文档会全部登记并弹窗；用户删除后不重载插件，`siyuan_start` 仍能跳过失效 ID 正常读取剩余文档。
+- 旧版文件存在且插件数据区为空时只复制迁移；目标已有数据时不覆盖旧值；`system_state.json` 不再迁移。
+- 首次启用能按文档名创建六类系统文档；指南模板失败时 Privacy Rules 仍已就位。
+- 已有当前名称和历史名称匹配的全部文档都会继续使用；只要还有一篇就不新建。
+- 重复文档全部继续使用并弹窗；用户手动删除后，剩余文档继续按名称正常工作，`siyuan_start` 正常读取。
 - MCP JSON 不包含 Token。
 - MCP JSON 中的 `run_mcp.py` 是当前设备、当前工作空间的绝对路径；切换电脑后重新打开配置页应自动变化。
 - Home Dialog 的通知、反馈、遥测开关不会阻塞 MCP 配置。
-- 系统指南状态能区分系统默认和用户已修改；重置后正文恢复且文档 ID 不变。
+- 系统指南状态能区分系统默认和用户已修改（现场哈希判断）；重置后正文恢复且文档 ID 不变。

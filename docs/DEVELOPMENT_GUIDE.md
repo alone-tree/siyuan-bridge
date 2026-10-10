@@ -275,7 +275,7 @@ Error: invalid parameter
 - `read_write` 仍要求 `confirmed=true` 才能写。
 - Privacy Rules 文档不能被 AI 读取、搜索、创建或编辑。
 - 系统笔记本本身和除 Privacy Rules 外的系统文档进入正常索引，可以按普通权限 list/find/read/write。
-- 其他笔记本中恰好名为 `隐私规则` / `Privacy Rules` 的普通文档不能被误挡。
+- 任何笔记本下恰好名为 `隐私规则` / `Privacy Rules` 的普通文档都会被硬隔离（v1.11.2 取消登记表后的明确行为，宁误挡不泄露）。
 - 搜索 `sql` 模式也必须经过隐私过滤。
 - 写入后的自动 refresh 不得把 Privacy Rules 写入 AI 可见缓存。
 
@@ -283,20 +283,18 @@ Error: invalid parameter
 
 ## 修改系统笔记本或启动包时必须验证
 
-涉及插件系统笔记本维护、`load_agent_notebook()`、系统模板、`system_state.json` 或 `siyuan_start` 时，必须验证：
+涉及插件系统笔记本维护、`load_agent_notebook()`、系统模板或 `siyuan_start` 时，必须验证：
 
-- 新安装会创建六篇固定文档。
-- `AI 使用指南` / `AI Guide` 按原文档 ID 更名为 `用户个性化要求` / `User Preferences`，不删除重建。
-- 旧正文由用户修改时完整保留；只有和已知历史默认模板完全一致时才替换成新空模板。
-- 插件激活时合并 JSON 有效 ID、当前名称和历史名称匹配的全部文档；只有结果为空才创建。
-- Privacy Rules 在其他系统文档前维护并立即保存登记表；任一可选文档维护失败后 Privacy Rules 登记仍有效，最后必须重新扫描并保存。
-- `system_state.json` 位于插件数据区，每类记录多个文档条目；失效 ID 由插件激活清理，Python MCP 不写状态。
-- 两篇托管指南只有在当前正文仍等于上次记录的实际正文时才自动升级；用户修改后不得覆盖；源文件 SHA-256 校验必须先统一 LF/CRLF。
-- 设置页重置指南必须保留文档 ID，并重写模板版本和导入后实际正文哈希。
-- About 用户修改标题或正文后仍按 JSON 记录的原 ID 恢复标准标题和开发者模板，不得创建重复文档。
-- Workspace Index 缺失时只创建一句占位内容，已有真实索引绝不覆盖。
-- 多篇 User Preferences、Workspace Index 和 Privacy Rules 在 MCP 运行时合并使用；全部 Privacy Rules ID 都硬隔离。
-- 非隐私系统文档全部失效时 `siyuan_start` warning 后继续；Privacy Rules 全部失效时失败关闭并提示禁用后重新启用插件。
+- 新安装会按文档名创建六篇固定文档。
+- `AI 使用指南` / `AI Guide` 按原 ID 更名为 `用户个性化要求` / `User Preferences`，不删除重建。
+- 旧正文由用户修改时完整保留；托管指南只有正文哈希命中当前模板或历史模板时才自动升级；源文件 SHA-256 校验必须先统一 LF/CRLF。
+- 系统笔记本和六类系统文档一律按名称匹配定位（当前名 + 历史名，大小写不敏感；笔记本多个同名取第一个）；系统文档登记表机制已取消，`system_state.json` 不再读写，残留文件静默保留。
+- Privacy Rules 在其他系统文档前维护；任一可选文档维护失败后 Privacy Rules 仍可用。
+- 用户改过标题的系统文档不再被识别，插件按标准标题新建；Privacy Rules 改名时 `siyuan_start` 失败关闭并提示禁用后重新启用插件。
+- 设置页重置指南按名称实时定位文档，保留文档 ID 并重写正文；不写任何状态文件。
+- About 正文不等于模板即覆盖；Workspace Index 缺失时只创建一句占位内容，已有真实索引绝不覆盖。
+- 多篇 User Preferences、Workspace Index 和 Privacy Rules 在 MCP 运行时合并使用；名为「隐私规则」/「Privacy Rules」的文档全部硬隔离。
+- 非隐私系统文档全部缺失时 `siyuan_start` warning 后继续；Privacy Rules 全部缺失时失败关闭并提示禁用后重新启用插件。
 - 29/30 天不提示过期，超过 30 天才在 MCP 返回中临时提示；不能写回思源文档或改变更新时间。
 - 启动包顺序固定为运行状态、MCP Usage Guide、User Preferences、笔记本概览、Workspace Index；不再返回语言偏好和 About 入口。
 
@@ -479,7 +477,7 @@ python scripts/sync_siyuan_plugin_bridge.py
 - `siyuan-plugin/bridge/source_code/mcp_server.py` 存在。
 - `siyuan-plugin/bridge/scripts/run_mcp.py` 存在。
 - `siyuan-plugin/bridge/templates/system-docs/manifest.json` 和四个指南 Markdown 模板存在。
-- 同步脚本不生成或覆盖 `config.local.json`、`telemetry.json`、`system_state.json`、`privacy_rules.json` 和 `stats/`；安装态持久数据位于 `data/storage/petal/siyuan-bridge/`。
+- 同步脚本不生成或覆盖 `config.local.json`、`telemetry.json`、`privacy_rules.json` 和 `stats/`；安装态持久数据位于 `data/storage/petal/siyuan-bridge/`。
 
 ## 插件导入测试流程
 
@@ -496,13 +494,13 @@ python scripts/sync_siyuan_plugin_bridge.py
 set SIYUAN_TEST_WORKSPACE=D:\siyuan2
 ```
 
-普通导入会先把旧插件目录中的 `config.local.json`、`telemetry.json`、`knowledge_base/system_state.json`、`knowledge_base/privacy_rules.json` 和 `stats/` 只复制迁移到 `data/storage/petal/siyuan-bridge/`，目标已存在时不覆盖，旧文件不删除。模拟新用户首次安装时加 `--fresh`，脚本会同时删除目标插件目录和该插件数据目录。
+普通导入会先把旧插件目录中的 `config.local.json`、`telemetry.json`、`knowledge_base/privacy_rules.json` 和 `stats/` 只复制迁移到 `data/storage/petal/siyuan-bridge/`，目标已存在时不覆盖，旧文件不删除；旧 `knowledge_base/system_state.json` 不再迁移，残留静默保留。模拟新用户首次安装时加 `--fresh`，脚本会同时删除目标插件目录和该插件数据目录。
 
 > 遥测与反馈的 Worker API、D1 表结构、运维操作详见 [反馈与遥测后端参考](./feedback-telemetry-backend.md)。用户常见问题写在 README。
 
 ### 首次安装（模拟新用户）
 
-模拟用户第一次从零安装插件的场景。预期：导入后插件数据目录不存在，启用插件后自动创建其中的 `config.local.json`、`telemetry.json` 和 `system_state.json`。
+模拟用户第一次从零安装插件的场景。预期：导入后插件数据目录不存在，启用插件后自动创建其中的 `config.local.json` 和 `telemetry.json`。
 
 ```bat
 python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE% --fresh
@@ -518,12 +516,12 @@ python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE%
 - [x] `bridge/source_code/mcp_server.py` 存在
 - [x] `bridge/scripts/run_mcp.py` 存在
 - [x] `data/storage/petal/siyuan-bridge/` **不存在**
-- [x] 思源 UI 启用插件后自动创建插件数据区 `config.local.json`、`telemetry.json` 和 `system_state.json`
+- [x] 思源 UI 启用插件后自动创建插件数据区 `config.local.json` 和 `telemetry.json`，且不再生成 `system_state.json`
 - [x] 用户没有点开设置页、没有点击保存的情况下，外部 MCP 客户端能正常启动并调用工具
 
 首次安装/启用插件的真实用户流程必须额外验证：使用 `--fresh` 同时清空测试插件目录与插件数据目录，整体导入仓库 `siyuan-plugin/` 后，由用户在思源 UI 启用插件。插件启用后应在 `data/storage/petal/siyuan-bridge/config.local.json` 写入当前工作空间名称和 Token；在用户没有点开设置页、没有点击“保存配置”的情况下，外部 MCP 客户端也应能正常启动并调用工具。
 
-旧版升级必须验证：在插件程序目录准备旧配置、遥测、系统登记表、隐私缓存与 `stats/`，插件数据区为空时普通导入会完整复制；插件数据区预置不同内容时保持目标不变；插件启用后 Python Bridge 读到插件数据区内容。跨设备 Token 合并改动还必须验证：在插件数据区准备一个已有其他设备 Token 的 `config.local.json`，启用插件后当前设备 Token 会追加到 profiles，原有 profile 的名称、Token 和顺序保持不变；重复启用不产生重复项；点击“刷新 JSON”也会合并并保存当前 Token。MCP 会话连接改动必须验证：未调用 `siyuan_start` 时普通工具明确要求先 start；一次成功 start 后多个工具不重复探测 profiles；连接或 401/403 鉴权失效后缓存被清空并要求重新 start。
+旧版升级必须验证：在插件程序目录准备旧配置、遥测、隐私缓存与 `stats/`（旧 `system_state.json` 不迁移），插件数据区为空时普通导入会完整复制；插件数据区预置不同内容时保持目标不变；插件启用后 Python Bridge 读到插件数据区内容。跨设备 Token 合并改动还必须验证：在插件数据区准备一个已有其他设备 Token 的 `config.local.json`，启用插件后当前设备 Token 会追加到 profiles，原有 profile 的名称、Token 和顺序保持不变；重复启用不产生重复项；点击“刷新 JSON”也会合并并保存当前 Token。MCP 会话连接改动必须验证：未调用 `siyuan_start` 时普通工具明确要求先 start；一次成功 start 后多个工具不重复探测 profiles；连接或 401/403 鉴权失效后缓存被清空并要求重新 start。
 
 ### DSH 能力库中的三个思源桥
 
@@ -732,7 +730,7 @@ python scripts/build_package.py
 
 输出：`dist/package.zip`。
 
-zip 包含：`plugin.json`、`icon.png`、`preview.png`、`index.js`、`index.css`、英文默认说明 `README.md`、中文说明 `README.zh-CN.md`、README 图片目录 `image/README/`、`bridge/`、`dist/`、`src/`。`bridge/` 由 sync 脚本生成，包含完整 Python 运行文件和系统文档模板；`knowledge_base/`、`ai_workspace/`、`stats/`、`config.local.json`、`telemetry.json`、`system_state.json`、`privacy_rules.json` 等运行时数据必须从发布包排除。
+zip 包含：`plugin.json`、`icon.png`、`preview.png`、`index.js`、`index.css`、英文默认说明 `README.md`、中文说明 `README.zh-CN.md`、README 图片目录 `image/README/`、`bridge/`、`dist/`、`src/`。`bridge/` 由 sync 脚本生成，包含完整 Python 运行文件和系统文档模板；`knowledge_base/`、`ai_workspace/`、`stats/`、`config.local.json`、`telemetry.json`、`privacy_rules.json` 等运行时数据必须从发布包排除。
 
 根目录 `README.md` 是中文内容基准，根目录 `README.en-US.md` 是对应英文版。发布前将两者分别同步到 `siyuan-plugin/README.zh-CN.md` 和 `siyuan-plugin/README.md`。Package 内 README 的图片路径统一使用 `image/README/...`；构建脚本必须把仓库根目录同名图片目录映射到 Package 根目录，确保在线集市和安装后的本地详情页都能显示图片。
 

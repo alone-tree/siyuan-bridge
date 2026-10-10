@@ -10,7 +10,7 @@ You can ask AI to find, read, or organize material in SiYuan. Before modifying n
 
 ## System notebook
 
-When activated, the plugin automatically creates and maintains the following documents and records their document IDs in a local JSON file:
+When activated, the plugin automatically creates and maintains the following documents by name:
 
 - **MCP Usage Guide:** additional principles for using SiYuan Bridge. You may edit it or reset it in the plugin panel.
 - **User Preferences:** your long-term instructions for AI. The system ensures that it exists but does not overwrite its body.

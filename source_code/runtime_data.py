@@ -7,13 +7,11 @@ from pathlib import Path
 PLUGIN_NAME = "siyuan-bridge"
 CONFIG_FILE = "config.local.json"
 TELEMETRY_FILE = "telemetry.json"
-SYSTEM_STATE_FILE = "system_state.json"
 PRIVACY_RULES_FILE = "privacy_rules.json"
 
 _LEGACY_FILES = {
     CONFIG_FILE: Path(CONFIG_FILE),
     TELEMETRY_FILE: Path(TELEMETRY_FILE),
-    SYSTEM_STATE_FILE: Path("knowledge_base") / SYSTEM_STATE_FILE,
     PRIVACY_RULES_FILE: Path("knowledge_base") / PRIVACY_RULES_FILE,
 }
 
@@ -100,7 +98,7 @@ def migrate_legacy_stats(root: Path) -> list[Path]:
 def migrate_legacy_runtime_data(root: Path) -> list[Path]:
     """Best-effort one-time copy of all durable legacy runtime data."""
     migrated: list[Path] = []
-    for filename in (CONFIG_FILE, TELEMETRY_FILE, SYSTEM_STATE_FILE, PRIVACY_RULES_FILE):
+    for filename in (CONFIG_FILE, TELEMETRY_FILE, PRIVACY_RULES_FILE):
         target = runtime_data_path(root, filename)
         existed = target.exists()
         try:

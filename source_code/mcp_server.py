@@ -2837,12 +2837,7 @@ class McpServer:
             if not is_live_doc_visible(doc, compiled_ignore, compiled_allow):
                 continue
             # Hard-filter Privacy Rules document
-            if is_privacy_rules_document(
-                str(doc.get("hpath", "")),
-                root=self.root,
-                document_id=doc_id,
-                notebook_id=nb_id,
-            ):
+            if is_privacy_rules_document(str(doc.get("hpath", ""))):
                 continue
 
             if block_id:
@@ -2918,10 +2913,7 @@ class McpServer:
                 continue
             if not is_live_doc_visible(doc, compiled_ignore, compiled_allow):
                 continue
-            if is_privacy_rules_document(
-                str(doc.get("hpath", "")), root=self.root,
-                document_id=doc_id, notebook_id=nb_id,
-            ):
+            if is_privacy_rules_document(str(doc.get("hpath", ""))):
                 continue
             results.append({"block": block, "document": doc})
         return results
@@ -3047,12 +3039,7 @@ class McpServer:
             doc = live_doc_from_block(block, context.docs_by_id, context.notebook_names)
             if not is_live_doc_visible(doc, context.compiled_ignore, context.compiled_allow):
                 continue
-            if is_privacy_rules_document(
-                str(doc.get("hpath") or ""),
-                root=self.root,
-                document_id=doc_id,
-                notebook_id=str(doc.get("notebook_id") or ""),
-            ):
+            if is_privacy_rules_document(str(doc.get("hpath") or "")):
                 continue
             matches.append({"block": block, "document": doc})
         return matches
@@ -3572,12 +3559,7 @@ class McpServer:
                     choices = "\n".join(f"- `{doc.get('id')}` {display_document_path(doc)}" for doc in exact_display_path)
                     raise tool_error(_ERR_AMBIGUOUS, f"文档路径存在歧义，请补充 document_id：\n{choices}")
                 doc = exact_display_path[0]
-                if is_privacy_rules_document(
-                    str(doc.get("hpath", "")),
-                    root=self.root,
-                    document_id=str(doc.get("id") or ""),
-                    notebook_id=str(doc.get("notebook_id") or ""),
-                ):
+                if is_privacy_rules_document(str(doc.get("hpath", ""))):
                     raise tool_error(_ERR_PRIVACY_RULES,
                         "Privacy Rules 文档不可通过 AI 访问。隐私规则由人类在思源中维护。"
                     )
@@ -3597,12 +3579,7 @@ class McpServer:
         if status != "ok":
             raise tool_error(_ERR_DOC_NOT_FOUND, "未找到匹配的可见文档。文档可能已被隐藏、尚未索引，或定位符有误。")
         doc = matches[0]
-        if is_privacy_rules_document(
-            str(doc.get("hpath", "")),
-            root=self.root,
-            document_id=str(doc.get("id") or ""),
-            notebook_id=str(doc.get("notebook_id") or ""),
-        ):
+        if is_privacy_rules_document(str(doc.get("hpath", ""))):
             raise tool_error(_ERR_PRIVACY_RULES,
                 "Privacy Rules 文档不可通过 AI 访问。隐私规则由人类在思源中维护。"
             )
@@ -3684,11 +3661,7 @@ class McpServer:
             raise tool_error(_ERR_NOT_READ_WRITE, "目标路径权限不是 read_write，不允许创建或覆盖文档。")
 
         # Prevent creating Privacy Rules document
-        if is_privacy_rules_document(
-            target.internal_path.strip("/"),
-            root=self.root,
-            notebook_id=target.notebook_id,
-        ):
+        if is_privacy_rules_document(target.internal_path.strip("/")):
             raise tool_error(_ERR_PRIVACY_RULES,
                 "Privacy Rules 文档不可通过 AI 创建。隐私规则由人类在思源中维护。"
             )

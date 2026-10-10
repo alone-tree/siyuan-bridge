@@ -53,7 +53,6 @@ BRIDGE_RUNTIME_NAMES = {
     "stats",
     "config.local.json",
     "telemetry.json",
-    "system_state.json",
     "privacy_rules.json",
 }
 

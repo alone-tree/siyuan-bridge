@@ -13,7 +13,6 @@ from .i18n import (
 )
 from .ignore import PrivacyRules, parse_privacy_rules_markdown
 from .system_templates import markdown_sha256
-from .system_state import active_system_ids, document_entries, load_system_state
 
 
 SYSTEM_DOCUMENT_KEYS = (
@@ -54,71 +53,63 @@ def load_agent_notebook(
     root: Path,
     config_language: str | None = None,
 ) -> AgentNotebookState:
-    """Read the plugin-maintained system registry without repairing or writing it."""
+    """Locate the system notebook and its documents by name; read-only."""
     language = resolve_language(config_language)
-    state = load_system_state(root)
-    active_key = str(state.get("active_workspace_key") or "")
-    workspace = state.get("workspaces", {}).get(active_key, {})
-    if not isinstance(workspace, dict):
-        workspace = {}
-    notebook = workspace.get("system_notebook", {})
-    notebook_id = str(notebook.get("id") or "") if isinstance(notebook, dict) else ""
-    notebook_name = str(notebook.get("name") or "") if isinstance(notebook, dict) else ""
+    matches = []
+    for item in client.list_notebooks():
+        matched_language = match_notebook_name(str(item.get("name") or ""))
+        if matched_language:
+            matches.append((item, matched_language))
+    if not matches:
+        raise PrivacyRulesUnavailableError(_privacy_rules_missing_message())
+    # Multiple same-name notebooks: the first one in lsNotebooks order wins.
+    notebook, notebook_language = matches[0]
+    notebook_id = str(notebook.get("id") or "")
+    notebook_name = str(notebook.get("name") or "")
     if not notebook_id:
         raise PrivacyRulesUnavailableError(_privacy_rules_missing_message())
-
-    live_notebooks = {
-        str(item.get("id") or ""): item for item in client.list_notebooks()
-    }
-    live_notebook = live_notebooks.get(notebook_id)
-    if not live_notebook:
-        raise PrivacyRulesUnavailableError(_privacy_rules_missing_message())
-    notebook_name = str(live_notebook.get("name") or notebook_name)
-    notebook_language = match_notebook_name(notebook_name)
     if notebook_language:
         language = notebook_language
 
     live_docs = _list_system_docs(client, notebook_id)
     live_by_id = {str(doc.get("id") or ""): doc for doc in live_docs}
-    registry = workspace.get("documents", {})
-    if not isinstance(registry, dict):
-        registry = {}
 
-    valid_entries: dict[str, list[dict[str, Any]]] = {}
+    grouped: dict[str, list[dict[str, Any]]] = {key: [] for key in SYSTEM_DOCUMENT_KEYS}
+    for doc in live_docs:
+        key = match_doc_key(str(doc.get("hpath") or ""))
+        if key in grouped:
+            grouped[key].append(doc)
+
     document_ids: dict[str, tuple[str, ...]] = {}
     missing: list[str] = []
     for key in SYSTEM_DOCUMENT_KEYS:
-        entries = [
-            entry
-            for entry in document_entries(registry.get(key))
-            if str(entry.get("id") or "") in live_by_id
-        ]
-        valid_entries[key] = entries
-        document_ids[key] = tuple(str(entry["id"]) for entry in entries)
-        if not entries:
+        document_ids[key] = tuple(
+            str(doc.get("id") or "") for doc in grouped[key] if doc.get("id")
+        )
+        if not grouped[key]:
             missing.append(key)
 
-    if not valid_entries["privacy_rules"]:
+    if not grouped["privacy_rules"]:
         raise PrivacyRulesUnavailableError(_privacy_rules_missing_message())
 
     markdown_cache: dict[str, str] = {}
 
     def markdown_for(key: str) -> list[str]:
         values: list[str] = []
-        for entry in valid_entries[key]:
-            doc_id = str(entry["id"])
+        for doc in grouped[key]:
+            doc_id = str(doc.get("id") or "")
             if doc_id not in markdown_cache:
                 markdown_cache[doc_id] = _export_markdown(client, notebook_id, doc_id)
             values.append(markdown_cache[doc_id])
         return values
 
     privacy_rules = _merge_privacy_rules(markdown_for("privacy_rules"))
-    workspace_entries = valid_entries["workspace_index"]
+    workspace_docs = grouped["workspace_index"]
     workspace_markdown = markdown_for("workspace_index")
     workspace_updated = max(
         (
-            str(live_by_id[str(entry["id"])].get("updated") or "")
-            for entry in workspace_entries
+            str(live_by_id.get(str(doc.get("id") or ""), {}).get("updated") or "")
+            for doc in workspace_docs
         ),
         default="",
     )
@@ -126,7 +117,7 @@ def load_agent_notebook(
         markdown_sha256(markdown)
         for markdown in WORKSPACE_INDEX_PLACEHOLDERS.values()
     }
-    workspace_is_placeholder = bool(workspace_entries) and all(
+    workspace_is_placeholder = bool(workspace_docs) and all(
         markdown_sha256(markdown) in placeholder_hashes
         for markdown in workspace_markdown
     )
@@ -192,23 +183,7 @@ def is_system_document(hpath: str) -> bool:
     return match_doc_key(hpath) is not None
 
 
-def is_privacy_rules_document(
-    hpath: str,
-    *,
-    root: Path | None = None,
-    document_id: str = "",
-    notebook_id: str = "",
-) -> bool:
-    if root is not None:
-        system_notebook_id, document_ids = active_system_ids(root)
-        privacy_rules_ids = document_ids.get("privacy_rules", set())
-        if document_id and document_id in privacy_rules_ids:
-            return True
-        return bool(
-            system_notebook_id
-            and notebook_id == system_notebook_id
-            and match_doc_key(hpath) == "privacy_rules"
-        )
+def is_privacy_rules_document(hpath: str) -> bool:
     return match_doc_key(hpath) == "privacy_rules"
 
 

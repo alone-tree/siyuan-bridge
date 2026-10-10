@@ -87,7 +87,7 @@ knowledge_base/      可重建运行时缓存，Git 忽略，每次 refresh 可�
 data/storage/petal/siyuan-bridge/  安装态持久数据区
   config.local.json  Profiles、Token、内部语言配置
   telemetry.json     遥测选择、端点、代理、匿名 ID
-  system_state.json  系统笔记本/文档 ID 与模板状态注册表
+  system_state.json  已弃用（v1.11.2 取消登记表），不再读写；残留静默保留
   privacy_rules.json Privacy Rules 解析缓存
   stats/             遥测 ID 与用户选择保留的本地副本
 
@@ -117,7 +117,7 @@ docs/                架构、开发指南、前端、API、idea、devlog
 - 恢复要求：项目不提供 AI 自动回滚/checkout。写入后如需恢复，只能提示用户通过思源快照手动恢复；不要让 AI 调用高风险恢复接口。
 - 不自动启动思源：连接失败只提示用户手动打开思源，不鼓励AI查找程序路径。在开发时，务必保留错误返回信息中的相关说明，不要省略“让用户启动”等关键表述。
 - Privacy Rules 硬隔离：任何操作都需要在执行前经隐私规则过滤。源码写死隐藏Privacy Rules文档，AI 不可读取、搜索或编辑 Privacy Rules 文档。
-- 系统笔记本六篇固定文档按各自生命周期维护；旧 AI Guide 按原 ID 更名为 User Preferences；身份和模板状态记录在插件数据区 `system_state.json`。
+- 系统笔记本六篇固定文档按各自生命周期维护；旧 AI Guide 按原 ID 更名为 User Preferences；定位一律按文档名匹配（当前名 + 历史名），系统文档登记表机制已取消，详见 `docs/ARCHITECTURE.md` 的「系统笔记本」。
 - 关闭笔记本透明打开/关闭：索引、搜索和写入前可临时打开关闭的笔记本，完成后必须恢复。
 - 工作区可能有用户改动：不要回滚、删除或重置非本任务改动。
 - README 单一来源：根目录 `README.md`（中文）是唯一客观来源，`README.en-US.md` 根据它翻译；`siyuan-plugin/README*.md` 只能由 `scripts/build_package.py` 自动同步，禁止手动维护。

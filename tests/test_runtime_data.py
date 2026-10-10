@@ -10,14 +10,12 @@ from source_code.ignore import PrivacyRules, load_privacy_rules, write_privacy_r
 from source_code.runtime_data import (
     CONFIG_FILE,
     PRIVACY_RULES_FILE,
-    SYSTEM_STATE_FILE,
     TELEMETRY_FILE,
     migrate_legacy_runtime_data,
     plugin_data_dir,
     runtime_read_path,
     telemetry_stats_dir,
 )
-from source_code.system_state import active_system_ids
 
 
 class RuntimeDataTests(unittest.TestCase):
@@ -58,12 +56,14 @@ class RuntimeDataTests(unittest.TestCase):
         legacy_files = {
             self.root / CONFIG_FILE: "legacy-config",
             self.root / TELEMETRY_FILE: "legacy-telemetry",
-            self.root / "knowledge_base" / SYSTEM_STATE_FILE: "legacy-state",
             self.root / "knowledge_base" / PRIVACY_RULES_FILE: "legacy-privacy",
         }
         for path, content in legacy_files.items():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
+        legacy_state = self.root / "knowledge_base" / "system_state.json"
+        legacy_state.parent.mkdir(parents=True, exist_ok=True)
+        legacy_state.write_text("legacy-state", encoding="utf-8")
         legacy_event = self.root / "stats" / "events" / "2026-09-21.jsonl"
         legacy_event.parent.mkdir(parents=True)
         legacy_event.write_text("legacy-event\n", encoding="utf-8")
@@ -75,13 +75,15 @@ class RuntimeDataTests(unittest.TestCase):
 
         self.assertEqual((self.petal / CONFIG_FILE).read_text(encoding="utf-8"), "legacy-config")
         self.assertEqual((self.petal / TELEMETRY_FILE).read_text(encoding="utf-8"), "persistent-telemetry")
-        self.assertEqual((self.petal / SYSTEM_STATE_FILE).read_text(encoding="utf-8"), "legacy-state")
         self.assertEqual((self.petal / PRIVACY_RULES_FILE).read_text(encoding="utf-8"), "legacy-privacy")
         self.assertEqual(
             (self.petal / "stats" / "events" / "2026-09-21.jsonl").read_text(encoding="utf-8"),
             "legacy-event\n",
         )
         self.assertNotIn(self.petal / TELEMETRY_FILE, migrated)
+        # system_state.json 已弃用：不再迁移，残留文件静默保留在旧位置。
+        self.assertFalse((self.petal / "system_state.json").exists())
+        self.assertEqual(legacy_state.read_text(encoding="utf-8"), "legacy-state")
         for path, content in legacy_files.items():
             self.assertEqual(path.read_text(encoding="utf-8"), content)
 
@@ -108,25 +110,11 @@ class RuntimeDataTests(unittest.TestCase):
             json.dumps({"profiles": [{"name": "旧工作空间", "token": "legacy-token"}]}),
             encoding="utf-8",
         )
-        state = {
-            "schema_version": 2,
-            "active_workspace_key": "notebook-1",
-            "workspaces": {
-                "notebook-1": {
-                    "system_notebook": {"id": "notebook-1", "name": "思源桥"},
-                    "documents": {"privacy_rules": [{"id": "privacy-1"}]},
-                }
-            },
-        }
-        (self.petal / SYSTEM_STATE_FILE).write_text(json.dumps(state), encoding="utf-8")
 
         config = load_config(self.root)
-        notebook_id, ids = active_system_ids(self.root)
 
         self.assertEqual(config.profiles[0].name, "持久工作空间")
         self.assertEqual(config.profiles[0].token, "petal-token")
-        self.assertEqual(notebook_id, "notebook-1")
-        self.assertEqual(ids["privacy_rules"], {"privacy-1"})
 
     def test_privacy_rules_cache_is_written_to_petal(self) -> None:
         rules = PrivacyRules(

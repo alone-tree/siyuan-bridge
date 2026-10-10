@@ -20,10 +20,10 @@ class BuildPackageTests(unittest.TestCase):
                 "stats",
                 "config.local.json",
                 "telemetry.json",
-                "system_state.json",
                 "privacy_rules.json",
             }.issubset(build_package.BRIDGE_RUNTIME_NAMES)
         )
+        self.assertNotIn("system_state.json", build_package.BRIDGE_RUNTIME_NAMES)
 
 
 if __name__ == "__main__":

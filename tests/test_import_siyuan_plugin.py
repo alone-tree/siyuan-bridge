@@ -32,12 +32,14 @@ class ImportSiyuanPluginTests(unittest.TestCase):
         legacy = {
             self.target / "bridge" / "config.local.json": "legacy-config",
             self.target / "bridge" / "telemetry.json": "legacy-telemetry",
-            self.target / "bridge" / "knowledge_base" / "system_state.json": "legacy-state",
             self.target / "bridge" / "knowledge_base" / "privacy_rules.json": "legacy-privacy",
         }
         for path, content in legacy.items():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
+        legacy_state = self.target / "bridge" / "knowledge_base" / "system_state.json"
+        legacy_state.parent.mkdir(parents=True, exist_ok=True)
+        legacy_state.write_text("legacy-state", encoding="utf-8")
         legacy_event = self.target / "bridge" / "stats" / "events" / "event.jsonl"
         legacy_event.parent.mkdir(parents=True)
         legacy_event.write_text("legacy-event", encoding="utf-8")
@@ -48,12 +50,14 @@ class ImportSiyuanPluginTests(unittest.TestCase):
 
         self.assertEqual((self.plugin_data / "config.local.json").read_text(encoding="utf-8"), "legacy-config")
         self.assertEqual((self.plugin_data / "telemetry.json").read_text(encoding="utf-8"), "persistent-telemetry")
-        self.assertEqual((self.plugin_data / "system_state.json").read_text(encoding="utf-8"), "legacy-state")
         self.assertEqual((self.plugin_data / "privacy_rules.json").read_text(encoding="utf-8"), "legacy-privacy")
         self.assertEqual(
             (self.plugin_data / "stats" / "events" / "event.jsonl").read_text(encoding="utf-8"),
             "legacy-event",
         )
+        # system_state.json 已弃用：不再迁移，残留文件静默保留在旧位置。
+        self.assertFalse((self.plugin_data / "system_state.json").exists())
+        self.assertEqual(legacy_state.read_text(encoding="utf-8"), "legacy-state")
 
     def test_fresh_removes_plugin_and_petal_data(self) -> None:
         (self.target / "index.js").write_text("plugin", encoding="utf-8")

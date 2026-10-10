@@ -15,7 +15,6 @@ PROTECTED_FILES = {"config.local.json", "telemetry.json"}
 LEGACY_RUNTIME_FILES = {
     Path("bridge/config.local.json"): "config.local.json",
     Path("bridge/telemetry.json"): "telemetry.json",
-    Path("bridge/knowledge_base/system_state.json"): "system_state.json",
     Path("bridge/knowledge_base/privacy_rules.json"): "privacy_rules.json",
 }
 
