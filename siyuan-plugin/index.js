@@ -664,7 +664,6 @@ class SiyuanBridgePlugin extends Plugin {
       title: "思源桥",
       content: renderHome(),
       width: "680px",
-      height: "620px",
     });
     bindHome(dialog.element, this);
   }

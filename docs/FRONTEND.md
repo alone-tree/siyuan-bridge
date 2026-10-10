@@ -40,7 +40,7 @@
 
 发现同类型多篇文档时全部继续使用，不自动删除或合并正文。插件在布局就绪后弹出一次 Dialog，列出重复类型和数量，提示用户手动删除；插件按文档名继续合并使用全部同名文档。
 
-通知区固定显示两条通知卡片的高度；第三条及后续通知保留在同一区域内，通过纵向滚动查看，不能继续撑高 Home Dialog。单条通知最多显示两行。
+Home Dialog 保持紧凑：外层 `padding: 16px`、卡片间距 `gap: 12px`、卡片 `padding: 14px 16px`、标题 `margin-bottom: 8px`，卡片内最后一个元素不留底部外边距。Dialog 不写死 `height`，由内容决定高度；内容过长时由 `.siyuan-bridge-home` 的 `max-height` + `overflow-y` 滚动。通知区最多显示两条通知的高度（`max-height: 100px`），超出部分在同区域内纵向滚动，不能撑高 Dialog；通知少时不保留空位，单条通知最多两行（`max-height: 48px`）。
 
 工作空间绝对路径不写入配置文件。每次打开 MCP 配置页或点击“刷新 JSON”时，前端调用 `/api/system/getWorkspaces`，选择 `closed=false` 的当前工作空间，重新生成本机插件目录、Bridge 目录、`run_mcp.py` 绝对路径和 MCP JSON。这样插件整体同步到另一台电脑后，设置页仍会显示另一台电脑自己的路径。
 
