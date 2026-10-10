@@ -5645,6 +5645,37 @@ class McpServerReadInlineImagesTests(unittest.TestCase):
         self.assertIn("[图片未返回：超出单笔", self._text(content))
         self.assertIn("0 字节", self._text(content))
 
+    def test_include_images_false_overrides_enabled_setting(self):
+        blocks = self._blocks([("p1", "![chart](assets/chart.png)"), ("p2", "After the image.")])
+        server = self._make_server(blocks, "![chart](assets/chart.png)")
+        response = server.call_tool(1, "siyuan_read", {"document_id": "doc1", "include_images": False})
+        content = response["result"]["content"]
+        self.assertTrue(all(item["type"] == "text" for item in content))
+        self.assertNotIn("@@SIYUAN-IMAGE:", self._text(content))
+        expected = (self.root / "ai_workspace" / "attachments" / "doc1" / "assets" / "chart.png").resolve().as_posix()
+        self.assertIn(f"![chart]({expected})", self._text(content))
+
+    def test_include_images_true_overrides_disabled_setting(self):
+        blocks = self._blocks([("p1", "![chart](assets/chart.png)")])
+        server = self._make_server(blocks, "![chart](assets/chart.png)")
+        self.write_config({"profiles": [{"name": "t", "token": "t"}], "read_inline_images": False})
+        response = server.call_tool(1, "siyuan_read", {"document_id": "doc1", "include_images": True})
+        image_items = [item for item in response["result"]["content"] if item["type"] == "image"]
+        self.assertEqual(len(image_items), 1)
+        self.assertEqual(image_items[0]["mimeType"], "image/png")
+
+    def test_include_images_false_blocks_include_large_images(self):
+        blocks = self._blocks([("p1", "![chart](assets/chart.png)")])
+        server = self._make_server(blocks, "![chart](assets/chart.png)")
+        response = server.call_tool(
+            1,
+            "siyuan_read",
+            {"document_id": "doc1", "include_images": False, "include_large_images": True},
+        )
+        content = response["result"]["content"]
+        self.assertTrue(all(item["type"] == "text" for item in content))
+        self.assertNotIn("@@SIYUAN-IMAGE:", self._text(content))
+
     def test_oversized_image_inlined_after_confirm(self):
         blocks = self._blocks([("p1", "![chart](assets/chart.png)")])
         server = self._make_server(blocks, "![chart](assets/chart.png)")
@@ -5801,6 +5832,7 @@ class McpServerReadInlineImagesTests(unittest.TestCase):
         spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_read")
         self.assertIn("include_large_images", spec["inputSchema"]["properties"])
         description = spec["inputSchema"]["properties"]["include_large_images"]["description"]
+        self.assertIn("include_images", spec["inputSchema"]["properties"])
         self.assertIn("ignore the per-call image budget", description)
         self.assertIn("10 MB", description)
 

@@ -2,6 +2,15 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+## 2026-10-10：新增 siyuan_read(include_images) 按次图片参数（v1.13.0）
+
+- 触发：用户在 Home Dialog「读文档时默认同时读取图片」旁加问号说明时，给出的机制描述（AI 可按次指定 true/false，开关是默认值）与实现不符——此前内联只由开关决定，无按次参数（原始需求 `docs/图片内联需求-2026-09-14.md` 从设计起就是纯开关）。核对后用户选择先把机制做成描述的样子，再按新机制写说明。
+- 读侧：`siyuan_read` 新增可选参数 `include_images`（boolean）：省略时用 `config.read_inline_images`，显式传入则按次覆盖；`include_large_images` 语义不变，仅在本次实际内联图片时相关（插件开关开启，或 include_images=true）。`tool_specs()` 同步：参数描述、总描述改为「When images are inlined (plugin setting, or include_images=true)」。
+- 插件端（root `index.js` 与 `src/index.js` 同步）：开关标题旁加问号悬停说明（常量 `INLINE_IMAGES_HELP`，复用 `.siyuan-bridge__help` 样式）；src 开关提示里过时的「单张 20 MB」句改为单次体积上限口径。两文件 Home 版式本就不同步（src 仍是旧 checkbox-row 布局），仅按各自结构加图标。
+- 文档：`ARCHITECTURE.md`（参数表加 `include_images`、`include_large_images` 相关性表述、阅读模型「开关 = include_images 默认值」）、`README.md`/`README.en-US.md`（开关名对齐 UI、按次覆盖）、`plugins/siyuan-bridge/skills/siyuan-bridge/SKILL.md`（按次覆盖指引）、`图片内联需求-2026-09-14.md` 增 2026-10-10 修订、`FRONTEND.md`（开关 = include_images 默认值 + 问号说明）。
+- 测试：`tests/test_mcp_server.py` 新增 3 例——include_images=False 覆盖开启的开关（纯文本且正文保留图片本地路径链接）、include_images=True 覆盖关闭的开关（返回 image/png）、include_images=False 时 include_large_images=True 不产生内联；工具描述断言补 include_images。全量 `python -m pytest tests -q`：449 passed、1 skipped。
+- 版本按 MINOR 升至 `1.13.0`：新的公开工具参数。
+
 ## 2026-10-10：MCP 配置页改版，图片体积上限可配置（v1.12.0）
 
 - 触发：用户反馈 MCP 配置页把同一条路径显示 4 次、更像填表而不是给新手的接入说明；同时要求把「MCP 图片读取容量」收进折叠的「高级配置」。定稿效果图与三版备选见 `ai_workspace/attachments/mcp-settings-mockup-d.html`（Git 忽略）。

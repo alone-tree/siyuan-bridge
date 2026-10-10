@@ -397,6 +397,7 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 图片内联（可选，由插件设置页开关控制，决策见 `docs/图片内联需求-2026-09-14.md`）：
 
 - 开关状态保存在插件数据区 `config.local.json` 的 `read_inline_images`。安装默认关闭，用户打开后持久保存，下一次读取即生效（读侧每次调用都重新读配置，不要求重启 MCP 进程）。插件设置页「高级配置」里的「单次读取时总图片体积上限」写入同一文件的 `inline_image_budget_mb`（单位 MB，默认 9），覆盖内置默认值。
+- 开关同时是 `siyuan_read(include_images)` 的默认值：AI 显式传 true/false 可按次覆盖（关闭开关时 AI 仍可对单次读取要求图片，开启时也可按次只要文字与路径）。
 - 开启后 `siyuan_read` 返回 MCP 多模态 content 数组：文本块和图片块按文档顺序交替；图片是 base64 + MIME 类型，不采用 Markdown 嵌图。
 - 处理范围是思源认定的图片：本地图（`assets/...`，优先读附件提取结果，缺失时回退 `get_asset`）和网络图（http/https，下载后转 base64）。
 - 每张成功内联的图片按固定 1,568 token 计入窗口 `token_budget`；块数和 token 任意一个触发即翻页。
@@ -661,7 +662,8 @@ scope：
 | `block_limit`       | integer | 200   | 最大展示块数量                              |
 | `token_budget`      | integer | 10000 | 估算 token 预算                             |
 | `include_block_ids` | boolean | false | 启用引用阅读                                |
-| `include_large_images` | boolean | false | 用户明确同意后无视单笔图片体积预算（默认 9 MB），全量内联窗口内图片；仅图片内联开启时相关 |
+| `include_images` | boolean | 跟随插件开关 | 本次读取是否把图片作为图片块随文字返回；显式传入可按次覆盖插件设置「读文档时默认同时读取图片」，内联图片仍计入 token 与单笔图片体积预算 |
+| `include_large_images` | boolean | false | 用户明确同意后无视单笔图片体积预算（默认 9 MB），全量内联窗口内图片；仅本次实际内联图片时相关（插件开关开启，或 include_images=true） |
 
 数据流：
 

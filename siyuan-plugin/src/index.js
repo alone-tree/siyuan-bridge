@@ -16,6 +16,7 @@ const DEFAULT_CONFIG = {
   inline_image_budget_mb: 9,
 };
 const IMAGE_BUDGET_HELP = "若 AI 选择读取文档时同步读图，则图片会作为同一次 MCP 调用的结果一并发送给 AI。大部分 AI Agent 平台会限制单次 MCP 调用的结果不超过 10 MB，超过即断连。如无必要请勿修改此项。";
+const INLINE_IMAGES_HELP = "read 工具有一个 include_images 参数：true 表示读取文档时随文字一并返回图片，false 表示只返回图片路径、AI 需再次读取。AI 可以在调用时明确指定；不指定时使用此开关的值。因此开启后，AI 在大多数时候都会同步读取图片。";
 const SYSTEM_NOTEBOOK_NAMES = {
   "zh-CN": "思源桥",
   en: "SiYuan Bridge",
@@ -225,10 +226,10 @@ function renderHome() {
         <div class="siyuan-bridge-home__section-title">读取图片</div>
         <label class="siyuan-bridge-home__checkbox-row">
           <input class="b3-switch" type="checkbox" data-inline-images="checkbox" />
-          <span class="siyuan-bridge-home__checkbox-label">读文档时默认返回图片</span>
+          <span class="siyuan-bridge-home__checkbox-label">读文档时默认返回图片<span class="siyuan-bridge__help" data-help="${escapeAttr(INLINE_IMAGES_HELP)}">?</span></span>
         </label>
         <p class="siyuan-bridge-home__hint">
-          开启后 AI 读取文档时随文字一起返回图片内容。单张超过 20 MB 的图片仍需 AI 获得你的明确同意后才会返回。下一次读取即生效。
+          开启后 AI 读取文档时随文字一起返回图片内容（受单次图片体积上限约束，超出的图片只返回路径）。下一次读取即生效。
         </p>
       </div>
 

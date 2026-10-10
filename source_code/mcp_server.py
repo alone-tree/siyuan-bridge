@@ -3293,12 +3293,14 @@ class McpServer:
         client = self._require_active_client()
         include_block_ids = bool(args.get("include_block_ids"))
         config = load_config(self.root)
+        include_images_arg = args.get("include_images")
+        inline_images = config.read_inline_images if include_images_arg is None else bool(include_images_arg)
         return self._read_document_block_window(
             doc,
             client,
             include_block_ids,
             args,
-            inline_images=config.read_inline_images,
+            inline_images=inline_images,
             allow_large=bool(args.get("include_large_images")),
             budget_bytes=config.inline_image_budget_bytes,
         )
@@ -5287,7 +5289,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_read",
-            "description": "Read a visible SiYuan document as Markdown. Prefer document path including notebook name, e.g. /Notebook/Folder/Doc; use document_id only as fallback. Always returns the document outline and one complete block window. Set include_block_ids=true before any siyuan_edit call to get exact [index] id type targets. Normal reading keeps Markdown clean and hides block IDs. SELECT query_embed blocks in the selected window expand privacy-visible matches as quoted Markdown with source paths; hidden targets are never disclosed. Embedded blocks remain atomic under token and shared image budgets, preserving contiguous-window behavior. When inline image reading is enabled in the plugin settings, images in this window are returned as image content blocks interleaved with the text, up to the per-call image budget (9 MB by default, set in the plugin settings); images beyond the budget and unsupported images are reported at their position with their location.",
+            "description": "Read a visible SiYuan document as Markdown. Prefer document path including notebook name, e.g. /Notebook/Folder/Doc; use document_id only as fallback. Always returns the document outline and one complete block window. Set include_block_ids=true before any siyuan_edit call to get exact [index] id type targets. Normal reading keeps Markdown clean and hides block IDs. SELECT query_embed blocks in the selected window expand privacy-visible matches as quoted Markdown with source paths; hidden targets are never disclosed. Embedded blocks remain atomic under token and shared image budgets, preserving contiguous-window behavior. When images are inlined (plugin setting, or include_images=true), images in this window are returned as image content blocks interleaved with the text, up to the per-call image budget (9 MB by default, set in the plugin settings); images beyond the budget and unsupported images are reported at their position with their location.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -5297,7 +5299,8 @@ def tool_specs() -> list[dict[str, Any]]:
                     "block_limit": {"type": "integer", "default": DEFAULT_BLOCK_LIMIT, "description": "Maximum display blocks to return in this window, 1–1000."},
                     "token_budget": {"type": "integer", "default": DEFAULT_TOKEN_BUDGET, "description": "Estimated token ceiling for this window. Blocks stop before exceeding budget (at least one block always returned)."},
                     "include_block_ids": {"type": "boolean", "default": False, "description": "Enable reference reading for editing: each block is shown as [index] id=... type=... followed by content. Use these exact values for siyuan_edit start_index/start_id."},
-                    "include_large_images": {"type": "boolean", "default": False, "description": "Set true only after the user explicitly agrees, to ignore the per-call image budget and inline every image in this window. Responses over 10 MB can be rejected or disconnect on MCP clients using default buffer limits; use only when the client is known to accept large messages. Only relevant when inline image reading is enabled in the plugin settings."},
+                    "include_images": {"type": "boolean", "description": "Control whether images in this window are returned as image content blocks alongside the text. Omit to follow the plugin's inline-image setting; set true to inline images for this call, or false to return only image locations for AI to read separately. Inlined images still count toward the token budget and the per-call image budget; images beyond the budget are reported at their position with their location."},
+                    "include_large_images": {"type": "boolean", "default": False, "description": "Set true only after the user explicitly agrees, to ignore the per-call image budget and inline every image in this window. Responses over 10 MB can be rejected or disconnect on MCP clients using default buffer limits; use only when the client is known to accept large messages. Only relevant when images are actually inlined in this read (plugin default on, or include_images=true)."},
                 },
                 "additionalProperties": False,
             },

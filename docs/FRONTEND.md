@@ -21,7 +21,7 @@
 - MCP 配置：工作空间配置（一行一个「名称 + 访问令牌」）、「复制 MCP 配置 JSON」与「复制给 AI」按钮、折叠的「MCP JSON 原文」、折叠的「高级配置」（Python 命令、MCP 名称、单次读取时总图片体积上限）。
 - 反馈：POST Worker `/api/feedback`。
 - 用户体验改进：通过 `Plugin.loadData/saveData` 读写插件数据区 `telemetry.json` 中的 `telemetry`。
-- 读取图片：「读文档时默认返回图片」开关，写入插件数据区 `config.local.json` 的 `read_inline_images`，安装默认关闭，改动后下一次读取即生效（读侧每次调用都重新读配置，不需要重连 MCP）。
+- 读取图片：「读文档时默认同时读取图片」开关，写入插件数据区 `config.local.json` 的 `read_inline_images`，安装默认关闭，改动后下一次读取即生效（读侧每次调用都重新读配置，不需要重连 MCP）。开关同时是 `siyuan_read(include_images)` 的默认值，AI 可按次覆盖；开关标题旁有问号悬停说明（`INLINE_IMAGES_HELP`）。
 - 系统笔记本维护：插件每次激活时按文档名发现、创建和维护四篇系统文档，并在发现重复文档时弹窗提示用户手动检查删除。
 
 ## 插件数据
