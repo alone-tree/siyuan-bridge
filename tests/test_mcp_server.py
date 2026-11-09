@@ -409,6 +409,16 @@ class McpServerTests(unittest.TestCase):
             "".join(json.dumps(doc, ensure_ascii=False) + "\n" for doc in docs),
             encoding="utf-8",
         )
+
+    def _server_and_client(self, query_sql_blocks=None):
+        client = FakeSearchClient([])
+        if query_sql_blocks is not None:
+            client._blocks = query_sql_blocks
+        server = mcp_server.McpServer(self.root)
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = client
+        return server, client, mcp_server.detect_active_profile
+
     def test_feedback6_id_disambiguates_same_path_and_still_checks_live_path(self):
         docs_path = self.root / "knowledge_base" / "docs.jsonl"
         docs = [json.loads(line) for line in docs_path.read_text(encoding="utf-8").splitlines()]
@@ -470,6 +480,7 @@ class McpServerTests(unittest.TestCase):
 
     def test_feedback18_inlined_and_declared_local_images_keep_original_reference(self):
         client = FakeSearchClient([])
+        client.get_asset = mock.Mock(return_value=b"non-empty-png-bytes")
         for budget in (0, 1024):
             with self.subTest(budget=budget):
                 text, images, _ = mcp_server.inline_images_into_markdown(
@@ -479,6 +490,19 @@ class McpServerTests(unittest.TestCase):
                 self.assertIn("`assets/chart.png`", text)
                 self.assertIn("无需重新上传", text)
                 self.assertEqual(bool(budget), bool(images))
+
+    def test_feedback18_extracts_title_and_angled_assets_without_treating_title_as_filename(self):
+        client = FakeSearchClient([])
+        client.get_asset = mock.Mock(return_value=b"asset-bytes")
+        result = mcp_server.extract_attachments(
+            '![图](assets/chart.png "季度图")\n[附件](<assets/report 1.pdf>)\n`[代码](assets/code.png)`',
+            client, "doc1", self.root,
+        )
+        self.assertEqual(2, result)
+        self.assertEqual([mock.call("assets/chart.png"), mock.call("assets/report 1.pdf")], client.get_asset.call_args_list)
+        extracted = self.root / "ai_workspace" / "attachments" / "doc1" / "assets"
+        self.assertEqual(b"asset-bytes", (extracted / "chart.png").read_bytes())
+        self.assertEqual(b"asset-bytes", (extracted / "report 1.pdf").read_bytes())
 
     def test_feedback20_coordinate_view_warns_against_writing_it_back(self):
         result = mcp_server.render_table_coordinate_view("| A | B |\n| --- | --- |\n| x | y |")

@@ -5762,7 +5762,11 @@ def rewrite_local_asset_links(markdown: str, doc_id: str, workspace_root: Path) 
 def extract_attachments(markdown: str, client: SiYuanClient, doc_id: str, workspace_root: Path) -> int:
     """Extract all assets (images, PDF, etc.) referenced in markdown to ai_workspace/attachments/<doc_id>/.
     Preserves the original assets/ directory structure. Returns count of successfully extracted files."""
-    assets = re.findall(r"\]\(assets/([^)]+)\)", markdown)
+    assets = [
+        dest[len("assets/"):]
+        for _, _, dest, kind in _iter_markdown_link_dests(markdown)
+        if kind == "link" and dest.startswith("assets/")
+    ]
     if not assets:
         return 0
 

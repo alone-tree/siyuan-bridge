@@ -1,4 +1,4 @@
-"""Private SiYuan Bridge-base adapter."""
+"""思源桥Python适配层。"""
 
 __all__ = ["__version__"]
 
