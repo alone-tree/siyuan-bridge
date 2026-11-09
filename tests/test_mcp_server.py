@@ -409,6 +409,141 @@ class McpServerTests(unittest.TestCase):
             "".join(json.dumps(doc, ensure_ascii=False) + "\n" for doc in docs),
             encoding="utf-8",
         )
+    def test_feedback6_id_disambiguates_same_path_and_still_checks_live_path(self):
+        docs_path = self.root / "knowledge_base" / "docs.jsonl"
+        docs = [json.loads(line) for line in docs_path.read_text(encoding="utf-8").splitlines()]
+        docs[1]["hpath"] = docs[0]["hpath"]
+        docs[1]["title"] = docs[0]["title"]
+        docs_path.write_text("".join(json.dumps(doc) + "\n" for doc in docs), encoding="utf-8")
+        server, client, _ = self._server_and_client()
+        client._hpaths["doc2"] = "/Projects/Doc One"
+        result = server.resolve_visible_document({"document": "/Main/Projects/Doc One", "document_id": "doc2"})
+        self.assertEqual("doc2", result["id"])
+        client._hpaths["doc2"] = "/Moved"
+        with self.assertRaisesRegex(ValueError, "路径已过期"):
+            server.resolve_visible_document({"document": "/Main/Projects/Doc One", "document_id": "doc2"})
+
+    def test_feedback6_conflicting_or_hidden_id_is_not_overridden_by_path(self):
+        server, _, _ = self._server_and_client()
+        with self.assertRaisesRegex(ValueError, "不匹配"):
+            server.resolve_visible_document({"document": "/Main/Projects/Doc One", "document_id": "doc2"})
+        write_privacy_rules_cache(self.root, PrivacyRules(ignore=[{"scope": "document", "id": "doc2"}], allow=[]))
+        with self.assertRaisesRegex(ValueError, "未找到"):
+            server.resolve_visible_document({"document": "/Main/Projects/Doc One", "document_id": "doc2"})
+
+    def test_feedback7_same_name_creation_returns_id_followup_hint(self):
+        server, client, _ = self._server_and_client()
+        result = server.siyuan_create({
+            "title": "Doc One", "path": "/Main/Projects/Doc One", "markdown": "New content",
+            "if_exists": "create_new", "confirmed": True,
+        })
+        self.assertIn("新文档与已有文档同名", result)
+        self.assertIn('document_id="new-doc-0"', result)
+        self.assertIn("不要仅使用路径", result)
+        self.assertEqual(1, len(client._created_docs))
+
+    def test_feedback17_document_id_and_path_keep_identical_four_coordinates(self):
+        for locator in ({"document_id": "doc1"}, {"document": "/Main/Projects/Doc One"}):
+            with self.subTest(locator=locator):
+                blocks = {"doc1": [
+                    {"id": "first", "type": "p", "markdown": "First"},
+                    {"id": "last", "type": "p", "markdown": "Last"},
+                ]}
+                server, client, _ = self._server_and_client(blocks)
+                result = server.siyuan_edit({
+                    **locator, "action": "multi_block_replace", "start_index": 1, "start_id": "first",
+                    "end_index": 2, "end_id": "last", "markdown": "Replacement", "confirmed": True,
+                })
+                self.assertEqual(["last", "first"], client._deleted_blocks)
+                self.assertEqual([("first", "Replacement")], client._inserted_before)
+                self.assertIn("action：default_block_replace", result)
+
+    def test_feedback18_asset_read_retains_reusable_original_and_title(self):
+        markdown = '![图](assets/chart.png "季度图")\n[附件](assets/report.pdf)\n`[代码](assets/code.png)`'
+        result = mcp_server.rewrite_local_asset_links(markdown, "doc1", self.root)
+        expected = (self.root / "ai_workspace" / "attachments" / "doc1" / "assets" / "chart.png").resolve().as_posix()
+        self.assertIn(f'![图]({expected} "季度图")', result)
+        self.assertIn("`assets/chart.png`", result)
+        self.assertIn("`assets/report.pdf`", result)
+        self.assertIn("无需重新上传", result)
+        self.assertIn("`[代码](assets/code.png)`", result)
+
+    def test_feedback18_inlined_and_declared_local_images_keep_original_reference(self):
+        client = FakeSearchClient([])
+        for budget in (0, 1024):
+            with self.subTest(budget=budget):
+                text, images, _ = mcp_server.inline_images_into_markdown(
+                    "![图](assets/chart.png)", root=self.root, client=client, doc_id="doc1",
+                    allow_large=False, budget_bytes=budget,
+                )
+                self.assertIn("`assets/chart.png`", text)
+                self.assertIn("无需重新上传", text)
+                self.assertEqual(bool(budget), bool(images))
+
+    def test_feedback20_coordinate_view_warns_against_writing_it_back(self):
+        result = mcp_server.render_table_coordinate_view("| A | B |\n| --- | --- |\n| x | y |")
+        self.assertIn("不可原样写回", result)
+        self.assertIn("标准Markdown表格", result)
+        self.assertIn("| row 1 | x | y |", result)
+
+    def test_feedback20_replacing_table_with_paragraph_reports_structure_change(self):
+        for action in ("single_block_replace", "default_block_replace"):
+            with self.subTest(action=action):
+                blocks = {"doc1": [{"id": "table1", "type": "t", "markdown": "| A | B |\n| --- | --- |\n| x | y |"}]}
+                server, _, _ = self._server_and_client(blocks)
+                result = server.siyuan_edit({
+                    "document_id": "doc1", "action": action, "start_index": 1, "start_id": "table1",
+                    "markdown": "Plain paragraph", "confirmed": True,
+                })
+                self.assertIn("结构变化警告", result)
+                self.assertIn("表格由1个变为0个", result)
+
+    def test_feedback22_snapshot_error_preserves_kernel_menu_path_before_writes(self):
+        kernel_error = "请先在[设置 - 账号与同步 - 本地数据仓库 - 数据仓库密钥]中初始化数据仓库密钥"
+        for tool in ("siyuan_create", "siyuan_edit", "siyuan_doc_manage"):
+            with self.subTest(tool=tool):
+                server, client, _ = self._server_and_client()
+                client.create_snapshot = mock.Mock(side_effect=SiYuanApiError(kernel_error))
+                args = {"confirmed": True}
+                if tool == "siyuan_create":
+                    args.update(title="New", path="/Main/New", markdown="Body")
+                elif tool == "siyuan_edit":
+                    args.update(document_id="doc1", action="append", markdown="Body")
+                else:
+                    args.update(document_id="doc1", action="rename", new_title="New")
+                with self.assertRaises(ValueError) as caught:
+                    getattr(server, tool)(args)
+                self.assertIn(kernel_error, str(caught.exception))
+                self.assertNotIn("设置 → 关于", str(caught.exception))
+                self.assertFalse(client._created_docs)
+                self.assertFalse(client._appended_blocks)
+                self.assertFalse(client._renamed_docs)
+
+    def test_feedback26_source_bare_newline_refuses_before_snapshot_or_update(self):
+        table = "| A | B | C |\n| --- | --- | --- |\n| x | y\ny2 | z |"
+        blocks = {"doc1": [{"id": "table1", "type": "t", "markdown": table}]}
+        server, client, _ = self._server_and_client(blocks)
+        with self.assertRaisesRegex(ValueError, "裸换行或列边界异常"):
+            server.siyuan_edit({
+                "document_id": "doc1", "action": "table_edit", "start_index": 1, "start_id": "table1",
+                "table_edit": {"operation": "insert_column", "column_index": 1, "position": "after", "values": ["New"]},
+                "confirmed": True,
+            })
+        self.assertFalse(client._snapshots)
+        self.assertFalse(client._updated_blocks)
+        self.assertEqual(table, client._blocks["doc1"][0]["markdown"])
+
+    def test_feedback26_new_cell_line_endings_are_normalized_without_changing_rows(self):
+        for value in ("x\ny", "x\r\ny", "x\ry"):
+            with self.subTest(value=value):
+                result = mcp_server.apply_table_edit(
+                    "| A | B |\n| --- | --- |\n| x | z |",
+                    {"operation": "set_cell", "cell": {"row": 1, "column_index": 1, "value": value}},
+                )
+                headers, rows = mcp_server.parse_markdown_table(result, strict=True)
+                self.assertEqual(["A", "B"], headers)
+                self.assertEqual([["x<br>y", "z"]], rows)
+
     def run_operate(self, client: FakeSearchClient, args: dict[str, Any]) -> str:
         server = mcp_server.McpServer(self.root)
         server._active_profile = Profile(name="test", token="test")

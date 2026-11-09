@@ -318,7 +318,7 @@ Error: invalid parameter
 - 普通 Markdown 表格在引用阅读中显示坐标视图。
 - 数据库/属性视图只读渲染，不允许当普通表格编辑。
 - 附件提取到 `ai_workspace/attachments/<doc-id>/assets/`。
-- 返回正文中的 `assets/...` 链接改为本机绝对路径。
+- 返回正文中的`assets/...`链接仍提供本机绝对路径，同时保留可复用的原始资源引用；覆盖普通读取、带title的附件链接、图片内联成功/超预算/不支持，以及嵌入来源附件。
 - 超级块普通阅读不重复渲染子块内容。
 - 引用阅读下超级块自身占号，并继续给内部块编号。
 - 插件块序号与 `include_block_ids=true` 的 `index/id/type` 一致；共享样例在 `tests/fixtures/display_block_index_cases.json`，Python 与 `siyuan-plugin/block-index.js` 都必须通过。
@@ -342,7 +342,7 @@ Error: invalid parameter
 - `siyuan_edit` 使用路径定位时，必须先校验 live hpath；路径已变化时拒绝写入，且不得创建快照。
 - 写入前必须创建思源快照。
 - 快照失败必须拒绝写入。
-- 数据仓库密钥未初始化时错误提示清晰。
+- 数据仓库密钥未初始化时，create/edit/doc_manage都保留思源原始提示和菜单路径，不硬编码旧入口；快照失败时不执行写入。
 - 隐藏文档不可写。
 - 只读文档不可 edit/rename/move/delete。
 - copy/export 对只读文档的行为符合工具契约。
@@ -369,7 +369,8 @@ Error: invalid parameter
 - `delete` / `default_block_replace` 必须检查目标块及其随同删除的子孙块 ID。
 - `default_block_replace` 的返回摘要不得把本轮已删除的旧块列入“新内容”，即使思源写后读取短暂返回旧块。
 - 公开 schema 不暴露旧名 `multi_block_replace`；后端别名仍可执行，但错误信息和工具描述不得再出现该旧名。
-- 表格编辑必须使用 `row` 和 `column_index` 坐标。
+- 表格编辑必须使用`row`和`column_index`坐标；引用视图必须提示不可直接回写。替换后表格数量减少时输出结构变化警告。
+- 表格源内容含裸换行或列边界异常时，table_edit在快照和写入前拒绝，不静默补齐/截断后写回；新输入单元格LF/CRLF/CR规范化为`<br>`，保留相邻列及行数。
 - `insert_assets` 必须在快照和上传前完成路径存在性、普通文件/目录识别、同批基础文件名重名、锚点和大文件阈值检查。
 - 图片判断必须直接使用思源前端扩展名清单并做大小写不敏感比较；未知图片格式按普通文件处理，不做 MIME 推断。
 - `name` / `title` 缺省和显示语义必须分别测试；空 title 不得生成 `""`。
@@ -418,7 +419,8 @@ Error: invalid parameter
 - export 不创建快照、不写思源，只写 `ai_workspace/exports/`。
 - delete 返回中提示可通过思源快照恢复。
 - rename/move/copy/delete 后路径同步状态和索引状态正确。
-- 连续操作同一文档时，路径和 document_id 解析一致。
+- 连续操作同一文档时，路径和document_id解析一致；双参数以ID消歧并校验一致性，冲突/隐藏ID/过期路径在快照前拒绝。
+- 创建同名文档后返回新ID定位提醒；覆盖仅document_id加四个块坐标的范围替换，不能只测路径形式。
 
 已知真实问题：
 

@@ -25,6 +25,10 @@ After enabling "Read images together with documents by default" in the plugin se
 
 SiYuan block references are supported. You can ask which blocks a document references, or which blocks reference that document. Both queries cover the document and all its blocks, and recursively summarize reference counts for child documents. When AI modifies or deletes content, Siyuan Bridge verifies whether any existing references would break. Query embeds written as `{{SELECT ...}}` are read too: Siyuan Bridge confirms each target is visible before reading it, then shows the source path as a quote block; hidden targets never appear and are not counted, and when nothing is visible it only says "no such block".
 
+When reading images and attachments, the bridge provides both a local viewing path and the original reusable `assets/...` reference. Reuse that reference in another note instead of uploading the extracted copy again.
+
+Table coordinate views are for targeting only and must not be written back verbatim. Table edits stop before writing if raw line breaks make cell boundaries ambiguous; replacements report a warning if fewer tables remain afterward. After creating a same-name document, use its returned document ID for subsequent operations.
+
 ## How Siyuan Bridge Protects Your Notes
 
 AI is fast, but a single mistake can affect a lot of content. Siyuan Bridge integrates confirmation, snapshots, reference detection, and privacy rules into the actual workflow.

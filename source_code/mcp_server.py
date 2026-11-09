@@ -1040,7 +1040,7 @@ def split_markdown_table_row(line: str) -> list[str]:
 
 
 def escape_markdown_table_cell(value: Any) -> str:
-    return str(value).replace("\n", "<br>").replace("|", "\\|")
+    return str(value).replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>").replace("|", "\\|")
 
 
 def render_markdown_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -1055,7 +1055,7 @@ def render_markdown_table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(lines)
 
 
-def parse_markdown_table(markdown: str) -> tuple[list[str], list[list[str]]]:
+def parse_markdown_table(markdown: str, *, strict: bool = False) -> tuple[list[str], list[list[str]]]:
     lines = [line.strip() for line in markdown.strip().splitlines() if line.strip()]
     if len(lines) < 2 or "|" not in lines[0] or "|" not in lines[1]:
         raise tool_error(_ERR_INVALID_TABLE, "目标块不是可解析的 Markdown 表格。请重新引用阅读，确认目标块 type=table。")
@@ -1064,12 +1064,28 @@ def parse_markdown_table(markdown: str) -> tuple[list[str], list[list[str]]]:
     if not headers or len(separator) != len(headers):
         raise tool_error(_ERR_INVALID_TABLE, "表格表头或分隔行格式不完整，暂不支持 table_edit。")
     rows = [split_markdown_table_row(line) for line in lines[2:]]
+    if strict:
+        if any(not re.fullmatch(r":?-+:?", cell.strip()) for cell in separator):
+            raise tool_error(_ERR_INVALID_TABLE, "表格缺少有效的Markdown分隔行；坐标视图不能原样写回。")
+        for row_number, (line, row) in enumerate(zip(lines[2:], rows), start=1):
+            if (
+                len(row) != len(headers)
+                or (lines[0].startswith("|") and not line.startswith("|"))
+                or (lines[0].endswith("|") and not line.endswith("|"))
+            ):
+                raise tool_error(
+                    _ERR_INVALID_TABLE,
+                    f"表格第{row_number}个数据行存在裸换行或列边界异常，无法安全确定单元格位置。"
+                    "本次未写入；请先在思源中核对表格，将单元格内裸换行改为<br>后重新引用阅读。",
+                )
     return headers, [(row + [""] * len(headers))[:len(headers)] for row in rows]
 
 
 def render_table_coordinate_view(markdown: str) -> str:
     headers, rows = parse_markdown_table(markdown)
     lines = [
+        "表格坐标视图仅供定位，不可原样写回正文；修改单元格请用table_edit，整体替换请提供标准Markdown表格。",
+        "",
         "| row_index | " + " | ".join(f"col {i}" for i in range(1, len(headers) + 1)) + " |",
         "| row 0 | " + " | ".join(escape_markdown_table_cell(header) for header in headers) + " |",
     ]
@@ -1145,7 +1161,7 @@ def apply_table_cell_edit(headers: list[str], rows: list[list[str]], cell: dict[
 
 
 def apply_table_edit(markdown: str, edit: dict[str, Any]) -> str:
-    headers, rows = parse_markdown_table(markdown)
+    headers, rows = parse_markdown_table(markdown, strict=True)
     operation = str(edit.get("operation") or "").strip()
     legacy_insert_map = {
         "insert_row_before": ("insert_row", "before"),
@@ -3578,7 +3594,26 @@ class McpServer:
         return "\n".join(parts)
 
     def resolve_visible_document(self, args: dict[str, Any]) -> dict[str, Any]:
-        locator = str(args.get("document") or args.get("document_id") or args.get("locator") or "").strip()
+        document = str(args.get("document") or "").strip()
+        document_id = str(args.get("document_id") or "").strip()
+        if document and document_id:
+            doc = self.resolve_visible_document({"document_id": document_id})
+            if document.startswith("/"):
+                requested = normalize_display_path(document).casefold()
+                matches = requested in {
+                    normalize_display_path(display_document_path(doc)).casefold(),
+                    normalize_display_path(str(doc.get("hpath") or "")).casefold(),
+                }
+            else:
+                visible_docs = filter_documents(load_docs(self.root), load_privacy_rules(self.root))
+                _, candidates = resolve_document(visible_docs, document)
+                matches = any(str(candidate.get("id") or "") == document_id for candidate in candidates)
+            if not matches:
+                raise tool_error(_ERR_MISMATCH, "document与document_id不匹配。请核对定位参数；若仅按ID定位，请只传document_id。")
+            if document.startswith("/"):
+                self._ensure_document_path_current(doc, document)
+            return doc
+        locator = str(document or document_id or args.get("locator") or "").strip()
         if not locator:
             raise tool_error(_ERR_MISSING_PARAM, "document/document_id 参数是必填的")
         locator_is_path = locator.startswith("/")
@@ -3751,19 +3786,7 @@ class McpServer:
             reference_notice = self._protect_referenced_blocks(client, deleting_ids, args)
 
         # Create snapshot before writing
-        ts = datetime.now().strftime("%Y%m%d%H%M%S")
-        memo = f"siyuan-bridge:auto-snapshot tool=siyuan_create target={target.display_path} created={ts}"
-        try:
-            client.create_snapshot(memo)
-            snapshot_status = "created"
-        except SiYuanApiError as exc:
-            msg = str(exc)
-            if "数据仓库密钥" in msg or "data repo key" in msg.casefold() or "key" in msg.casefold():
-                raise tool_error(_ERR_SNAPSHOT_KEY,
-                    "快照创建失败：数据仓库密钥未初始化。"
-                    "请打开思源 → 设置 → 关于 → 数据仓库密钥，初始化密钥后重试。"
-                ) from exc
-            raise tool_error(_ERR_SNAPSHOT_FAILED, f"快照创建失败，拒绝写入。错误：{msg}") from exc
+        snapshot_status = self._create_snapshot_or_raise(client, "siyuan_create", target.display_path)
 
         # Normalize markdown to avoid duplicate H1
         markdown = normalize_new_document_markdown(title, markdown)
@@ -3847,6 +3870,11 @@ class McpServer:
         ]
         if doc_id:
             parts.append(f"**文档 ID：**`{doc_id}`")
+        if action_status == "created_new":
+            if doc_id:
+                parts.append(f"注意：新文档与已有文档同名，后续请使用document_id=\"{doc_id}\"定位，不要仅使用路径。")
+            else:
+                parts.append("注意：已创建同名新文档，但未取得新文档ID；后续操作前请先确认新文档ID，不要仅使用路径。")
         if overwritten_blocks:
             parts.append(f"**覆盖：**已清空并重写 {len(overwritten_blocks)} 个原块，保留当前文档 ID。")
         if reference_notice:
@@ -3880,7 +3908,7 @@ class McpServer:
             if "数据仓库密钥" in msg or "data repo key" in msg.casefold() or "key" in msg.casefold():
                 raise tool_error(_ERR_SNAPSHOT_KEY,
                     "快照创建失败：数据仓库密钥未初始化。"
-                    "请打开思源 → 设置 → 关于 → 数据仓库密钥，初始化密钥后重试。"
+                    f"请按思源原始提示初始化密钥后重试。思源原始错误：{msg}"
                 ) from exc
             raise tool_error(_ERR_SNAPSHOT_FAILED, f"快照创建失败，拒绝写入。错误：{msg}") from exc
 
@@ -4478,6 +4506,13 @@ class McpServer:
                 )
                 deleted_ids = {block.id for block in target_blocks}
                 replaced = [block for block in replaced if block.id not in deleted_ids]
+            old_tables = sum(display_block_semantic_type(block) == "table" for block in target_blocks)
+            new_tables = sum(display_block_semantic_type(block) == "table" for block in replaced)
+            if old_tables > new_tables:
+                parts.append(
+                    f"结构变化警告：替换范围内的表格由{old_tables}个变为{new_tables}个。"
+                    "请确认这是预期变化；坐标视图不可原样写回，如非预期请通过思源快照手动恢复。"
+                )
             parts.extend([
                 f"已替换 {len(target_blocks)} 个块：{block_range_label(target_blocks)}",
                 "",
@@ -5241,7 +5276,7 @@ def tool_specs() -> list[dict[str, Any]]:
                     "action": {"type": "string", "enum": ["refresh", "sync", "check_forward_references", "check_backward_references"], "description": "refresh: update the local safe index without cleaning ai_workspace. sync: trigger SiYuan built-in default sync. check_forward_references: show which blocks this document references, grouped by target document. check_backward_references: show which blocks reference this document or its blocks, grouped by source document. Both reference queries detail the selected document, summarize descendants, and include references within the same document."},
                     "timeout_seconds": {"type": "integer", "default": 10, "description": "For action=sync only. How long to wait for SiYuan built-in sync to return, 5-120 seconds. Does not change SiYuan sync behavior."},
                     "document": {"type": "string", "description": "For either reference query. Preferred document path including notebook name. Existing unique-title and unique-partial locator compatibility is preserved."},
-                    "document_id": {"type": "string", "description": "For either reference query. Document ID fallback when the path is ambiguous or unavailable. A body block ID is rejected."},
+                    "document_id": {"type": "string", "description": "For either reference query. Document ID fallback when the path is ambiguous or unavailable. If document is also provided, it must identify the same document. A body block ID is rejected."},
                     "limit": {
                         "anyOf": [
                             {"type": "integer", "minimum": 1},
@@ -5294,7 +5329,7 @@ def tool_specs() -> list[dict[str, Any]]:
                 "type": "object",
                 "properties": {
                     "document": {"type": "string", "description": "Document path including notebook name, e.g. /Notebook/Folder/Doc. Preferred for reading and editing workflows."},
-                    "document_id": {"type": "string", "description": "Document id fallback when path is ambiguous or unavailable."},
+                    "document_id": {"type": "string", "description": "Document ID fallback or disambiguator. If document is also provided, both must identify the same document."},
                     "block_start": {"type": "integer", "default": 1, "description": "Starting display block index (1-based). Default 1 reads from the first block."},
                     "block_limit": {"type": "integer", "default": DEFAULT_BLOCK_LIMIT, "description": "Maximum display blocks to return in this window, 1–1000."},
                     "token_budget": {"type": "integer", "default": DEFAULT_TOKEN_BUDGET, "description": "Estimated token ceiling for this window. Blocks stop before exceeding budget (at least one block always returned)."},
@@ -5331,7 +5366,7 @@ def tool_specs() -> list[dict[str, Any]]:
                 "type": "object",
                 "properties": {
                     "document": {"type": "string", "description": "Document path including notebook name, e.g. /Notebook/Folder/Doc. If ambiguous, use document_id instead."},
-                    "document_id": {"type": "string", "description": "Optional document id fallback when document path is ambiguous."},
+                    "document_id": {"type": "string", "description": "Document ID fallback or disambiguator. If document is also provided, both must identify the same document."},
                     "action": {"type": "string", "enum": ["default_block_replace", "single_block_replace", "insert_after", "insert_before", "append", "delete", "table_edit", "insert_assets"], "description": "default_block_replace: delete the target block(s) and create new block(s) with new IDs, without preserving formatting. single_block_replace: replace the text of exactly one block and keep its ID and formatting (color, font size); only when that block is referenced by other blocks and those references must be kept. insert_after / insert_before: insert markdown next to an anchor. append: add to the end; no start_index/start_id. delete: remove one block or an inclusive range. table_edit: edit a normal Markdown table via table_edit. insert_assets: insert local files/folders after one anchor using assets."},
                     "start_index": {"type": "integer", "description": "Global display block index from reference reading. Required except append."},
                     "start_id": {"type": "string", "description": "Block ID from reference reading. Required except append."},
@@ -5386,7 +5421,7 @@ def tool_specs() -> list[dict[str, Any]]:
                 "type": "object",
                 "properties": {
                     "document": {"type": "string", "description": "Document path including notebook name, e.g. /Notebook/Folder/Doc. Preferred."},
-                    "document_id": {"type": "string", "description": "Document id fallback when path is ambiguous or unavailable."},
+                    "document_id": {"type": "string", "description": "Document ID fallback or disambiguator. If document is also provided, both must identify the same document."},
                     "action": {"type": "string", "enum": ["create_notebook", "rename", "move", "delete", "copy", "export", "set_tags"], "description": "create_notebook: create an empty notebook; requires notebook_name; does not create a document; rejects duplicate names. rename: rename a document; requires new_title and read_write. move: move a document subtree; requires target_parent and read_write; rejected if the source inherits non-read_write restrictions or the target parent is not read_write. delete: delete a document subtree, not a notebook; every descendant must be read_write; checks backlinks. copy: duplicate the source document only, not children; requires target_path; allowed for readable documents. export: write Markdown to ai_workspace/exports; does not modify SiYuan; allowed for readable documents. set_tags: replace the document's tags entirely; requires tags and read_write."},
                     "notebook_name": {"type": "string", "description": "Required for action=create_notebook. Exact name of the new notebook."},
                     "new_title": {"type": "string", "description": "Required for action=rename."},
@@ -5662,7 +5697,26 @@ def inline_images_into_markdown(
         except (HTTPError, URLError, OSError, SiYuanApiError, SiYuanConnectionError) as exc:
             return f"[图片未返回：读取失败（{exc}）。文件：{display}]"
 
-    replaced = MARKDOWN_IMAGE_RE.sub(replace, markdown)
+    def replace_with_reference(match: re.Match[str]) -> str:
+        rendered = replace(match)
+        url = match.group(1).strip().strip("<>")
+        if urlparse(url).scheme in ("http", "https"):
+            return rendered
+        original = url if url.startswith("assets/") else ""
+        if not original:
+            try:
+                relative = Path(unquote(url)).resolve().relative_to(
+                    (root / "ai_workspace" / "attachments").resolve()
+                ).as_posix()
+                if "/assets/" in relative:
+                    original = "assets/" + relative.split("/assets/", 1)[1]
+            except ValueError:
+                pass
+        if original:
+            rendered += f" [原始资源引用：`{original}`；复用时直接使用此引用，无需重新上传]"
+        return rendered
+
+    replaced = MARKDOWN_IMAGE_RE.sub(replace_with_reference, markdown)
     return replaced, image_blocks, stats
 
 
@@ -5688,14 +5742,21 @@ def attachment_root_dir(workspace_root: Path, doc_id: str) -> Path:
 
 
 def rewrite_local_asset_links(markdown: str, doc_id: str, workspace_root: Path) -> str:
-    """Rewrite SiYuan-relative asset links to extracted absolute local paths."""
-    assets_dir = attachment_root_dir(workspace_root, doc_id) / "assets"
-
-    def replace(match: re.Match[str]) -> str:
-        filename = match.group(1)
-        return f"]({(assets_dir / filename).resolve().as_posix()})"
-
-    return re.sub(r"\]\(assets/([^)]+)\)", replace, markdown)
+    """保留本地读取路径，并附可直接复用的思源原始资源引用。"""
+    references: dict[str, str] = {}
+    rewritten = markdown
+    for start, end, dest, kind in reversed(_iter_markdown_link_dests(markdown)):
+        if kind != "link" or not dest.startswith("assets/"):
+            continue
+        local = (attachment_root_dir(workspace_root, doc_id) / unquote(dest)).resolve().as_posix()
+        references[dest] = local
+        destination = local if start and markdown[start - 1] == "<" else _markdown_destination(local)
+        rewritten = rewritten[:start] + destination + rewritten[end:]
+    if references:
+        lines = ["", "", "原始资源引用（复用时直接使用assets引用，无需重新上传；本地路径仅供读取）："]
+        lines.extend(f"- `{original}` → {local}" for original, local in reversed(list(references.items())))
+        rewritten += "\n".join(lines)
+    return rewritten
 
 
 def extract_attachments(markdown: str, client: SiYuanClient, doc_id: str, workspace_root: Path) -> int:

@@ -373,7 +373,7 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 5. 构建全文大纲，并按 `block_start`、`block_limit` 选择连续展示块窗口。
 6. 窗口走到嵌入块时才执行 SELECT：先只取目标 ID，再读取元数据并应用可见索引、Privacy Rules 与系统文档过滤；仅对可见目标读取正文、递归渲染及计算 token/图片预算。
 7. 从宿主文档自身块 Markdown 与可见嵌入来源文档分别发现附件，提取到各自的 `ai_workspace/attachments/<doc-id>/assets/`。当文档含嵌入块时不使用会提前展开嵌入的 `exportMdContent` 发现附件。
-8. 按各来源文档重写本地 `assets/...` 链接为本机绝对路径。
+8. 按各来源文档重写本地`assets/...`链接为本机绝对路径，同时附可直接复用的原始资源引用；本地副本只供读取，不必重新上传。内联或未返回的本地图也保留原始资源引用。
 9. 返回文档头、大纲、可选窗口预览、正文窗口和下一窗口提示。
 
 块窗口参数默认值：
@@ -410,7 +410,7 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 - 文档块不作为正文展示。
 - 列表容器通常不单独展示；列表项或列表 Markdown 作为一个展示块处理。
 - 表格在普通阅读中保留原始 Markdown。
-- 表格在引用阅读中渲染为带 `row` / `column_index` 的坐标视图。
+- 表格在引用阅读中渲染为带`row`/`column_index`的坐标视图，并提示该视图不可原样写回；整体替换必须提供标准Markdown表格。
 - 超级块普通阅读展开子块；引用阅读显示 superblock 开始/结束标记并遍历子块。
 - 数据库/属性视图只读渲染为 Markdown 表格。
 
@@ -446,7 +446,7 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 - 使用 `/api/repo/createSnapshot`。
 - 只传 `memo`。
 - 成功时可能返回 `data: null`，不保证有 snapshot id。
-- 如果数据仓库密钥未初始化，写入工具返回明确提示，让用户去思源 UI 初始化。
+- 如果数据仓库密钥未初始化，写入工具保留思源原始错误及菜单路径，提示按内核说明初始化；不硬编码可能随版本变化的设置入口。
 - 不提供 AI 自动 rollback。用户需要通过思源快照手动恢复。
 
 通知：
@@ -564,7 +564,7 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 当前实现差距：
 
 - 当前设计已明确：只有 `siyuan_start` 会清理 `ai_workspace`，`siyuan_operate(action=refresh)` 不清理。refresh 可能发生在 AI 工作途中，中途清理 workspace 会误删附件、导出文件或临时工作材料。旧 devlog 和旧说明文档中仍可能保留相反历史表述，迁移时需要剔除，避免继续暗示 refresh 会清理 workspace。
-- 文档定位器在同时传入 `document` 与 `document_id` 时静默优先 `document`，不会校验二者是否指向同一文档。两个引用查询 action 为保持工具一致性暂时复用该行为；后续应统一增加冲突校验。
+- 通用文档定位器同时收到`document`与`document_id`时，先按可见文档ID消歧义，再校验路径或定位符确实包含该文档；冲突返回`validation:mismatch`。双参数路径仍检查live hpath，隐藏文档和Privacy Rules不因ID消歧而放行。
 
 ## `siyuan_list`
 
@@ -729,7 +729,7 @@ scope：
 | -------------- | ------------------------------------------- |
 | `reject`     | 默认拒绝，返回已有文档列表和可选策略        |
 | `overwrite`  | 清空已有文档展示块后追加新内容，保留文档 ID |
-| `create_new` | 调用思源创建同名新文档                      |
+| `create_new` | 调用思源创建同名新文档；返回明确提醒，后续应使用新文档ID而非同名路径定位 |
 
 本地 Markdown 文件导入：
 
@@ -898,7 +898,9 @@ scope：
 
 安全机制：
 
-- `expected_old_value` 可作为单元格旧值保护。
+- `expected_old_value`可作为单元格旧值保护。
+- 写入前严格校验源表格分隔行、各数据行列数及边界。裸换行导致边界不明确时，在快照和写入前拒绝；不自动猜测单元格归属。新输入单元格的LF、CRLF及CR统一转为`<br>`。
+- 普通替换仍允许按用户意图将表格改为其他内容；写后表格数量减少时，结果明确警告结构变化并提示手动快照恢复。
 - 表格编辑只支持普通 Markdown 表格，不支持数据库/属性视图。
 
 ## `siyuan_doc_manage`
@@ -957,7 +959,8 @@ scope：
 
 - rename/move/copy/delete 后会等待思源路径接口同步，再刷新本地索引。正常情况下返回的新路径可以直接用于后续 `siyuan_read` / `siyuan_list` / `siyuan_doc_manage`。
 - create_notebook 只创建笔记本，不创建首篇文档；当前不提供删除整个笔记本的 action，`delete` 始终表示删除文档子树。
-- 如果等待超时，工具仍返回写入结果和同步状态；连续操作时可临时使用 `document_id` 继续，或显式调用 `siyuan_operate(action=refresh)`。
+- 如果等待超时，工具仍返回写入结果和同步状态；连续操作时可临时使用`document_id`继续，或显式调用`siyuan_operate(action=refresh)`。
+- 外部UI改名或移动后由使用方主动refresh；桥不增加外部变动自动刷新机制，旧路径由实时校验拒绝并提示刷新（2026-11-09用户确认，反馈#8结案）。
 - copy 复制单篇源文档本身，不复制子文档；目标必须使用完整 `target_path`，目标路径已存在时拒绝覆盖。
 - move 按思源行为移动整棵子树，但不要求子孙全部 `read_write`；显式文档权限会随文档 ID 保留。为避免文档脱离只读/隐藏祖先后权限提升，源文档到笔记本根之间的祖先路径必须都是 `read_write`。
 
@@ -1044,7 +1047,6 @@ API 设计原则：
 2. `cli.py start` 仍读取旧 `knowledge_base/guide.md/index.md/START_HERE.md`，和系统笔记本方案不一致。
 3. `mcp_server.py` 文件过大，后续维护风险高。需要拆分为模块。
 4. 测试也需要模块化拆分，并需要系统性的覆盖。
-5. 通用文档定位器同时收到 `document` 与 `document_id` 时静默优先前者；应统一增加二者一致性校验，而不是由单个 action 各自处理。
 
 ## 历史踩坑与结论
 

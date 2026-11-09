@@ -34,12 +34,12 @@ description: Use when the user wants to read, search, or write their private SiY
 - `siyuan_start` —— 始终最先调用。返回运行状态、MCP Usage Guide、User Preferences、笔记本概览和 Workspace Index。
 - `siyuan_find` —— 搜索知识库，通过思源 API 实时搜索后经隐私规则过滤返回结果。搜索文本参数是 `query`。默认 `mode=query`，使用思源原生查询语法：空格表示 AND；探索主题、近义词或相关概念时显式使用 OR，例如 `GPU OR 光模块 OR NVLink`。含连字符等特殊字符的词会按 FTS5 规则自动加引号，例如 `Scale-out` 会按 `"Scale-out"` 发送。需要模式匹配或结构化查询时再使用 `regex` / `sql`。`sql` 使用思源只读 SQL 搜索，返回块 ID（`id` 列）对应的真实可见内容；适合按类型、时间或结构筛选块。按 SQL 原顺序展示前 20 条可见命中，不合并文档；正文块完整返回，文档展开前 20 个展示块，更多用 `siyuan_read`。图片只保留地址，嵌入 SQL 不展开。若提示上游截断，保留排序按提示使用 SQL LIMIT/OFFSET 继续，不能按可见命中数推进 OFFSET；不会自动补足 20 条。`scope/limit/max_snippets_per_doc` 仅控制 query/regex。命中文档带文档属性标签时会以 `tag：#名称#` 展示。
 - `siyuan_read` —— 只读取可见文档；隐藏文档和隐私规则文档即使已知 ID 也不会被读取。
-- `siyuan_read` / `siyuan_edit` / `siyuan_doc_manage` 使用路径定位时会校验思源当前真实路径。若提示路径已过期，先调用 `siyuan_operate(action="refresh")`，再用当前真实路径重试；或改用 `document_id`。
+- `siyuan_read`/`siyuan_edit`/`siyuan_doc_manage`使用路径定位时会校验思源当前真实路径。外部UI改名或移动后主动refresh；若提示路径已过期，先调用`siyuan_operate(action="refresh")`，再用新路径重试，或只传`document_id`。同时传路径和ID时，以ID消歧并检查一致性，不会静默忽略冲突。
 - `siyuan_list` —— 无参数或 `path="/"` 时列出可见笔记本；其他路径列出直接子文档及有效权限。`read_write` 可写，`read_only` 只能读取、复制或导出；隐私规则文档和隐藏内容不会出现在列表中。
 - `siyuan_create`、`siyuan_edit` —— 写入工具。始终 `confirmed=true`。写入前自动创建思源工作空间快照。默认不写入，除非用户明确要求。
 - `siyuan_create` 优先传完整可读路径 `path=/Notebook/Folder/Doc`；只有笔记本名称重名或使用内部路径时才补充 `notebook_id`。目标已存在时默认 `if_exists=reject`，可显式用 `overwrite` 清空块后重写并保留文档 ID，或用 `create_new` 新增同名文档。
 - 如果 `siyuan_create` 提示目标笔记本不存在，先取得用户明确同意，再调用 `siyuan_doc_manage(action="create_notebook", notebook_name="<笔记本名称>", confirmed=true)`；创建成功后重试文档写入。不得根据文档路径隐式创建笔记本。
-- `siyuan_create` 成功后会等待思源路径同步并自动刷新安全索引；正常情况下可直接使用返回路径继续读取或管理。
+- `siyuan_create`成功后会等待思源路径同步并自动刷新安全索引；普通新建可使用返回路径，同名新建必须按返回提醒使用新文档ID定位，不能仅复用同名路径。
 - 新写或直接编辑正文时传 `markdown`，不要先写一个本地 `.md` 再导入。只有需要把已有本地 md 导入或插入思源时才用 `markdown_file`（绝对路径）；插入后图片和附件会上传，相对引用会尽可能改写为 `siyuan://` 块链接。独立附件仍用 `insert_assets`。
 - 面向用户说“第 N 块”前，必须先用 `siyuan_read(include_block_ids=true)` 读取当前文档。用户在思源页面看到的是同一套实时序号；文档被你或用户改过之后，旧序号立即失效，再次引用前必须重新读取。
 - 编辑已有文档前，先用 `siyuan_read(include_block_ids=true)` 进行引用阅读，并把返回的块序号和块 ID 作为 `siyuan_edit` 定位参数。面向用户用“第 25 块”即可，不要要求用户识别块 ID。
@@ -48,7 +48,8 @@ description: Use when the user wants to read, search, or write their private SiY
 - `delete`、`default_block_replace`、`siyuan_create(if_exists=overwrite)` 和整棵文档树删除都会检查即将消失的 ID 是否存在外部块引用、可识别嵌入块或 `siyuan://` 块链接，默认 `reference_policy=reject`。若返回引用冲突，按错误结果附带的语义判断说明重新规划编辑；只有用户明确允许破坏本次报告的引用后，才能用相同参数加 `reference_policy=break` 重试。不得自行使用 `break`。
 - `siyuan_doc_manage` —— 显式创建笔记本或管理文档树。`create_notebook` 需要 `notebook_name`、用户明确要求和 `confirmed=true`，写前创建快照，同名笔记本存在时拒绝重复创建；它不同时创建文档。`rename/move/delete/copy/set_tags` 也需要用户明确要求和 `confirmed=true`；`rename/move/delete/set_tags` 还需要可写权限。`delete` 只删除文档子树，不删除整个笔记本；子孙文档也必须全部可写。`move` 保留子树权限，但如果源文档来自只读/隐藏祖先路径则拒绝移动。`copy` 必须传完整 `target_path`，只复制源文档本身，不复制子文档。`export` 只导出可读文档到 `ai_workspace/exports/`。`set_tags` 整体替换文档标签：`tags="#标签1# #标签2#"`（空格分隔的成对井号），空串清除全部；每次设置都会整体替换，增加或去掉单个标签时先读取当前标签再写回完整新名单。
 - `siyuan_doc_manage` 的 rename/move/copy/delete 成功后会等待路径同步并自动刷新安全索引；如果返回提示路径同步超时，临时改用 `document_id` 或显式调用 `siyuan_operate(action="refresh")`。
-- 编辑普通 Markdown 表格时，使用引用阅读返回的网格坐标：`row=0` 是表头，`row>=1` 是数据行，`column_index` 从 1 开始。表格不是数据库，不要把表头、字段或多维表语义混在一起。
+- 编辑普通Markdown表格时，使用引用阅读返回的网格坐标：`row=0`是表头，`row>=1`是数据行，`column_index`从1开始。坐标视图不可原样写回；整体替换需提供标准Markdown表格。源表格裸换行导致边界不明时先在思源中修正，不要忽略拒绝提示继续重写；写后出现结构变化警告时核对是否符合用户意图。
+- 读取图片/附件时，本地副本路径只供查看；复用到思源文档应使用返回的原始`assets/...`引用，不要再次上传副本。
 - 插入本地图片、文件或文件夹时使用 `siyuan_edit(action="insert_assets")`：一次调用只用一个锚点，但可在该位置按顺序插入多个项目。`name` 是图片 alt 或正文链接名；`title` 才是图片下方标题（文件/文件夹通常仅悬停显示）。超过 20 MB 的普通文件只有在用户明确同意后才传 `upload_large_files=true`。
 - `siyuan_operate` —— `action=refresh` 会话中途刷新安全索引，不清理 `ai_workspace/`；`action=sync` 调用思源内置默认同步，相当于点击思源同步按钮，并返回当前同步状态。同步默认等待 10 秒；慢同步可设置 `timeout_seconds` 到 5-120 秒，该参数只改变 MCP 等待时间，不改变思源同步行为。超时说明同步尚未在等待窗口内完成，不等同于思源未启动。只有 `siyuan_start` 会在新会话启动时清理 workspace。
 - 想知道“本文档引用了哪些块”，使用 `siyuan_operate(action="check_forward_references", document="/Notebook/Folder/Doc")`；想知道“哪些块引用了本文档”，改用 `action="check_backward_references"`。路径歧义时改传 `document_id`，不要传 `direction`。两者覆盖文档 ID、全部真实正文块 ID、块引用、可识别嵌入块和 `siyuan://` 块链接，也计入本篇内部引用。正向按目标文档展示目标块，反向按来源文档展示来源块；子文档递归汇总次数，不展开块详情。默认各展示 10 篇可见对端/子文档，`limit="none"` 查看全部，展示限制不影响关系总数。隐藏对端只计关系次数，不披露文档数、路径、ID 或内容。两个 action 均只读，不需要 `confirmed`。
