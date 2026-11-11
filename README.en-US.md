@@ -64,6 +64,8 @@ In "User Preferences," you can tell AI how concise answers should be, when to as
 
 Siyuan Bridge shows live block numbers on the left side of the editor by default, so you and AI can use the same numbers to locate specific paragraphs. The numbers refresh automatically after structural edits.
 
+Right-click a single document in the document tree and select "Copy → 复制完整路径(思源桥)" to copy a path including its notebook name, such as `/Research/Companies/Example`. Paste it directly into your AI conversation to identify the document. This entry appears below SiYuan's built-in "Copy readable path".
+
 ![Siyuan Bridge block number display](image/README/block-index-preview.png)
 
 ## Currently Not Supported

@@ -55,6 +55,37 @@ const LEGACY_AI_GUIDE_HASHES = new Set([
   "a3e3c01d4925547b747e5342fafbfff8dab0e77eaa345db6eab49e2aed3412a9",
 ]);
 
+// 依据 docs/FRONTEND.md「复制完整路径」，只扩展文档树的单篇文档菜单。
+function addFullPathCopyMenu(event) {
+  const detail = event?.detail;
+  if (detail?.type !== "doc") return;
+  const documentId = detail.items?.[0]?.id
+    || detail.elements?.[0]?.getAttribute("data-node-id");
+  const menu = window.siyuan?.menus?.menu;
+  const anchor = menu?.element.querySelector('[data-id="copyHPath"]');
+  if (!documentId || !anchor
+    || menu.element.querySelector('[data-id="siyuanBridgeCopyFullPath"]')) return;
+
+  const item = menu.addItem({
+    id: "siyuanBridgeCopyFullPath",
+    label: "复制完整路径(思源桥)",
+    iconHTML: "",
+    click: async () => {
+      try {
+        const fullPath = await callSiyuanApi("/api/filetree/getFullHPathByID", {id: documentId});
+        if (typeof fullPath !== "string" || !fullPath) {
+          throw new Error("思源未返回完整路径");
+        }
+        await navigator.clipboard.writeText(fullPath.startsWith("/") ? fullPath : `/${fullPath}`);
+        showMessage("已复制完整路径");
+      } catch (error) {
+        showMessage(`复制完整路径失败：${error.message}`, -1, "error");
+      }
+    },
+  });
+  anchor.after(item);
+}
+
 export default class SiyuanBridgePlugin extends Plugin {
   onload() {
     this.setting = {
@@ -81,6 +112,7 @@ export default class SiyuanBridgePlugin extends Plugin {
       showMessage,
     });
     this.blockIndex.bind();
+    this.eventBus.on("open-menu-doctree", addFullPathCopyMenu);
 
     ensureDefaultBridgeConfig(this).catch((error) => {
       console.warn("Siyuan Bridge config init failed", error);
@@ -110,10 +142,14 @@ export default class SiyuanBridgePlugin extends Plugin {
   }
 
   onunload() {
+    this.eventBus.off("open-menu-doctree", addFullPathCopyMenu);
+    window.siyuan?.menus?.menu?.element.querySelector('[data-id="siyuanBridgeCopyFullPath"]')?.remove();
     this.blockIndex?.unbind();
   }
 
   uninstall() {
+    this.eventBus.off("open-menu-doctree", addFullPathCopyMenu);
+    window.siyuan?.menus?.menu?.element.querySelector('[data-id="siyuanBridgeCopyFullPath"]')?.remove();
     this.blockIndex?.unbind();
   }
 
