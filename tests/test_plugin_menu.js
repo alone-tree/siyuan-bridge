@@ -7,7 +7,7 @@ const vm = require("node:vm");
 const {test} = require("node:test");
 
 // 加载实际入口；菜单替身仅提供思源菜单构造与 DOM 节点移动接口。
-function loadEntry(entry) {
+async function loadEntry(entry, storage = {}) {
   const root = {children: []};
   const copy = {children: []};
   root.children.push(copy);
@@ -55,6 +55,13 @@ function loadEntry(entry) {
       };
     }
     addCommand() {}
+    async loadData(name) { return storage[name]; }
+    async saveData(name, data) {
+      if (state.saveError) throw new Error(state.saveError);
+      if (state.saveResult) return state.saveResult;
+      storage[name] = {...data};
+      return {code: 0};
+    }
   }
   const sandbox = {
     module: {exports: {}},
@@ -80,7 +87,7 @@ function loadEntry(entry) {
       .replace("export default class SiyuanBridgePlugin", "class SiyuanBridgePlugin");
   }
   source += `
-    module.exports = {SiyuanBridgePlugin, addFullPathCopyMenu};
+    module.exports = {SiyuanBridgePlugin, addFullPathCopyMenu, bindFullPathCopyToggle, renderHome};
     createBlockIndexController = () => ({bind() {}, unbind() {}});
     ensureDefaultBridgeConfig = async () => {};
     ensureTelemetryConfig = async () => {};
@@ -89,8 +96,21 @@ function loadEntry(entry) {
   vm.runInNewContext(source, sandbox, {filename});
   const plugin = new sandbox.module.exports.SiyuanBridgePlugin();
   plugin.onload();
+  await plugin.fullPathCopyReady;
   return {
-    menu, anchor, copyId, root, copy, requests, writes, messages, state, plugin, listeners,
+    menu, anchor, copyId, root, copy, requests, writes, messages, state, plugin, listeners, storage,
+    renderHome: sandbox.module.exports.renderHome,
+    async bindToggle() {
+      const handlers = {};
+      const checkbox = {checked: false, disabled: false,
+        addEventListener(name, handler) { handlers[name] = handler; },
+      };
+      await sandbox.module.exports.bindFullPathCopyToggle({querySelector() { return checkbox; }}, plugin);
+      return {checkbox, async change(enabled) {
+        checkbox.checked = enabled;
+        await handlers.change();
+      }};
+    },
     open(detail = {type: "doc", items: [{id: "target-doc"}]}) {
       listeners.get("open-menu-doctree")({detail});
     },
@@ -100,7 +120,7 @@ function loadEntry(entry) {
 
 for (const entry of ["index.js", "src/index.js"]) {
   test(`${entry}: 菜单相邻、重复事件不重复插入、点击实时读取目标路径`, async () => {
-    const app = loadEntry(entry);
+    const app = await loadEntry(entry);
     app.open();
     app.open();
     assert.deepEqual(app.copy.children.map(item => item.id),
@@ -122,8 +142,8 @@ for (const entry of ["index.js", "src/index.js"]) {
     assert.deepEqual(app.messages.map(item => item[0]), ["已复制完整路径", "已复制完整路径"]);
   });
 
-  test(`${entry}: 不扩展笔记本、多选及无目标的菜单`, () => {
-    const app = loadEntry(entry);
+  test(`${entry}: 不扩展笔记本、多选及无目标的菜单`, async () => {
+    const app = await loadEntry(entry);
     for (const type of ["notebook", "notebooks", "docs", "items"]) {
       app.open({type, items: [{id: "target-doc"}]});
     }
@@ -137,7 +157,7 @@ for (const entry of ["index.js", "src/index.js"]) {
   });
 
   test(`${entry}: 从旧版事件元素取得右键文档 ID`, async () => {
-    const app = loadEntry(entry);
+    const app = await loadEntry(entry);
     app.open({type: "doc", elements: [{getAttribute(name) {
       assert.equal(name, "data-node-id");
       return "old-event-doc";
@@ -147,7 +167,7 @@ for (const entry of ["index.js", "src/index.js"]) {
   });
 
   test(`${entry}: 接口异常和无效路径不覆盖剪贴板`, async () => {
-    const app = loadEntry(entry);
+    const app = await loadEntry(entry);
     app.open();
     for (const response of [{code: -1, msg: "文档不存在"},
       {code: 0, data: null}, {code: 0, data: ""}, {code: 0, data: {path: "错误格式"}}]) {
@@ -164,7 +184,7 @@ for (const entry of ["index.js", "src/index.js"]) {
   });
 
   test(`${entry}: 剪贴板失败只报告失败`, async () => {
-    const app = loadEntry(entry);
+    const app = await loadEntry(entry);
     app.open();
     app.state.clipboardError = "剪贴板被拒绝";
     await app.item().options.click();
@@ -175,12 +195,65 @@ for (const entry of ["index.js", "src/index.js"]) {
   });
 
   for (const lifecycle of ["onunload", "uninstall"]) {
-    test(`${entry}: ${lifecycle} 移除菜单及事件监听`, () => {
-      const app = loadEntry(entry);
+    test(`${entry}: ${lifecycle} 移除菜单及事件监听`, async () => {
+      const app = await loadEntry(entry);
       app.open();
       app.plugin[lifecycle]();
       assert.equal(app.listeners.has("open-menu-doctree"), false);
       assert.deepEqual(app.copy.children, [app.anchor, app.copyId]);
     });
   }
+
+  test(`${entry}: 默认开启，面板开关文案和位置正确`, async () => {
+    const app = await loadEntry(entry);
+    const toggle = await app.bindToggle();
+    assert.equal(toggle.checkbox.checked, true);
+    assert.equal(toggle.checkbox.disabled, false);
+    const html = app.renderHome();
+    const blockIndex = html.indexOf('data-block-index="checkbox"');
+    const fullPath = html.indexOf('data-full-path-copy="checkbox"');
+    const images = html.indexOf('data-inline-images="checkbox"');
+    assert.ok(blockIndex < fullPath && fullPath < images);
+    assert.ok(html.includes('>复制完整路径</span>'));
+    assert.ok(html.includes('复制包含笔记本名的完整可读路径，方便直接发给 AI。'));
+  });
+
+  test(`${entry}: 关闭后隐藏，重新加载保持关闭，开启后恢复菜单`, async () => {
+    const app = await loadEntry(entry);
+    const toggle = await app.bindToggle();
+    app.open();
+    await toggle.change(false);
+    app.open();
+    assert.equal(app.item(), undefined);
+    assert.deepEqual(app.storage, {"copy-full-path.json": {enabled: false}});
+    const reloaded = await loadEntry(entry, app.storage);
+    const reloadedToggle = await reloaded.bindToggle();
+    reloaded.open();
+    assert.equal(reloadedToggle.checkbox.checked, false);
+    assert.equal(reloaded.item(), undefined);
+    await reloadedToggle.change(true);
+    reloaded.open();
+    assert.ok(reloaded.item());
+    const enabledAgain = await loadEntry(entry, app.storage);
+    assert.equal(enabledAgain.plugin.fullPathCopyEnabled, true);
+  });
+
+  test(`${entry}: 保存异常或内核错误时恢复开关并保留原状态`, async () => {
+    const app = await loadEntry(entry);
+    const toggle = await app.bindToggle();
+    app.open();
+    app.state.saveError = "无法保存";
+    await toggle.change(false);
+    assert.equal(toggle.checkbox.checked, true);
+    assert.equal(toggle.checkbox.disabled, false);
+    assert.equal(app.plugin.fullPathCopyEnabled, true);
+    assert.ok(app.item());
+    delete app.state.saveError;
+    app.state.saveResult = {code: -1, msg: "写入被拒绝"};
+    await toggle.change(false);
+    assert.equal(toggle.checkbox.checked, true);
+    assert.equal(app.plugin.fullPathCopyEnabled, true);
+    assert.deepEqual(app.storage, {});
+    assert.ok(app.messages.every(message => message[2] === "error"));
+  });
 }

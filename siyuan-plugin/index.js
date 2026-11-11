@@ -4,6 +4,7 @@ const {Dialog, Plugin, showMessage, getAllEditor} = require("siyuan");
 const PLUGIN_NAME = "siyuan-bridge";
 const CONFIG_STORAGE = "config.local.json";
 const TELEMETRY_STORAGE = "telemetry.json";
+const FULL_PATH_COPY_STORAGE = "copy-full-path.json";
 const LEGACY_CONFIG_PATH = `/data/plugins/${PLUGIN_NAME}/bridge/config.local.json`;
 const LEGACY_TELEMETRY_PATH = `/data/plugins/${PLUGIN_NAME}/bridge/telemetry.json`;
 const TELEMETRY_ID_PATH = `/data/storage/petal/${PLUGIN_NAME}/stats/telemetry_id`;
@@ -657,7 +658,17 @@ class SiyuanBridgePlugin extends Plugin {
       showMessage,
     });
     this.blockIndex.bind();
-    this.eventBus.on("open-menu-doctree", addFullPathCopyMenu);
+    this.fullPathCopyEnabled = false;
+    this.fullPathCopyReady = this.loadData(FULL_PATH_COPY_STORAGE)
+      .then((data) => { this.fullPathCopyEnabled = data?.enabled !== false; })
+      .catch((error) => {
+        this.fullPathCopyEnabled = true;
+        console.warn("读取完整路径复制设置失败", error);
+      });
+    this.fullPathCopyMenuHandler = (event) => {
+      if (this.fullPathCopyEnabled) addFullPathCopyMenu(event);
+    };
+    this.eventBus.on("open-menu-doctree", this.fullPathCopyMenuHandler);
 
     ensureDefaultBridgeConfig(this).catch((error) => {
       console.warn("Siyuan Bridge config init failed", error);
@@ -687,15 +698,26 @@ class SiyuanBridgePlugin extends Plugin {
   }
 
   onunload() {
-    this.eventBus.off("open-menu-doctree", addFullPathCopyMenu);
+    this.eventBus.off("open-menu-doctree", this.fullPathCopyMenuHandler);
     window.siyuan?.menus?.menu?.element.querySelector('[data-id="siyuanBridgeCopyFullPath"]')?.remove();
     this.blockIndex?.unbind();
   }
 
   uninstall() {
-    this.eventBus.off("open-menu-doctree", addFullPathCopyMenu);
+    this.eventBus.off("open-menu-doctree", this.fullPathCopyMenuHandler);
     window.siyuan?.menus?.menu?.element.querySelector('[data-id="siyuanBridgeCopyFullPath"]')?.remove();
     this.blockIndex?.unbind();
+  }
+
+  async setFullPathCopyEnabled(enabled) {
+    const result = await this.saveData(FULL_PATH_COPY_STORAGE, {enabled});
+    if (result?.code !== undefined && result.code !== 0) {
+      throw new Error(result.msg || "保存完整路径复制设置失败");
+    }
+    this.fullPathCopyEnabled = enabled;
+    if (!enabled) {
+      window.siyuan?.menus?.menu?.element.querySelector('[data-id="siyuanBridgeCopyFullPath"]')?.remove();
+    }
   }
 
   async openHome() {
@@ -813,6 +835,16 @@ function renderHome() {
 
       <div class="siyuan-bridge-home__section">
         <div class="siyuan-bridge-home__row">
+          <span class="siyuan-bridge-home__row-label">复制完整路径</span>
+          <input class="b3-switch" type="checkbox" data-full-path-copy="checkbox" />
+        </div>
+        <p class="siyuan-bridge-home__hint">
+          在文档树的“复制”菜单中显示“复制完整路径(思源桥)”，复制包含笔记本名的完整可读路径，方便直接发给 AI。
+        </p>
+      </div>
+
+      <div class="siyuan-bridge-home__section">
+        <div class="siyuan-bridge-home__row">
           <span class="siyuan-bridge-home__row-label">读文档时默认同时读取图片<span class="siyuan-bridge__help" data-help="${escapeAttr(INLINE_IMAGES_HELP)}">?</span></span>
           <input class="b3-switch" type="checkbox" data-inline-images="checkbox" />
         </div>
@@ -861,6 +893,7 @@ function bindHome(root, plugin) {
   loadAndRenderNotifications(root, plugin);
   loadTelemetryConfig(root, plugin);
   bindBlockIndexToggle(root, plugin);
+  bindFullPathCopyToggle(root, plugin);
   bindInlineImagesToggle(root, plugin);
 
   const telemetryCheckbox = root.querySelector("[data-telemetry='checkbox']");
@@ -920,6 +953,26 @@ function bindBlockIndexToggle(root, plugin) {
     } catch (error) {
       checkbox.checked = plugin.blockIndex.isEnabled();
       console.warn("Siyuan Bridge block index toggle failed", error);
+    }
+  });
+}
+
+async function bindFullPathCopyToggle(root, plugin) {
+  const checkbox = root.querySelector("[data-full-path-copy='checkbox']");
+  if (!checkbox) return;
+  checkbox.disabled = true;
+  await plugin.fullPathCopyReady;
+  checkbox.checked = plugin.fullPathCopyEnabled;
+  checkbox.disabled = false;
+  checkbox.addEventListener("change", async () => {
+    checkbox.disabled = true;
+    try {
+      await plugin.setFullPathCopyEnabled(checkbox.checked);
+    } catch (error) {
+      checkbox.checked = plugin.fullPathCopyEnabled;
+      showMessage(`保存失败：${error.message}`, -1, "error");
+    } finally {
+      checkbox.disabled = false;
     }
   });
 }
