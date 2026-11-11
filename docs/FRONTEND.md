@@ -52,6 +52,8 @@ MCP 配置页没有「保存」按钮。工作空间配置和「单次读取时�
 
 文档树中单篇文档的「复制」子菜单，在原生「复制可读路径」下方提供「复制完整路径(思源桥)」。复制纯文本 `/笔记本名/父文档/当前文档`，不改变原菜单和快捷键，不修改 MCP 工具。实现同步在根 `index.js` 和参考源码 `src/index.js` 中。
 
+已确认的开关补充（2026-11-11，待实现）：Home Dialog 在「显示思源桥块序号」下方增加「复制完整路径」开关，默认开启。说明为「在文档树的“复制”菜单中显示“复制完整路径(思源桥)”，复制包含笔记本名的完整可读路径，方便直接发给 AI。」关闭后隐藏该菜单项，重新开启后下次打开菜单即可显示；通过独立的插件数据 `copy-full-path.json` 保存 `{enabled: boolean}`，不改 MCP 配置。
+
 实现入口为 `open-menu-doctree`：使用事件中的目标文档 ID，在已生成菜单中找到 `data-id="copyHPath"`，由思源原生菜单方法创建新菜单项后移动到其下方。官方事件的 `detail.menu.addItem()` 只进入「插件」子菜单，不能满足这个位置。点击时调用 `/api/filetree/getFullHPathByID` 获取实时完整路径，补齐开头 `/` 后写入剪贴板；失败只提示，不复制不完整路径。插件卸载时移除监听和当前菜单项。
 
 兼容性依赖：`window.siyuan.menus.menu.addItem()` 与原生 `copyHPath` 节点；若找不到目标节点则不注入。核查依据为思源 v3.8.9 的 `app/src/menus/navigation.ts`、`menus/commonMenuItem.ts`、`menus/Menu.ts`、`plugin/EventBus.ts` 和 `kernel/model/file.go`。`tests/test_plugin_menu.js` 加载实际根入口及参考源码，覆盖相邻位置、重复事件、实时取路径、接口与剪贴板失败，以及禁用后清理；由 `tests/test_plugin_entry.py` 纳入全量测试。真实菜单观感需在测试工作空间验收，当前结果见开发日志。
