@@ -48,6 +48,14 @@ MCP 配置页没有「保存」按钮。工作空间配置和「单次读取时�
 
 插件只维护 `bridge/templates/system-docs/` 中的四类系统文档模板（About、Privacy Rules、User Preferences、Workspace Index 占位）。MCP 使用指南和索引创建指南自 v1.11.2 起属于代码资产（`templates/guides/`，随集市更新覆盖），不进系统笔记本、不提供设置页重置；插件不再读取 manifest，也不做指南哈希校验。
 
+## 复制完整路径
+
+已确认需求（2026-11-11，待实现）：文档树中单篇文档的「复制」子菜单，在原生「复制可读路径」下方增加「复制完整路径(思源桥)」。复制纯文本 `/笔记本名/父文档/当前文档`，不改变原菜单和快捷键，不修改 MCP 工具。
+
+实现入口为 `open-menu-doctree`：使用事件中的目标文档 ID，在已生成菜单中找到 `data-id="copyHPath"`，由思源原生菜单方法创建新菜单项后移动到其下方。官方事件的 `detail.menu.addItem()` 只进入「插件」子菜单，不能满足这个位置。点击时调用 `/api/filetree/getFullHPathByID` 获取实时完整路径，补齐开头 `/` 后写入剪贴板；失败只提示，不复制不完整路径。插件卸载时移除监听和当前菜单项。
+
+兼容性依赖：`window.siyuan.menus.menu.addItem()` 与原生 `copyHPath` 节点；若找不到目标节点则不注入。核查依据为思源 v3.8.9 的 `app/src/menus/navigation.ts`、`menus/commonMenuItem.ts`、`menus/Menu.ts`、`plugin/EventBus.ts` 和 `kernel/model/file.go`。验证需覆盖相邻位置、重复打开、改名/移动后的实时路径、接口与剪贴板失败，以及禁用后清理；真实菜单观感需在测试工作空间验收。
+
 ## 块序号显示
 
 设置页开关“显示思源桥块序号”和命令面板“显示/隐藏思源桥块序号”控制同一状态，默认开启，保存在插件 `saveData("block-index.json")`，不写入笔记。插件启用且序号开启时，以及用户每次打开开关时，都会提示：正文左侧数字由思源桥插件显示，与 AI 所说的「第 N 块」一致。
