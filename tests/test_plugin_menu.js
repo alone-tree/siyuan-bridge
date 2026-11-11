@@ -60,7 +60,7 @@ function loadEntry(entry) {
     module: {exports: {}},
     require(name) {
       assert.equal(name, "siyuan");
-      return {Plugin, showMessage: (...args) => messages.push(args)};
+      return {Plugin, showMessage: (...args) => messages.push(args), getAllEditor() { return []; }};
     },
     window: {siyuan: {menus: {menu}}},
     navigator: {clipboard: {async writeText(text) {
@@ -76,7 +76,7 @@ function loadEntry(entry) {
   const filename = path.join(__dirname, "..", "siyuan-plugin", entry);
   let source = fs.readFileSync(filename, "utf8");
   if (entry.startsWith("src/")) {
-    source = source.replace(/^import .*;\r?\n/, 'const {Plugin, showMessage} = require("siyuan");\n')
+    source = source.replace(/^import .*;\r?\n/, 'const {Plugin, showMessage, getAllEditor} = require("siyuan");\n')
       .replace("export default class SiyuanBridgePlugin", "class SiyuanBridgePlugin");
   }
   source += `
@@ -128,7 +128,7 @@ for (const entry of ["index.js", "src/index.js"]) {
       app.open({type, items: [{id: "target-doc"}]});
     }
     app.open({type: "doc"});
-    app.open(undefined);
+    app.open(null);
     assert.equal(app.item(), undefined);
     app.anchor.remove();
     app.open();
