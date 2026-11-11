@@ -95,4 +95,5 @@ python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE% --fre
 - MCP JSON 不包含 Token。
 - MCP JSON 中的 `run_mcp.py` 是当前设备、当前工作空间的绝对路径；切换电脑后重新打开配置页应自动变化。
 - Home Dialog 的通知、反馈、遥测、块序号、读取图片开关不会阻塞 MCP 配置；不再出现系统指南区域。
+- 「复制完整路径」默认开启；关闭后文档树菜单项隐藏，重新启用插件仍保持关闭，再次开启后可复制完整路径。
 - 旧版本留下的 `MCP 使用指南` / `工作空间索引创建指南` 文档按普通文档处理，插件激活不报错、不覆盖、不改名。

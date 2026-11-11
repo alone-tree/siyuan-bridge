@@ -256,6 +256,7 @@ MCP JSON 只包含 Python 命令、`run_mcp.py` 绝对路径和 `PYTHONUTF8=1`�
 | `privacy_rules.json` | `siyuan_start` 解析 Privacy Rules | 工具执行时持续生效的权限缓存 |
 | `stats/` | Python 遥测模块 | 匿名 ID 兼容文件及用户选择保留的本地事件副本 |
 | `block-index.json` | 插件块序号设置 | 块序号开关 |
+| `copy-full-path.json` | 插件面板设置 | 完整路径复制菜单开关，默认开启 |
 
 首次升级按“持久数据优先、旧数据只复制、不覆盖、不删除”迁移插件程序目录中的旧文件。普通开发仓库不具备安装目录结构，仍在项目根目录读写这些文件，避免要求伪造思源工作空间。安装路径识别使用 `Path.absolute()`，不先 `resolve()`，以便 junction/symlink 安装仍能映射到同一工作空间的 petal 数据区。插件数据区会参与思源同步；卸载插件不会自动删除它，其中包含 Token，清理时必须由用户明确决定。回滚到尚不认识插件数据区的旧版时，旧版只能看到程序目录里的旧副本；新旧插件或 Python Bridge 混用时也可能短暂读取不同数据，必须保持整套版本一致。已在旧版集市更新中被删除的历史配置无法由首次新版本升级恢复。仅有旧 `stats/telemetry_id`、没有 `telemetry.json` 时，插件启用后会把该 ID 写入持久 `telemetry.json`，不再生成新的匿名 ID。旧版迁移映射不再包含 `system_state.json`；已迁移到插件数据区的残留文件静默保留。
 
