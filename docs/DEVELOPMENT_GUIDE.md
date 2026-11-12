@@ -329,10 +329,11 @@ Error: invalid parameter
 - 引用阅读下超级块自身占号，并继续给内部块编号。
 - 插件块序号与 `include_block_ids=true` 的 `index/id/type` 一致；共享样例在 `tests/fixtures/display_block_index_cases.json`，Python 与 `siyuan-plugin/block-index.js` 都必须通过。
 - 图片内联关闭时，`siyuan_read` 返回行为与旧契约完全一致：单段文本，无内联标记。
-- 图片内联开启时，返回的 MCP content 数组按文档顺序交替包含文本块和图片块；每张成功内联的图片按 1,568 token 计入窗口预算并触发翻页。
+- 图片内联开启时，MCP content 按文档顺序交替返回文字与图片；视觉 token 按实际发送尺寸单独估算并计入报告合计，不用视觉 token 提前截断文字窗口。
 - 本地 assets 图片优先读已提取文件，缺失时回退 `get_asset`；网络 http/https 图片下载后内联。
-- 超过单笔图片体积预算（内置默认 9 MB，`INLINE_RESPONSE_BUDGET_BYTES`；可由插件设置页的 `inline_image_budget_mb` 覆盖）时按文档顺序前缀装填：装得下的图内联，第一张装不下的图及其后所有图原位声明（本地图给提取后的本地路径、网络图给原地址，附单独读取指引），响应头部追加图片统计提示行；本地图先 `stat` 预判，网络图下载以剩余预算为流式中止线。
-- `include_large_images=true` 无视该图片体积预算全量内联（逃生门，schema 描述必须写明超 10 MB 响应在默认客户端会断开）；SVG 等平台不支持格式和读取失败的图片同样原位声明，不无声跳过。
+- 图片先处理再按实际 Base64 判断预算（默认 9 MiB），输入文件大于预算不直接拒绝。验证标准版长边、EXIF、编码选择，竖长图与横长图的严格 3:1 阈值、分片顺序、重叠和原始坐标；同一原图所有切片完整装入或完整声明，不发送部分组。
+- `include_large_images=true` 不缩像素、不做有损压缩，仍裁剪且服从传输预算；大图切片解码后应逐像素等于原图对应区域。验证原附件字节不变、整条 UTF-8 JSON-RPC（含 Base64、文字及封装）低于 10,000,000 字节，超限缩窗只移除完整展示块，首块不能容纳时明确失败。SVG 等不支持格式和失败图片仍原位声明。
+- 图片依赖验证固定 wheel 的 ABI/平台匹配、大小与 SHA-256、多来源失败切换、已下载/已安装复用、解包路径隔离及插件激活检查；不安装到系统 Python。编解码测试通过 image_runtime 使用同一私有依赖，不要求另装 Pillow；MCP 结构测试模拟编解码器，真实像素与依赖准备在 test_image_processing.py，前端通过 test_plugin_images.js 验证实际入口。
 - 成功内联和声明处都保留原文件路径。
 
 已知真实问题：
