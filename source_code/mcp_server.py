@@ -238,6 +238,7 @@ def resolve_markdown_input(args: dict[str, Any], require: bool) -> str:
 SKIP_BLOCK_TYPES = frozenset({"d"})
 LEGACY_SKIP_BLOCK_TYPES = frozenset({"l", "d"})
 SUBTREE_MARKDOWN_BLOCK_TYPES = frozenset({"i", "l", "t"})
+EMBED_CONTAINER_BLOCK_TYPES = frozenset({"b", "l", "i"})
 LEGACY_SUBTREE_MARKDOWN_BLOCK_TYPES = frozenset({"i", "t"})
 COMMENT_ONLY_BLOCK_TYPES = frozenset({"s"})
 CHILD_TRAVERSAL_BLOCK_TYPES = frozenset({"h", "l", "s"})
@@ -1635,6 +1636,103 @@ def finish_embedded_content(content: EmbeddedContent, displayed_count: int, *, i
     ])
 
 
+def container_embed_spans(markdown: str) -> list[tuple[int, int, str, str]]:
+    """定位容器 Markdown 中的嵌入语法；这里只找位置，不执行 SQL。"""
+    lines = markdown.splitlines(keepends=True)
+    spans: list[tuple[int, int, str, str]] = []
+    fence: tuple[str, int] | None = None
+    offset = 0
+    index = 0
+    while index < len(lines):
+        line = lines[index].rstrip("\r\n")
+        match = re.match(r"((?:(?:[ \t]*>[ \t]?)|(?:[ \t]*(?:[-+*]|\d+[.)])[ \t]+))*[ \t]*)(.*)", line)
+        prefix, body = match.groups()
+        marker = re.match(r"(`{3,}|~{3,})(.*)", body)
+        if fence is not None:
+            if marker and marker[1][0] == fence[0] and len(marker[1]) >= fence[1] and not marker[2].strip():
+                fence = None
+        elif marker:
+            fence = (marker[1][0], len(marker[1]))
+        elif body.startswith("{{"):
+            continuation = re.sub(r"(?:[-+*]|\d+[.)])[ \t]+", lambda part: " " * len(part[0]), prefix)
+            pieces = [body]
+            end = index
+            while not pieces[-1].rstrip().endswith("}}") and end + 1 < len(lines):
+                end += 1
+                next_line = lines[end].rstrip("\r\n")
+                pieces.append(next_line[len(continuation):] if next_line.startswith(continuation) else next_line)
+            source = "\n".join(pieces).strip()
+            if extract_embed_select(source) is not None:
+                length = sum(len(part) for part in lines[index:end + 1])
+                # 保留末行换行，让替换内容和后续宿主内容不相连。
+                newline = len(lines[end]) - len(lines[end].rstrip("\r\n"))
+                spans.append((offset, offset + length - newline, prefix, source))
+                offset += length
+                index = end + 1
+                continue
+        offset += len(lines[index])
+        index += 1
+    return spans
+
+
+def resolve_container_embeds(
+    client: Any,
+    block: dict[str, Any],
+    resolver: Callable[[dict[str, Any]], EmbeddedContent | None],
+    *,
+    include_details: bool = True,
+    display_markdown: str | None = None,
+) -> EmbeddedContent | None:
+    """按真实子树确认嵌入节点，仅替换其原位内容，不改变容器结构或编号。"""
+    embeds: list[dict[str, Any]] = []
+    visited = {block_field(block, "id")}
+
+    def collect(parent_id: str) -> None:
+        for child in client.get_child_blocks(parent_id):
+            child_id = block_field(child, "id")
+            if not child_id or child_id in visited:
+                continue
+            visited.add(child_id)
+            child_type = block_field(child, "type")
+            if child_type == "query_embed":
+                embeds.append(child)
+            elif child_type in EMBED_CONTAINER_BLOCK_TYPES | CHILD_TRAVERSAL_BLOCK_TYPES:
+                collect(child_id)
+
+    collect(block_field(block, "id"))
+    if not embeds:
+        return None
+    markdown = display_markdown if display_markdown is not None else block_field(block, "markdown")
+    spans = container_embed_spans(markdown)
+    replacements: list[tuple[int, int, str]] = []
+    cursor = 0
+    for child in embeds:
+        source = block_field(child, "markdown").strip().replace("\r\n", "\n")
+        if extract_embed_select(source) is None:
+            continue
+        position = next((i for i in range(cursor, len(spans)) if spans[i][3] == source), None)
+        if position is None:
+            raise ValueError("容器中的嵌入位置无法确认。")
+        start, end, prefix, _ = spans[position]
+        cursor = position + 1
+        content = resolver(child)
+        if content is None:
+            continue
+        rendered = "\n".join(part for part in (
+            source if include_details else "",
+            finish_embedded_content(content, content.block_count, include_details=include_details),
+        ) if part)
+        continuation = re.sub(r"(?:[-+*]|\d+[.)])[ \t]+", lambda part: " " * len(part[0]), prefix)
+        rendered_lines = rendered.splitlines()
+        replacement = prefix + rendered_lines[0] + "".join("\n" + continuation + line for line in rendered_lines[1:])
+        replacements.append((start, end, replacement))
+    if not replacements:
+        return None
+    for start, end, replacement in reversed(replacements):
+        markdown = markdown[:start] + replacement + markdown[end:]
+    return EmbeddedContent(markdown, 1)
+
+
 def sql_string_list(values: list[str]) -> str:
     return ", ".join("'" + str(value).replace("'", "''") + "'" for value in values)
 
@@ -1646,6 +1744,7 @@ def build_display_blocks(
     include_block_ids: bool = False,
     resolve_embeds: bool = False,
     embed_resolver: Callable[[dict[str, Any]], EmbeddedContent | None] | None = None,
+    include_embed_details: bool = True,
 ) -> list[DisplayBlock]:
     """Build ordered display blocks using getChildBlocks; embed resolution stays lazy."""
     blocks: list[DisplayBlock] = []
@@ -1751,6 +1850,12 @@ def build_display_blocks(
         if resolve_embeds and block_type == "query_embed" and embed_resolver is not None:
             captured_block = dict(block)
             lazy_embed_resolver = lambda captured_block=captured_block: embed_resolver(captured_block)
+        elif resolve_embeds and block_type in EMBED_CONTAINER_BLOCK_TYPES and embed_resolver is not None:
+            captured_block = dict(block)
+            lazy_embed_resolver = lambda captured_block=captured_block, display_md=display_md: resolve_container_embeds(
+                client, captured_block, embed_resolver,
+                include_details=include_embed_details, display_markdown=display_md,
+            )
         blocks.append(DisplayBlock(
             index=len(blocks) + 1,
             id=block_id,
@@ -3208,6 +3313,7 @@ class McpServer:
             root_id,
             resolve_embeds=True,
             embed_resolver=resolve,
+            include_embed_details=context.include_details,
         )
 
     def _expand_nested_embeds(self, blocks: list[DisplayBlock], *, include_details: bool = True) -> list[DisplayBlock]:
@@ -3219,7 +3325,7 @@ class McpServer:
             embedded = resolver()
             if embedded is None:
                 continue
-            display_block.markdown = "\n".join(
+            display_block.markdown = embedded.markdown if display_block.type in EMBED_CONTAINER_BLOCK_TYPES else "\n".join(
                 part for part in (
                     display_block.markdown if include_details else "",
                     finish_embedded_content(embedded, embedded.block_count, include_details=include_details),
@@ -3288,6 +3394,16 @@ class McpServer:
                             finish_embedded_content(nested, nested.block_count, include_details=context.include_details),
                         ) if part
                     )
+            elif block_type in EMBED_CONTAINER_BLOCK_TYPES and markdown:
+                rendered = resolve_container_embeds(
+                    client, {**combined, "markdown": markdown},
+                    lambda child: self._resolve_embedded_block(
+                        context, child, depth=nested_depth, active_embed_ids=nested_active_ids,
+                    ),
+                    include_details=context.include_details,
+                )
+                if rendered is not None:
+                    markdown = rendered.markdown
             block_count = 1 if markdown.strip() else 0
 
         if markdown:
@@ -3650,6 +3766,11 @@ class McpServer:
 
         def append_embed_fallback(db: DisplayBlock, embedded: EmbeddedContent | None) -> None:
             nonlocal token_sum
+            if db.type in EMBED_CONTAINER_BLOCK_TYPES:
+                fallback = "\n".join([db.markdown, "容器内嵌入内容：内容超预算不展开", EMBED_CONTENT_HINT])
+                append_window_block(db, fallback)
+                token_sum += estimate_token_count(fallback)
+                return
             total_count = 0
             if embedded is not None:
                 total_count = embedded.total_block_count
@@ -3680,7 +3801,7 @@ class McpServer:
                     append_embed_fallback(db, None)
                     break
                 if resolved is not None:
-                    candidate_markdown = "\n".join([
+                    candidate_markdown = resolved.markdown if db.type in EMBED_CONTAINER_BLOCK_TYPES else "\n".join([
                         db.markdown,
                         finish_embedded_content(resolved, resolved.block_count),
                     ])

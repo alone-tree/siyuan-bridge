@@ -5505,6 +5505,131 @@ class McpServerReadEmbeddedBlocksTests(unittest.TestCase):
         )
         self.assertTrue(all("secret-block" not in query for query in client.content_queries))
 
+    def _quoted_embed_client(self, source="VISIBLE_CONTAINER_CONTENT", *, container_type="b"):
+        embed = self._embed("inside")
+        prefix = "> " if container_type == "b" else "- "
+        container = {"id": "container", "type": container_type, "markdown": prefix + embed["markdown"]}
+        client = self._make_client(
+            [container, {"id": "after", "type": "p", "markdown": "AFTER_CONTAINER"}],
+            result_ids=["leaf"], metadata_rows=[self._meta("leaf", "source-doc")],
+            content_rows=[{"id": "leaf", "markdown": source}],
+            blocks_by_root={"container": [{**embed, "parent_id": "container"}]},
+            asset_bytes=b"\x89PNG\r\n\x1a\n" + b"x" * 32,
+        )
+        return client
+
+    def test_quote_and_list_embeds_expand_without_changing_numbering_or_type_names(self):
+        for kind, label, prefix in (("b", "blockquote", "> > "), ("l", "list", "  > "), ("i", "list_item", "  > ")):
+            for ids in (False, True):
+                with self.subTest(kind=kind, include_ids=ids):
+                    client = self._quoted_embed_client(container_type=kind)
+                    _, result = self._read(client, include_block_ids=ids)
+                    self.assertIn(prefix + "VISIBLE_CONTAINER_CONTENT", result)
+                    self.assertIn("嵌入内容共1个块，当前展示1个块", result)
+                    self.assertIn("展示块：1-2 / 2", result)
+                    if ids:
+                        self.assertIn(f"[1] id=container type={label}", result)
+                        self.assertIn("[2] id=after type=paragraph", result)
+                    self.assertNotIn("id=inside", result)
+                    self.assertEqual(result.count("VISIBLE_CONTAINER_CONTENT"), 1)
+
+    def test_deep_list_quote_preserves_prefix_and_multiline_sql(self):
+        embed = self._embed("inside", "SELECT id\nFROM blocks WHERE root_id='source-doc'")
+        container = {"id": "container", "type": "l",
+                     "markdown": "- Intro\n  > {{SELECT id\n  > FROM blocks WHERE root_id='source-doc'}}\n  > Tail"}
+        client = self._make_client(
+            [container], result_ids=["leaf"],
+            metadata_rows=[self._meta("leaf", "source-doc")], content_rows=[{"id": "leaf", "markdown": "FOUND"}],
+            blocks_by_root={
+                "container": [{"id": "item", "type": "i", "markdown": container["markdown"]}],
+                "item": [{"id": "quote", "type": "b", "markdown": "> " + embed["markdown"].replace("\n", "\n> ")}],
+                "quote": [embed],
+            },
+        )
+        _, result = self._read(client)
+        self.assertIn("- Intro\n  > {{SELECT id", result)
+        self.assertIn("  > > FOUND", result)
+        self.assertIn("  > Tail", result)
+
+    def test_repeated_sql_in_quote_code_is_untouched_but_real_embeds_expand(self):
+        embed = self._embed("inside")
+        source = "> ```sql\n> " + embed["markdown"] + "\n> ```\n>\n> " + embed["markdown"] + "\n>\n> " + embed["markdown"]
+        client = self._quoted_embed_client()
+        client._blocks["host"][0]["markdown"] = source
+        client._blocks["container"] = [
+            {"id": "code", "type": "c", "markdown": "```sql\n" + embed["markdown"] + "\n```"},
+            embed, {**embed, "id": "inside-2"},
+        ]
+        _, result = self._read(client)
+        self.assertIn("> ```sql\n> " + embed["markdown"] + "\n> ```", result)
+        self.assertEqual(result.count("> > VISIBLE_CONTAINER_CONTENT"), 2)
+        self.assertEqual(len([q for q in client.sql_calls if "AS embed_matches" in q]), 2)
+
+    def test_container_embeds_resolve_only_when_window_reaches_them(self):
+        client = self._quoted_embed_client()
+        client._blocks["host"].insert(0, {"id": "before", "type": "p", "markdown": "BEFORE"})
+        _, result = self._read(client, block_limit=1)
+        self.assertIn("BEFORE", result)
+        self.assertFalse(any("AS embed_matches" in q for q in client.sql_calls))
+
+    def test_container_hidden_target_is_filtered_before_content_or_assets(self):
+        client = self._quoted_embed_client()
+        client.result_ids = ["secret-block"]
+        client.metadata_rows = [self._meta("secret-block", "secret-doc")]
+        client.content_rows = [{"id": "secret-block", "markdown": "SECRET ![x](assets/secret.png)"}]
+        _, result = self._read(client, include_images=True)
+        self.assertIn("查无此块", result)
+        self.assertNotIn("SECRET", result)
+        self.assertTrue(all("secret-block" not in q for q in client.content_queries))
+        self.assertNotIn("assets/secret.png", client.asset_requests)
+
+    def test_container_image_is_inlined_from_source_and_is_atomic_under_budget(self):
+        client = self._quoted_embed_client("![Photo](assets/container.png)\nCONTAINER_IMAGE_BODY")
+        server, result = self._read(client, include_images=True, token_budget=10000)
+        self.assertEqual(len(server._pending_read_images or []), 1)
+        self.assertIn("source-doc/assets/container.png", (server._pending_read_images or [])[0]["source"].replace("\\", "/"))
+        self.assertIn("CONTAINER_IMAGE_BODY", result)
+        with mock.patch.object(mcp_server, "INLINE_RESPONSE_BUDGET_BYTES", 4):
+            server, fallback = self._read(client, include_images=True, token_budget=10000)
+        self.assertIn("容器内嵌入内容：内容超预算不展开", fallback)
+        self.assertNotIn("CONTAINER_IMAGE_BODY", fallback)
+        self.assertFalse(server._pending_read_images)
+        self.assertIn("block_start=2", fallback)
+
+    def test_container_token_budget_preserves_contiguous_window(self):
+        client = self._quoted_embed_client("LARGE_CONTAINER_CONTENT " * 1800)
+        client._blocks["host"].insert(0, {"id": "before", "type": "p", "markdown": "BEFORE"})
+        _, first = self._read(client, token_budget=1000)
+        _, second = self._read(client, block_start=2, token_budget=1000)
+        _, third = self._read(client, block_start=3, token_budget=1000)
+        self.assertIn("block_start=2", first)
+        self.assertNotIn("LARGE_CONTAINER_CONTENT", first)
+        self.assertIn("容器内嵌入内容：内容超预算不展开", second)
+        self.assertNotIn("LARGE_CONTAINER_CONTENT", second)
+        self.assertIn("block_start=3", second)
+        self.assertIn("AFTER_CONTAINER", third)
+
+    def test_startup_container_embeds_keep_quotes_without_sql_or_details(self):
+        result = self._startup_body(self._quoted_embed_client())
+        self.assertIn("> > VISIBLE_CONTAINER_CONTENT", result)
+        self.assertNotIn("{{SELECT", result)
+        self.assertNotIn("嵌入内容共", result)
+        self.assertNotIn(mcp_server.EMBED_CONTENT_HINT, result)
+
+    def test_embedded_target_itself_can_be_a_container(self):
+        inner = self._embed("inside", "SELECT id FROM blocks WHERE id='leaf'")
+        client = self._make_client(
+            [self._embed(sql="SELECT id FROM blocks WHERE id='source-quote'")],
+            result_map=[("id='source-quote'", ["source-quote"]), ("id='leaf'", ["leaf"])],
+            metadata_rows=[self._meta("source-quote", "source-doc", "b"), self._meta("leaf", "source-b")],
+            content_rows=[{"id": "source-quote", "markdown": "> " + inner["markdown"]},
+                          {"id": "leaf", "markdown": "INNER_CONTAINER_TARGET"}],
+            blocks_by_root={"source-quote": [inner]},
+        )
+        _, result = self._read(client)
+        self.assertIn("> > > INNER_CONTAINER_TARGET", result)
+        self.assertIn("嵌入块来源：/Main/Source B", result)
+
     def _startup_body(self, client, document_ids=("host",)):
         state = mcp_server.AgentNotebookState(
             language="zh-CN", notebook_id="nb1", notebook_name="Main",
