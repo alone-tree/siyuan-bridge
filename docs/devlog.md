@@ -5,7 +5,8 @@
 - 在 siyuan_operate 增加 read_guide，限定 mcp_usage、workspace_index 两篇指南；按启动语言从安装根目录返回完整正文，不访问思源笔记，避免依赖 AI 客户端的本机文件权限和系统路径。
 - start 中的索引指南入口改为工具调用，删除不再使用的路径状态字段；同步中英文指南、Skill、README 和工具契约。现行说明见 ARCHITECTURE.md 的 siyuan_operate。
 - help 评估建议暂不额外增加：参数依赖 schema，原则依赖启动包，详细流程依赖 read_guide，避免重复维护。本次只实现已授权的指南读取。
-- 已确认方案保存在提交 60fcbb4 的 docs/内置指南读取讨论-2026-11-12.md；单元测试及开发版真实调用待执行。
+- 已确认方案保存在提交 60fcbb4 的 docs/内置指南读取讨论-2026-11-12.md；内容已落实，收尾移除讨论稿。
+- 验证通过：488 passed、1 skipped，12 条既有 locale 弃用警告；开发版 tools/list 仍为 9 个工具，新增 action 与 guide 枚举正确。逐次调用 start、read_guide(workspace_index)、read_guide(mcp_usage)，启动包不含指南文件路径，两篇返回与本地代码资产全文相同。测试覆盖中英文及中文/空格安装目录；Mac/Linux 尚无实机验证。原仓库 start-performance-probe/20261112/guide-*.json、guide-*.md 保留真实结果，开发连接继续保留；未发布或部署。
 
 ## 2026-11-12：start 顺序与统计时间
 
