@@ -87,6 +87,57 @@ function addFullPathCopyMenu(event) {
   anchor.after(item);
 }
 
+async function prepareImageDependency(plugin) {
+  const state = await plugin.loadData("image-runtime.json");
+  if (!state || !/^[a-zA-Z0-9_.-]+$/.test(state.tag || "")) {
+    showMessage("思源桥图片组件将在首次连接 AI 时自动准备，无需手动安装。", 7000);
+    return;
+  }
+  const platform = navigator.platform.toLowerCase();
+  if ((platform.includes("win") && !state.tag.includes("win"))
+      || (platform.includes("mac") && !state.tag.includes("macosx"))
+      || (platform.includes("linux") && !state.tag.includes("linux"))) return;
+  const manifestResponse = await fetch("/plugins/siyuan-bridge/bridge/templates/dependencies/pillow-13.0.0.json");
+  if (!manifestResponse.ok) throw new Error("无法读取图片组件清单");
+  const manifest = await manifestResponse.json();
+  const wheel = manifest.wheels.find((entry) => entry.filename === state.filename);
+  if (!wheel || state.version !== manifest.version) return;
+  const base = "/data/storage/petal/siyuan-bridge/deps";
+  const markerResponse = await fetch("/api/file/getFile", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({path: `${base}/pillow/${state.version}/${state.tag}/.ready`}),
+  });
+  if (markerResponse.ok && (await markerResponse.text()).trim() === wheel.sha256) return;
+  showMessage("思源桥正在自动下载图片处理组件，无需手动安装。", 10000);
+  const packagePath = new URL(wheel.url).pathname;
+  const urls = [wheel.url, "https://pypi.tuna.tsinghua.edu.cn" + packagePath,
+    "https://mirrors.aliyun.com/pypi" + packagePath];
+  for (const url of urls) {
+    try {
+      const result = await callSiyuanApi("/api/network/forwardProxy", {
+        url, method: "GET", timeout: 15000, responseEncoding: "base64",
+      });
+      if (result.status !== 200) throw new Error("下载失败");
+      const bytes = Uint8Array.from(atob(result.body), (char) => char.charCodeAt(0));
+      const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)))
+        .map((value) => value.toString(16).padStart(2, "0")).join("");
+      if (bytes.length !== wheel.size || digest !== wheel.sha256) throw new Error("组件校验失败");
+      const form = new FormData();
+      form.append("path", `${base}/downloads/${wheel.filename}`);
+      form.append("file", new Blob([bytes], {type: "application/octet-stream"}), wheel.filename);
+      const response = await fetch("/api/file/putFile", {method: "POST", body: form});
+      const envelope = await response.json();
+      if (envelope.code !== 0) throw new Error(envelope.msg || "组件保存失败");
+      showMessage("思源桥图片组件已下载，下次读图时自动启用。");
+      return;
+    } catch (error) {
+      console.warn("图片组件下载线路失败", url, error);
+    }
+  }
+  throw new Error("图片组件下载失败，请检查网络；首次读图时会自动重试");
+}
+
+
 export default class SiyuanBridgePlugin extends Plugin {
   onload() {
     this.setting = {
@@ -134,6 +185,9 @@ export default class SiyuanBridgePlugin extends Plugin {
     this.systemNotebookMaintenance = ensureSystemNotebook(this).catch((error) => {
       console.warn("Siyuan Bridge system notebook init failed", error);
       return null;
+    });
+    this.imageDependencyPreparation = prepareImageDependency(this).catch((error) => {
+      showMessage(`思源桥图片组件准备失败：${error.message}`, 10000, "error");
     });
   }
 
