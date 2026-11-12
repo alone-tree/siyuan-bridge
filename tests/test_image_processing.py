@@ -58,6 +58,15 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(result[0].data, data)
         self.assertEqual(result[0].mime, "image/jpeg")
 
+    def test_large_16bit_png_is_not_silently_reduced_to_8bit(self):
+        source = Image.frombytes("I;16", (80, 401), b"".join((n % 65536).to_bytes(2, "little") for n in range(80 * 401)))
+        parts = processing.prepare_image(encoded(source), self.root, large=True)
+        self.assertEqual(len(parts), 6)
+        for part in parts:
+            decoded = Image.open(BytesIO(part.data))
+            self.assertEqual(decoded.tobytes(), source.crop(part.box).tobytes())
+        self.assertGreater(Image.open(BytesIO(parts[-1].data)).getextrema()[1], 255)
+
     def test_standard_resizes_only_above_limit(self):
         parts = processing.prepare_image(encoded(Image.new("RGB", (3200, 2200), "white")), self.root)
         self.assertEqual(parts[0].width, processing.STANDARD_MAX_EDGE)

@@ -65,17 +65,20 @@ def prepare_image(data: bytes, root: Path, *, large: bool = False) -> list[Image
         parts = []
         for box in boxes:
             image = oriented.crop(box)
-            if image.mode not in {"RGB", "RGBA"}:
+            if large and image.mode not in {"1", "L", "LA", "P", "RGB", "RGBA", "I", "I;16", "I;16B", "I;16L"}:
+                raise ValueError(f"大图裁剪暂不支持 {image.mode} 色彩模式，未进行有损转换")
+            if not large and image.mode not in {"RGB", "RGBA"}:
                 image = image.convert("RGBA" if "transparency" in image.info or "A" in image.getbands() else "RGB")
             if image.mode == "RGBA" and image.getextrema()[-1] == (255, 255):
                 image = image.convert("RGB")
             if not large:
                 image.thumbnail((STANDARD_MAX_EDGE, STANDARD_MAX_EDGE), Image.Resampling.LANCZOS)
-            candidates = [(_encode(image, "PNG"), "image/png")]
-            if max(image.size) <= 16383:
-                candidates.append((_encode(image, "WEBP", lossless=True, exact=True, method=6), "image/webp"))
+            metadata = {"icc_profile": oriented.info["icc_profile"]} if oriented.info.get("icc_profile") else {}
+            candidates = [(_encode(image, "PNG", **metadata), "image/png")]
+            if max(image.size) <= 16383 and image.mode in {"RGB", "RGBA"}:
+                candidates.append((_encode(image, "WEBP", lossless=True, exact=True, method=6, **metadata), "image/webp"))
                 if not large:
-                    candidates.append((_encode(image, "WEBP", quality=90, method=6), "image/webp"))
+                    candidates.append((_encode(image, "WEBP", quality=90, method=6, **metadata), "image/webp"))
             if len(boxes) == 1 and image.size == original.size and original.getexif().get(274, 1) == 1 and original_mime in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
                 candidates.append((data, original_mime))
             encoded, mime = min(candidates, key=lambda item: len(item[0]))
