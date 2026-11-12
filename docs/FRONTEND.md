@@ -26,6 +26,14 @@
 
 ## 插件数据
 
+### 图片组件自动准备
+
+插件激活时调用 `prepareImageDependency`，读取 MCP 按实际 Python 写入的 `image-runtime.json`，按代码分发的固定清单检查私有组件或已下载 wheel。已有组件及经 SHA-256 校验的下载不重复获取；缺失时通过思源 `forwardProxy` 自动尝试 PyPI、清华和阿里，核对固定大小与 SHA-256 后写入插件数据区 `deps/downloads/`。原文件 API 仅处理插件组件，不访问笔记数据库。
+
+首次安装尚无实际解释器记录时提示“首次连接 AI 时自动准备”，不猜 Python 版本；MCP 成功 start 后自动准备并通知，首次读图也能自动补齐。插件不运行系统安装命令，仍只 require("siyuan")。首次连接的准备过程及运行标签由 MCP 负责，完整规则见 ARCHITECTURE.md「本地图片处理」。组件准备失败只提示，面板与文字阅读照常使用。
+
+### 既有持久文件
+
 以下文件通过 `Plugin.loadData/saveData` 保存在工作空间 `data/storage/petal/siyuan-bridge/`，不会随集市更新替换插件程序目录而丢失：
 
 - `config.local.json`：profiles、Token、内部语言配置、`read_inline_images` 图片内联开关、`inline_image_budget_mb` 单次读取图片体积上限（MB，默认 9）。Token 不写入 MCP JSON。

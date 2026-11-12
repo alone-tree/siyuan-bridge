@@ -68,7 +68,8 @@
     <div class="card">
       <h3>先看这三件事</h3>
       <ol>
-        <li>思源插件只负责安装、配置和反馈入口；真正的工具能力在 Python MCP Bridge。</li>
+        <li>思源插件负责安装、配置、反馈及图片组件准备；真正的工具能力在 Python MCP Bridge。</li>
+        <li>图片由 Bridge 在本地优化、裁剪为完整组后返回；原始附件不变。依赖只下载到插件私有目录，处理规则见 ARCHITECTURE.md 的“本地图片处理”。</li>
         <li>AI 客户端通过 MCP 调 Bridge；仓库里的 Skill 只是副本，必须被 AI 客户端主动导入后才生效。</li>
         <li>Privacy Rules 只由 MCP 内部解析，AI 不可读、不可搜、不可编辑。</li>
       </ol>

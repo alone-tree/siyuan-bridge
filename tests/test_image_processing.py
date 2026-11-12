@@ -9,9 +9,9 @@ from io import BytesIO
 from pathlib import Path
 from unittest import mock
 
-from PIL import Image, ImageChops, ImageOps
-
 from source_code import image_processing as processing, image_runtime as runtime, mcp_server as mcp
+
+Image, ImageOps = runtime.image_library(Path(__file__).parents[1])
 
 
 def encoded(image, fmt="PNG", **kwargs):
@@ -99,6 +99,20 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertLess(mcp.read_text_token_count(text, images), 1000)
         self.assertEqual(mcp.read_response_byte_size(text, images), len(json.dumps(mcp.make_result("x" * 64, {"content": mcp.build_read_content(text, images)}), ensure_ascii=False, separators=(",", ":")).encode("utf-8")) + 1)
 
+    def test_final_rpc_guard_counts_unicode_and_never_sends_partial_images(self):
+        server = mcp.McpServer(self.root)
+        server._active_client = mock.Mock()
+
+        def read(_args):
+            server._pending_read_images = [{"data": "A" * 1200, "mimeType": "image/png", "source": "original"}]
+            return "中文正文" * 80 + "@@SIYUAN-IMAGE:0@@"
+
+        with mock.patch.object(server, "siyuan_read", side_effect=read), mock.patch.object(mcp, "MCP_RESPONSE_LIMIT_BYTES", 1000):
+            result = server.call_tool(1, "siyuan_read", {"document_id": "fixture"})
+        self.assertTrue(result["result"]["isError"])
+        self.assertFalse(any(item["type"] == "image" for item in result["result"]["content"]))
+        self.assertLess(mcp.response_byte_size(result), 1000)
+
 
 class ImageRuntimeTests(unittest.TestCase):
     def test_pinned_download_retries_and_rejects_bad_hash(self):
@@ -119,6 +133,9 @@ class ImageRuntimeTests(unittest.TestCase):
         self.assertIn(f"-cp{runtime.sys.version_info.major}{runtime.sys.version_info.minor}-", selected["filename"])
         with mock.patch.object(runtime.platform, "system", return_value="Darwin"), mock.patch.object(runtime.platform, "machine", return_value="arm64"):
             self.assertTrue(runtime.select_wheel(manifest["wheels"])["filename"].endswith("macosx_11_0_arm64.whl"))
+        for version, minimum in [((3, 11), "10_10"), ((3, 12), "10_13"), ((3, 14), "10_15")]:
+            with mock.patch.object(runtime.sys, "version_info", mock.Mock(major=version[0], minor=version[1])), mock.patch.object(runtime.platform, "system", return_value="Darwin"), mock.patch.object(runtime.platform, "machine", return_value="x86_64"), mock.patch.object(runtime.platform, "mac_ver", return_value=("14.0", (), "")):
+                self.assertTrue(runtime.select_wheel(manifest["wheels"])["filename"].endswith(f"macosx_{minimum}_x86_64.whl"))
 
     def test_private_install_is_reused_without_network(self):
         with tempfile.TemporaryDirectory() as directory:
