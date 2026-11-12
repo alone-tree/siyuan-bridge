@@ -98,9 +98,16 @@ def prepare_runtime(root: Path) -> Path:
     with _lock:
         if runtime_ready(root):
             return target
-        manifest = json.loads((root / "templates" / "dependencies" / f"pillow-{PILLOW_VERSION}.json").read_text(encoding="utf-8"))
+        assets_root = Path(__file__).absolute().parents[1]
+        manifest = json.loads((assets_root / "templates" / "dependencies" / f"pillow-{PILLOW_VERSION}.json").read_text(encoding="utf-8"))
         wheel = select_wheel(manifest["wheels"])
-        data = download_wheel(wheel)
+        state = {"version": PILLOW_VERSION, "tag": runtime_tag(), "filename": wheel["filename"]}
+        plugin_data_dir(root).mkdir(parents=True, exist_ok=True)
+        (plugin_data_dir(root) / "image-runtime.json").write_text(json.dumps(state), encoding="utf-8")
+        cached_wheel = plugin_data_dir(root) / "deps" / "downloads" / wheel["filename"]
+        data = cached_wheel.read_bytes() if cached_wheel.is_file() else b""
+        if len(data) != wheel["size"] or hashlib.sha256(data).hexdigest() != wheel["sha256"]:
+            data = download_wheel(wheel)
         target.parent.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=".prepare-", dir=target.parent))
         try:
@@ -126,6 +133,31 @@ def prepare_runtime(root: Path) -> Path:
             if staging.exists():
                 shutil.rmtree(staging)
         return target
+
+
+def start_preparation(root: Path, client) -> None:
+    """MCP 首次连接补齐插件尚无解释器记录的情况，不增加工具调用。"""
+    if runtime_ready(root):
+        return
+
+    def run():
+        try:
+            try:
+                client.push_msg("思源桥正在自动准备图片处理组件，完成后读图即可使用。", timeout=10000)
+            except Exception:
+                pass
+            prepare_runtime(root)
+            try:
+                client.push_msg("思源桥图片处理组件已就绪。")
+            except Exception:
+                pass
+        except Exception as exc:
+            try:
+                client.push_err_msg(f"思源桥图片组件准备失败：{exc}。下次读图会自动重试。", timeout=12000)
+            except Exception:
+                pass
+
+    threading.Thread(target=run, name="siyuan-image-prepare", daemon=True).start()
 
 
 def image_library(root: Path):

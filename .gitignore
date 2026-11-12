@@ -43,3 +43,6 @@ Thumbs.db
 # Wrangler local state
 worker/.wrangler/
 .wrangler/
+# 自动准备的私有图片运行依赖，不随源码提交。
+/deps/
+/image-runtime.json

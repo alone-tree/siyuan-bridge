@@ -2052,6 +2052,7 @@ def markdown_has_multiple_blocks(markdown: str) -> bool:
 
 def main(root: Path | None = None) -> int:
     server = McpServer(root if root is not None else Path.cwd())
+    server._prepare_images_on_start = True
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -2476,6 +2477,9 @@ class McpServer:
         self._active_profile = profile
         self._active_client = client
         self._active_language = state.language
+        if getattr(self, "_prepare_images_on_start", False):
+            from .image_runtime import start_preparation
+            start_preparation(self.root, client)
         return result
 
     def _render_startup_documents(self, client: Any, state: AgentNotebookState) -> AgentNotebookState:
