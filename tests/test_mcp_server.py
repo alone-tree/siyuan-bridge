@@ -645,6 +645,7 @@ class McpServerTests(unittest.TestCase):
             workspace_index_updated="",
             workspace_index_is_placeholder=True,
             workspace_index_markdown="",
+            language="en",
         )
 
         with (
@@ -659,6 +660,7 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("# 思源桥启动包", result)
         self.assertIs(server._active_profile, profile)
         self.assertIs(server._active_client, client)
+        self.assertEqual(server._active_language, "en")
 
     def test_missing_privacy_rules_blocks_start_and_requests_plugin_reload(self):
         server = mcp_server.McpServer(self.root)
@@ -748,7 +750,7 @@ class McpServerTests(unittest.TestCase):
         self.assertNotIn("markdown_file", operate["description"])
         properties = operate["inputSchema"]["properties"]
         self.assertEqual(properties["action"]["enum"], [
-            "refresh", "sync", "check_forward_references", "check_backward_references",
+            "refresh", "sync", "read_guide", "check_forward_references", "check_backward_references",
         ])
         self.assertNotIn("check_references", json.dumps(operate))
         self.assertNotIn("direction", properties)
@@ -758,6 +760,7 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("without cleaning ai_workspace", properties["action"]["description"])
         self.assertIn("document", properties)
         self.assertIn("document_id", properties)
+        self.assertEqual(properties["guide"]["enum"], ["mcp_usage", "workspace_index"])
         self.assertEqual(properties["limit"]["default"], 10)
         self.assertEqual(properties["limit"]["anyOf"][0]["minimum"], 1)
         self.assertEqual(properties["limit"]["anyOf"][1]["enum"], ["none"])

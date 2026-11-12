@@ -110,7 +110,6 @@ class StartupPacketTests(unittest.TestCase):
             workspace_index_markdown="# 我的工作空间索引",
             privacy_rules=PrivacyRules(ignore=[], allow=[]),
             mcp_usage_guide_markdown="这是完整 MCP 使用指南。",
-            workspace_index_guide_path=r"D:\bridge\templates\guides\workspace-index-guide.zh-CN.md",
             workspace_index_updated=updated,
             workspace_index_is_placeholder=placeholder,
             missing_document_keys=missing_document_keys,
@@ -147,6 +146,8 @@ class StartupPacketTests(unittest.TestCase):
         self.assertNotIn("系统笔记本：", result)
         self.assertIn("| 笔记本 | ID | 文档数 | 字数 | 块数 | 最近更新 |", result)
         self.assertIn('字数、块数统计时间：未记录。需要更新时调用 siyuan_operate(action="refresh")。', result)
+        self.assertIn('siyuan_operate(action="read_guide", guide="workspace_index")', result)
+        self.assertNotIn("templates", result)
 
     def test_start_requests_metadata_only_before_rendering(self):
         mcp_server.load_agent_notebook = lambda *_args, **_kwargs: self._state()
@@ -177,7 +178,7 @@ class StartupPacketTests(unittest.TestCase):
         result = mcp_server.McpServer(self.root).siyuan_start({})
 
         self.assertIn("工作空间索引已经", result)
-        self.assertIn("workspace-index-guide.zh-CN.md", result)
+        self.assertIn('siyuan_operate(action="read_guide", guide="workspace_index")', result)
 
     def test_missing_non_privacy_document_warns_but_start_continues(self):
         mcp_server.load_agent_notebook = lambda *_args, **_kwargs: self._state(

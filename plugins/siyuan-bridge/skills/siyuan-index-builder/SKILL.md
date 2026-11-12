@@ -17,6 +17,7 @@ description: 创建和更新思源系统笔记本 思源桥 中的 Workspace Ind
 
 - 必须已注册 `siyuan-bridge` MCP 工具。如果不可用，告知用户先注册 MCP 服务器。
 - 先运行 `siyuan_start` —— 它读取插件激活时已经维护的《工作空间索引》，并返回当前笔记本概览；若文档缺失，提醒用户重新启用插件。
+- 创建或更新前调用 `siyuan_operate(action="read_guide", guide="workspace_index")` 阅读随插件分发的完整指南；当前内置指南优先于本 Skill 中的旧流程描述。
 
 ## 工作流
 

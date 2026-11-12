@@ -103,7 +103,7 @@ data/storage/petal/siyuan-bridge/  安装态持久数据区
 
 templates/           随插件版本分发的资产（集市更新会覆盖）
   system-docs/        四类系统文档模板（插件建思源文档用）
-  guides/             两篇指南代码资产：MCP 使用指南进启动包；索引创建指南只给路径
+  guides/             两篇指南代码资产：MCP 使用指南进启动包；完整指南通过 read_guide 按需读取
 
 ai_workspace/        AI 临时工作区，Git 忽略
 dist/                构建产物

@@ -92,13 +92,6 @@ class AgentNotebookReadTests(unittest.TestCase):
         state = load_agent_notebook(self.client, self.root, "zh-CN")
 
         self.assertEqual(state.mcp_usage_guide_markdown, "内置中文指南")
-        self.assertTrue(
-            state.workspace_index_guide_path.endswith("workspace-index-guide.zh-CN.md")
-        )
-        self.assertEqual(
-            state.workspace_index_guide_path,
-            str((self.root / "templates" / "guides" / "workspace-index-guide.zh-CN.md").absolute()),
-        )
         # 系统笔记本里的同名旧文档不再被读取为指南。
         self.assertNotIn("mcp_usage_guide", state.document_ids)
         self.assertNotIn("workspace_index_guide", state.document_ids)
@@ -120,7 +113,6 @@ class AgentNotebookReadTests(unittest.TestCase):
 
         self.assertEqual(state.language, "en")
         self.assertEqual(state.mcp_usage_guide_markdown, "built-in english guide")
-        self.assertTrue(state.workspace_index_guide_path.endswith("workspace-index-guide.en.md"))
 
     def test_missing_guide_assets_do_not_break_startup(self):
         self._complete_documents()
@@ -129,7 +121,6 @@ class AgentNotebookReadTests(unittest.TestCase):
         state = load_agent_notebook(self.client, self.root, "zh-CN")
 
         self.assertEqual(state.mcp_usage_guide_markdown, "")
-        self.assertTrue(state.workspace_index_guide_path.endswith("workspace-index-guide.zh-CN.md"))
 
     def test_merges_multiple_documents_with_same_name(self):
         self._complete_documents()

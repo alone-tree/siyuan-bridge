@@ -220,7 +220,7 @@ MCP JSON 只包含 Python 命令、`run_mcp.py` 绝对路径和 `PYTHONUTF8=1`�
 | 资产 | 消费方式 |
 |---|---|
 | `mcp-usage-guide.{zh-CN,en}.md` | `siyuan_start` 启动包直接输出全文 |
-| `workspace-index-guide.{zh-CN,en}.md` | 启动包只输出文件路径；AI 创建/更新索引前自行读取该文件 |
+| `workspace-index-guide.{zh-CN,en}.md` | 启动包给出 read_guide 调用；AI 创建/更新索引前通过 MCP 读取全文 |
 
 系统笔记本生命周期决策：
 
@@ -234,7 +234,7 @@ MCP JSON 只包含 Python 命令、`run_mcp.py` 绝对路径和 `PYTHONUTF8=1`�
 
 用户修改某篇系统文档标题后，插件按名称找不到，会以标准标题创建新文档；改名后的旧文档沦为普通文档（Privacy Rules 改名时 `siyuan_start` 失败关闭并提示重新启用插件重建——宁可拒绝服务，不在无隐私规则状态下放行）。用户删除 Privacy Rules 后新建同名空文档时，解析出空规则集，与历史名称兜底行为一致；该文档对 AI 的硬隔离不变。同名重复系统文档维持弹窗提醒，由用户手动删除。
 
-两篇指南自 v1.11.2 起不再作为系统文档存在，改为代码资产：MCP 使用指南由启动包全文输出，索引创建指南只由启动包给出路径。用户在旧版本知识库里创建的 `MCP 使用指南` / `工作空间索引创建指南` 文档不再被插件使用，按普通文档处理，由用户自行删除。「工作空间索引」占位符判断由 Python 端现场哈希计算，`updated` 时间戳取自实时查询。
+两篇指南自 v1.11.2 起不再作为系统文档存在，改为代码资产：MCP 使用指南由启动包全文输出，两篇完整指南均可通过 siyuan_operate 的 read_guide 按需读取；启动包不再要求 AI 读取本机文件路径。用户在旧版本知识库里创建的 `MCP 使用指南` / `工作空间索引创建指南` 文档不再被插件使用，按普通文档处理，由用户自行删除。「工作空间索引」占位符判断由 Python 端现场哈希计算，`updated` 时间戳取自实时查询。
 
 系统笔记本设计原则：
 
@@ -510,20 +510,20 @@ siyuan_bridge_feedback
 6. 调用 `refresh_index(include_stats=False)`，传入系统笔记本 ID 和全部 Privacy Rules 文档 ID，实时刷新安全元数据但不执行全库统计。
 7. 按新可见索引读取 User Preferences 和 Workspace Index，复用 read 的 `build_display_blocks`、嵌入解析器和递归/隐私过滤；合并同名可见文档，并判断索引占位符。
 8. 读取 notebook overview，使用已有索引统计及其完成时间，组装启动包。
-9. 完整启动成功后，将当前 profile 和 Client 缓存在本 MCP 进程中。
+9. 完整启动成功后，将当前 profile、Client 和指南语言缓存在本 MCP 进程中。
 
 返回内容只有一个一级标题「思源桥启动包」，按四个二级标题固定排序：
 
 1. **运行状态与程序数据**：依次独立展示思源版本、思源桥 MCP 版本（引用 __version__）、工作空间及隐私状态，再给出笔记本概览。缺失系统文档时在本区输出三级「系统文档警告」。概览保留名称、ID、文档数、最近更新时间和已有统计；汇总行在数量后展示字数、块数统计时间及 refresh 调用提示。时间取已有 docs.jsonl 中随统计保存的 stats_updated_at，按设备本地时间展示到秒；start 不更新该时刻，旧索引无时间显示「未记录」。缺少统计的文档及其汇总显示「未统计」，不将部分和当作全量总数。
 2. **工作空间索引**：输出索引正文，更新时间、占位/过期提醒随索引提供。
 3. **用户个性化要求**：输出用户要求正文。
-4. **思源桥使用指南**：输出代码资产中的 MCP 使用指南全文；三级「工作空间索引创建指南」只提供代码文件路径。
+4. **思源桥使用指南**：输出代码资产中的 MCP 使用指南全文；三级「工作空间索引创建指南」提供 `siyuan_operate(action="read_guide", guide="workspace_index")` 调用方式。
 
 拼装时逐篇把来源正文最高 ATX 标题归一到三级，其余相对下移，Markdown 最多六级。同名多篇文档各自调整后再合并；内置指南使用同一规则。代码围栏、缩进代码和引用块中的标题保留原文，不参与正文标题层级判断。仅改变启动包展示，不改代码资产、思源原文或 read 输出。
 
 User Preferences 和 Workspace Index 只返回正文，不含导出的 YAML 元数据或重复文档标题。嵌入沿用 read 的来源过滤和引用层级，但不输出原 SQL、来源 ID、块数统计和编辑提醒；匹配数超过既有上限时仍提示未全部展开。read 继续返回原有详细信息。启动不设置新的正文截断，不写回系统文档，也不启动后台统计任务或新增统计缓存文件，仅复用现有 docs.jsonl。
 
-内置指南资产缺失时启动包仍正常返回（MCP Usage Guide 显示为空，索引指南路径回退为不带路径的提示），不阻塞启动。
+内置指南资产缺失时启动包仍正常返回（MCP Usage Guide 显示为空，索引指南保持工具调用提示），不阻塞启动；实际 read_guide 读取失败会明确报错。
 
 Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创建；真实索引超过 30 天未更新时，只在本次 MCP 返回中加入临时提醒，不写回思源文档。
 
@@ -534,22 +534,25 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 - start 中途失败不得保留旧连接或半初始化连接。
 - 缓存连接只属于当前 `McpServer` 实例；连接或鉴权失效后清空并要求重新 start。
 - 不返回语言偏好、系统笔记本 ID 或 About 入口。
-- 不把索引创建指南全文塞进启动包，只给路径，由 AI 按需读取。
+- 不把索引创建指南全文塞进启动包，只给 MCP 调用方式，由 AI 按需读取。
 - 系统笔记本初始化失败时启动失败，不能返回不完整启动包。
 
 ## `siyuan_operate`
 
-用途：执行只读查询和维护操作。当前支持刷新安全索引、触发思源内置默认同步和主动检查文档引用。导入本地 Markdown 文件请使用 `siyuan_create` / `siyuan_edit` 的 `markdown_file` 参数，不使用本工具。
+用途：执行只读查询和维护操作。当前支持刷新安全索引、触发思源内置默认同步、读取内置指南和主动检查文档引用。导入本地 Markdown 文件请使用 `siyuan_create` / `siyuan_edit` 的 `markdown_file` 参数，不使用本工具。
 
 参数：
 
 | 参数     | 类型   | 默认 | 含义                         |
 | -------- | ------ | ---- | ---------------------------- |
-| `action` | string | 必填 | `refresh` / `sync` / `check_forward_references` / `check_backward_references` |
+| `action` | string | 必填 | `refresh` / `sync` / `read_guide` / `check_forward_references` / `check_backward_references` |
+| `guide` | enum | read_guide 必填 | `mcp_usage`（使用原则）/ `workspace_index`（创建与更新索引）；其他 action 不使用 |
 | `timeout_seconds` | integer | 10 | 仅 `action=sync` 使用，等待思源内置同步返回的秒数，范围 5-120 |
 | `document` | string | 空 | 仅两个引用查询 action 使用；优先传包含笔记本名称的文档路径 |
 | `document_id` | string | 空 | 仅两个引用查询 action 使用；路径歧义或不可用时的文档 ID 兜底 |
 | `limit` | integer / `"none"` | 10 | 仅两个引用查询 action 使用；分别限制可见对端文档和有引用关系的可见子文档的展示数量，不限制关系总数；整数最小 1、无最大值 |
+
+`action=read_guide`：沿用先 start 的约定，按成功启动时的语言从当前安装根目录的 templates/guides 读取指定资产，直接返回完整正文。只接受上述两种指南，不接受路径；不访问思源 API、不读取用户笔记、不要求 confirmed 或快照。文件缺失、不可读或编码无效时返回 api:file_read 错误。切换工作空间后重新 start，语言随之更新。
 
 `action=refresh` 数据流：
 

@@ -23,4 +23,4 @@ The system notebook maintains exactly four documents:
 
 Except for Privacy Rules, documents in the system notebook behave like ordinary visible documents.
 
-Before creating or updating the Workspace Index, read the built-in index guide at the path given in the startup packet. Both this MCP usage guide and that index guide ship with the plugin version; neither is user-maintained content.
+Before creating or updating the Workspace Index, call `siyuan_operate(action="read_guide", guide="workspace_index")` to read the complete guide. To read this usage guide again, call `siyuan_operate(action="read_guide", guide="mcp_usage")`. Both guides ship with the plugin version; neither is user-maintained content.

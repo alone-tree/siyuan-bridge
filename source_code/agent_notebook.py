@@ -61,7 +61,6 @@ class AgentNotebookState:
     workspace_index_markdown: str
     privacy_rules: PrivacyRules
     mcp_usage_guide_markdown: str = ""
-    workspace_index_guide_path: str = ""
     workspace_index_updated: str = ""
     workspace_index_is_placeholder: bool = False
     missing_document_keys: tuple[str, ...] = ()
@@ -148,9 +147,6 @@ def load_agent_notebook(
         workspace_index_markdown=_merge_markdown(workspace_markdown),
         privacy_rules=privacy_rules,
         mcp_usage_guide_markdown=load_guide_asset(root, MCP_USAGE_GUIDE_FILES, language),
-        workspace_index_guide_path=str(
-            guide_asset_path(root, WORKSPACE_INDEX_GUIDE_FILES, language)
-        ),
         workspace_index_updated=workspace_updated,
         workspace_index_is_placeholder=workspace_is_placeholder,
         missing_document_keys=tuple(missing),

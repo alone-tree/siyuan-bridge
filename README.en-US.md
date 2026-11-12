@@ -60,7 +60,7 @@ If you use SiYuan on multiple computers with different directory paths, open the
 
 ![MCP configuration page](image/README/1785317465017.png)
 
-When the plugin is first enabled, Siyuan Bridge creates a notebook named "Siyuan Bridge" in the current workspace. It contains four documents: User Preferences, Workspace Index, About SiYuan Bridge, and Privacy Rules. Installation and updates maintain them when the plugin reloads; opening settings or calling an AI tool first is not required. Privacy Rules are managed by the user and isolated from AI. The MCP Usage Guide and Workspace Index Guide ship as code assets; the startup packet provides their full text and file path respectively. Older same-named notes are no longer used as guides.
+When the plugin is first enabled, Siyuan Bridge creates a notebook named "Siyuan Bridge" in the current workspace. It contains four documents: User Preferences, Workspace Index, About SiYuan Bridge, and Privacy Rules. Installation and updates maintain them when the plugin reloads; opening settings or calling an AI tool first is not required. Privacy Rules are managed by the user and isolated from AI. The MCP Usage Guide and Workspace Index Guide ship as code assets and can be read in full through MCP without local file access by the AI client. The startup packet still includes the complete MCP Usage Guide. Older same-named notes are no longer used as guides.
 
 In "User Preferences," you can tell AI how concise answers should be, when to ask for confirmation before writing, which notebooks are more important, and what conventions to follow when organizing content. These preferences live in SiYuan and sync with your workspace.
 

@@ -42,11 +42,14 @@ from .indexer import (
 )
 from .agent_notebook import (
     AgentNotebookState,
+    MCP_USAGE_GUIDE_FILES,
+    WORKSPACE_INDEX_GUIDE_FILES,
     PrivacyRulesUnavailableError,
     collect_system_notebook_ids,
     is_privacy_rules_document,
     is_system_notebook_name,
     is_workspace_index_placeholder,
+    guide_asset_path,
     load_agent_notebook,
 )
 from .telemetry import (
@@ -1963,10 +1966,12 @@ class McpServer:
         self.root = root.absolute()
         self._active_profile: Profile | None = None
         self._active_client: SiYuanClient | None = None
+        self._active_language: str | None = None
 
     def _clear_active_connection(self) -> None:
         self._active_profile = None
         self._active_client = None
+        self._active_language = None
 
     def _require_active_client(self) -> SiYuanClient:
         if self._active_client is None:
@@ -2339,17 +2344,13 @@ class McpServer:
             "",
             "### 工作空间索引创建指南",
             "",
-            (
-                "创建或更新索引前，先阅读索引创建／更新指南："
-                f"`{state.workspace_index_guide_path}`"
-                if state.workspace_index_guide_path
-                else "创建或更新索引前，先阅读内置的索引创建／更新指南。"
-            ),
+            '创建或更新索引前，先调用 siyuan_operate(action="read_guide", guide="workspace_index") 阅读完整指南。',
             "",
         ])
         result = "\n".join(parts)
         self._active_profile = profile
         self._active_client = client
+        self._active_language = state.language
         return result
 
     def _render_startup_documents(self, client: Any, state: AgentNotebookState) -> AgentNotebookState:
@@ -2404,11 +2405,25 @@ class McpServer:
 
     def siyuan_operate(self, args: dict[str, Any]) -> str:
         action = str(args.get("action") or "").strip().casefold()
-        if action not in {"refresh", "sync", "check_forward_references", "check_backward_references"}:
+        if action not in {"refresh", "sync", "read_guide", "check_forward_references", "check_backward_references"}:
             raise tool_error(
                 _ERR_INVALID_ENUM,
-                "action 必须是 refresh、sync、check_forward_references 或 check_backward_references。",
+                "action 必须是 refresh、sync、read_guide、check_forward_references 或 check_backward_references。",
             )
+        if action == "read_guide":
+            self._require_active_client()
+            guides = {"mcp_usage": MCP_USAGE_GUIDE_FILES, "workspace_index": WORKSPACE_INDEX_GUIDE_FILES}
+            guide = str(args.get("guide") or "").strip()
+            if guide not in guides:
+                raise tool_error(
+                    _ERR_INVALID_ENUM,
+                    'guide 必须是 mcp_usage 或 workspace_index，例如 siyuan_operate(action="read_guide", guide="workspace_index")。',
+                )
+            path = guide_asset_path(self.root, guides[guide], self._active_language or "zh-CN")
+            try:
+                return path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                raise tool_error(_ERR_FILE_READ, f"无法读取内置指南 {guide}，请检查思源桥插件是否完整安装。") from exc
         if action == "refresh":
             return self._refresh_safe_index()
         if action in {"check_forward_references", "check_backward_references"}:
@@ -5405,7 +5420,8 @@ def tool_specs() -> list[dict[str, Any]]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["refresh", "sync", "check_forward_references", "check_backward_references"], "description": "refresh: update the local safe index and word/block counts without cleaning ai_workspace. sync: trigger SiYuan built-in default sync. check_forward_references: show which blocks this document references, grouped by target document. check_backward_references: show which blocks reference this document or its blocks, grouped by source document. Both reference queries detail the selected document, summarize descendants, and include references within the same document."},
+                    "action": {"type": "string", "enum": ["refresh", "sync", "read_guide", "check_forward_references", "check_backward_references"], "description": "refresh: update the local safe index and word/block counts without cleaning ai_workspace. sync: trigger SiYuan built-in default sync. read_guide: return a complete built-in guide selected by guide. check_forward_references: show which blocks this document references, grouped by target document. check_backward_references: show which blocks reference this document or its blocks, grouped by source document. Both reference queries detail the selected document, summarize descendants, and include references within the same document."},
+                    "guide": {"type": "string", "enum": ["mcp_usage", "workspace_index"], "description": "Required for action=read_guide only. mcp_usage: general usage principles; workspace_index: how to create or update the Workspace Index. Returns the complete bundled guide in the startup language, without local file access by the AI client."},
                     "timeout_seconds": {"type": "integer", "default": 10, "description": "For action=sync only. How long to wait for SiYuan built-in sync to return, 5-120 seconds. Does not change SiYuan sync behavior."},
                     "document": {"type": "string", "description": "For either reference query. Preferred document path including notebook name. Existing unique-title and unique-partial locator compatibility is preserved."},
                     "document_id": {"type": "string", "description": "For either reference query. Document ID fallback when the path is ambiguous or unavailable. If document is also provided, it must identify the same document. A body block ID is rejected."},
