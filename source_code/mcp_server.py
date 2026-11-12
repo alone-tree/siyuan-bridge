@@ -2214,8 +2214,9 @@ class McpServer:
         )
 
         state = self._render_startup_documents(client, state)
-        overview = build_notebook_overview(self.root, include_stats=False)
+        overview = build_notebook_overview(self.root)
         overview = re.sub(r"^# [^\n]+\n+", "", overview).strip()
+        overview += '\n\n字数、块数来自已有索引统计，非实时；需要更新时调用 siyuan_operate(action="refresh")。'
         total_ignore = len(state.privacy_rules.ignore)
         total_permissions = len(state.privacy_rules.permissions)
         nb_rules = [
@@ -2754,7 +2755,7 @@ class McpServer:
                 f"继续：siyuan_list(path=\"{path}\", offset={offset + limit}, limit={limit})",
             ])
         if any(doc.get("word_count") is None or doc.get("block_count") is None for doc in page):
-            lines.extend(["", '字数、块数未统计；需要时调用 siyuan_operate(action="refresh") 获取。'])
+            lines.extend(["", '部分字数、块数未统计；需要时调用 siyuan_operate(action="refresh") 获取。'])
         return "\n".join(lines)
 
     def _notebook_name(self, notebook_id: str) -> str:

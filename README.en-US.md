@@ -6,7 +6,7 @@ After installing Siyuan Bridge, you can work with your knowledge base directly i
 
 It focuses on documents and knowledge bases: writing, organizing, editing tables, managing document trees, and handling cross-document references. Databases, flashcards, and block styling are not currently supported.
 
-Session startup refreshes document metadata without counting words or blocks across the workspace. Ask the AI to refresh the index when those statistics are needed. User Preferences and the Workspace Index use block-based rendering, preserving embedded content sources and quotation nesting.
+Session startup refreshes document metadata and reuses word and block counts from the existing index. Ask the AI to refresh the index to update these statistics. Documents without prior statistics are marked as not counted. User Preferences and the Workspace Index use block-based rendering, preserving embedded content sources and quotation nesting.
 
 ## What You Can Ask AI to Do
 

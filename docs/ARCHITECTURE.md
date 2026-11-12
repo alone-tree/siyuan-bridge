@@ -331,7 +331,7 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 1. 临时打开关闭的笔记本。
 2. 用 SQL 查询文档块。
 3. 规范化文档元数据。
-4. 显式 refresh 及既有写后刷新用 SQL 汇总 `block_count`、`char_count`、`word_count`；start 传 `include_stats=false` 跳过全库统计，统计字段写 null，不读取或沿用上次统计。
+4. 显式 refresh 及既有写后刷新用 SQL 汇总 `block_count`、`char_count`、`word_count`；start 传 `include_stats=false` 跳过全库统计，按文档 ID 从已有 docs.jsonl 复用字数、块数、字符数；新文档无统计时写 null。缓存统计不决定路径或权限，删除/隐藏文档按当前可见集合排除。
 5. 应用隐私过滤。
 6. 写入 `notebooks.json`、`docs.jsonl`、`tree.md`。
 7. 确保 `ai_workspace/README.md`。
@@ -509,7 +509,7 @@ siyuan_bridge_feedback
 5. 清理 `ai_workspace/` 中除 README 外的内容。
 6. 调用 `refresh_index(include_stats=False)`，传入系统笔记本 ID 和全部 Privacy Rules 文档 ID，实时刷新安全元数据但不执行全库统计。
 7. 按新可见索引读取 User Preferences 和 Workspace Index，复用 read 的 `build_display_blocks`、嵌入解析器和递归/隐私过滤；合并同名可见文档，并判断索引占位符。
-8. 读取不含字数/块数的 notebook overview，组装启动包。
+8. 读取 notebook overview，使用已有索引统计并注明非实时，组装启动包。
 9. 完整启动成功后，将当前 profile 和 Client 缓存在本 MCP 进程中。
 
 返回内容按固定顺序：
@@ -517,10 +517,10 @@ siyuan_bridge_feedback
 1. 一行运行状态：思源版本、当前 profile、Privacy Rules 加载状态。
 2. 内置 MCP Usage Guide 全文（来自 `templates/guides/mcp-usage-guide.<lang>.md`）。
 3. User Preferences 全文。
-4. 笔记本概览：名称、ID、文档数、最近更新时间；不返回全库或笔记本字数、块数。
+4. 笔记本概览：名称、ID、文档数、最近更新时间，以及已有索引中的字数、块数；注明统计非实时，需要时通过 refresh 更新。没有统计的文档和包含它的汇总显示「未统计」，不将部分和当作全量总数。
 5. Workspace Index 的最后更新时间、内置索引创建指南的文件路径，以及 Workspace Index 全文。
 
-User Preferences 和 Workspace Index 只返回正文，不含导出的 YAML 元数据或重复文档标题。嵌入沿用 read 的来源过滤和引用层级，但不输出原 SQL、来源 ID、块数统计和编辑提醒；匹配数超过既有上限时仍提示未全部展开。read 继续返回原有详细信息。启动不设置新的正文截断，不写回系统文档，也不启动后台统计任务或新增统计缓存。
+User Preferences 和 Workspace Index 只返回正文，不含导出的 YAML 元数据或重复文档标题。嵌入沿用 read 的来源过滤和引用层级，但不输出原 SQL、来源 ID、块数统计和编辑提醒；匹配数超过既有上限时仍提示未全部展开。read 继续返回原有详细信息。启动不设置新的正文截断，不写回系统文档，也不启动后台统计任务或新增统计缓存文件，仅复用现有 docs.jsonl。
 
 内置指南资产缺失时启动包仍正常返回（MCP Usage Guide 显示为空，索引指南路径回退为不带路径的提示），不阻塞启动。
 
@@ -608,7 +608,7 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 
 - 无参数或 `path=/` 时读取 `knowledge_base/notebooks.json`，返回可见笔记本和有效权限。
 - 有 path / notebook 参数时读取 `docs.jsonl` 和 `notebooks.json`，按完整可读路径计算直接子文档。
-- 返回每个子文档的完整 `document` 路径、`document_id`、有效权限、字数、块数、更新时间、子文档数量（剔除隐藏文档）和文档属性标签（`标签` 列，格式 `#甲# #乙#`，无标签留空）。start 后字数/块数为「未统计」，需要时调用 `siyuan_operate(action=refresh)` 计算；不将缺失值显示为 0。搜索结果与文档树也区分未统计和真实的 0。
+- 返回每个子文档的完整 `document` 路径、`document_id`、有效权限、字数、块数、更新时间、子文档数量（剔除隐藏文档）和文档属性标签（`标签` 列，格式 `#甲# #乙#`，无标签留空）。start 复用上次 refresh 的统计；首次启动或新文档缺少统计时显示「未统计」，需要时调用 `siyuan_operate(action=refresh)` 计算；不将缺失值显示为 0。搜索结果与文档树也区分未统计和真实的 0。
 
 设计约束：
 

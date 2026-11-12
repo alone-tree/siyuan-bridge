@@ -298,7 +298,7 @@ Error: invalid parameter
 - 非隐私系统文档全部缺失时 `siyuan_start` warning 后继续；Privacy Rules 全部缺失时失败关闭并提示禁用后重新启用插件。
 - 29/30 天不提示过期，超过 30 天才在 MCP 返回中临时提示；不能写回思源文档或改变更新时间。
 - 启动包顺序固定为运行状态、内置 MCP 使用指南、User Preferences、笔记本概览、Workspace Index（含索引创建指南路径）；不再返回语言偏好和 About 入口。
-- start 不执行全库统计 SQL 或 Python 字数计数；列表、搜索与文档树区分未统计和 0，显式 refresh 恢复统计。不得新增统计缓存或后台任务。
+- start 不执行全库统计 SQL 或 Python 字数计数；按 ID 复用现有索引统计并注明非实时。验证改名后的元数据更新、删除/隐藏文档排除、新文档无统计、部分统计不误报总数，显式 refresh 更新统计。不得新增缓存文件或后台任务。
 - 启动先完成 Privacy Rules 与安全元数据刷新，再用 read 的展示块/嵌入解析读取可见 User Preferences、Workspace Index；隐藏根文档及嵌入目标不读取正文。验证嵌套引用层级、重复文档合并、占位符与附件来源路径。
 - start 只显示嵌入来源路径和正文，不显示 SQL、来源 ID、统计或编辑提醒；read 的原有详细输出、预算与引用阅读行为保持不变。
 

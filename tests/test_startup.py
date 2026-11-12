@@ -139,8 +139,8 @@ class StartupPacketTests(unittest.TestCase):
         self.assertNotIn("语言偏好", result)
         self.assertNotIn("给人看的说明", result)
         self.assertNotIn("系统笔记本：", result)
-        self.assertIn("| 笔记本 | ID | 文档数 | 最近更新 |", result)
-        self.assertNotIn("| 字数 | 块数 |", result)
+        self.assertIn("| 笔记本 | ID | 文档数 | 字数 | 块数 | 最近更新 |", result)
+        self.assertIn("字数、块数来自已有索引统计，非实时", result)
 
     def test_start_requests_metadata_only_before_rendering(self):
         mcp_server.load_agent_notebook = lambda *_args, **_kwargs: self._state()

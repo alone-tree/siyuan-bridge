@@ -126,14 +126,47 @@ class IndexerTests(unittest.TestCase):
         docs = indexer.load_docs(root)
         self.assertTrue(all(doc["word_count"] is None and doc["block_count"] is None for doc in docs))
         tree = (root / "knowledge_base" / "tree.md").read_text(encoding="utf-8")
-        self.assertIn("| 笔记本 | ID | 文档数 | 最近更新 |", tree)
-        self.assertNotIn("| 字数 | 块数 |", tree)
+        self.assertIn("| 笔记本 | ID | 文档数 | 字数 | 块数 | 最近更新 |", tree)
         self.assertIn("字数未统计", tree)
 
         refresh_index(client, root)
-        self.assertTrue(all(doc["word_count"] > 0 and doc["block_count"] > 0 for doc in indexer.load_docs(root)))
+        cached = {doc["id"]: doc for doc in indexer.load_docs(root)}
+        self.assertTrue(all(doc["word_count"] > 0 and doc["block_count"] > 0 for doc in cached.values()))
         refresh_index(client, root, include_stats=False)
-        self.assertTrue(all(doc["word_count"] is None for doc in indexer.load_docs(root)))
+        self.assertEqual(cached, {doc["id"]: doc for doc in indexer.load_docs(root)})
+
+    def test_metadata_refresh_reuses_statistics_by_id_but_updates_paths_and_membership(self):
+        root = Path.cwd() / ".test_tmp" / "indexer_reused_stats"
+        shutil.rmtree(root, ignore_errors=True)
+        root.mkdir(parents=True)
+        write_privacy_rules_cache(root, PrivacyRules(ignore=[], allow=[]))
+        client = FakeClient()
+        refresh_index(client, root)
+        cached = indexer.load_docs(root)[1]
+        rows = [row for row in client.query_sql("") if row["id"] == cached["id"]]
+        rows[0].update(hpath="/Renamed", updated="20261112000000")
+        rows.append({"id": "new-doc", "box": "nb1", "hpath": "/New"})
+        with (
+            mock.patch.object(client, "query_sql", return_value=rows),
+            mock.patch.object(indexer, "compute_word_count", side_effect=AssertionError("不应计算字数")),
+        ):
+            refresh_index(client, root, include_stats=False)
+        docs = {doc["id"]: doc for doc in indexer.load_docs(root)}
+        self.assertEqual(set(docs), {cached["id"], "new-doc"})
+        self.assertEqual(docs[cached["id"]]["hpath"], "/Renamed")
+        self.assertEqual(docs[cached["id"]]["updated"], "20261112000000")
+        self.assertEqual(docs[cached["id"]]["word_count"], cached["word_count"])
+        self.assertEqual(docs[cached["id"]]["block_count"], cached["block_count"])
+        self.assertIsNone(docs["new-doc"]["word_count"])
+        self.assertIsNone(docs["new-doc"]["block_count"])
+        overview = indexer.build_notebook_overview(root)
+        self.assertIn("| Main | `nb1` | 2 | 未统计 | 未统计 |", overview)
+
+        write_privacy_rules_cache(root, PrivacyRules(ignore=[{"scope": "document", "id": cached["id"]}], allow=[]))
+        with mock.patch.object(client, "query_sql", return_value=rows):
+            refresh_index(client, root, include_stats=False)
+        self.assertEqual([doc["id"] for doc in indexer.load_docs(root)], ["new-doc"])
+
 
     def test_refresh_writes_indexes_and_preserves_existing_guide(self):
         root = Path.cwd() / ".test_tmp" / "indexer_refresh"

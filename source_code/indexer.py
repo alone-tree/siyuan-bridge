@@ -117,6 +117,7 @@ def refresh_index(
     all_notebooks = client.list_notebooks()
     privacy = load_privacy_rules(root)
     notebooks = filter_notebooks(all_notebooks, privacy)
+    previous_docs = {str(doc["id"]): doc for doc in load_docs(root)} if not include_stats else {}
 
     with ensure_notebooks_open(client):
         all_docs = normalize_documents(client.query_sql(DOCS_SQL), all_notebooks, include_stats=include_stats)
@@ -125,7 +126,9 @@ def refresh_index(
             update_document_stats(client, docs)
         else:
             for doc in docs:
-                doc.update(word_count=None, block_count=None, char_count=None)
+                previous = previous_docs.get(str(doc["id"]), {})
+                for key in ("word_count", "block_count", "char_count"):
+                    doc[key] = previous.get(key)
 
     # Hard-remove Privacy Rules document from all AI-facing indexes
     if system_notebook_id:
@@ -138,7 +141,7 @@ def refresh_index(
 
     write_json(cache_dir / "notebooks.json", notebooks)
     write_jsonl(cache_dir / "docs.jsonl", docs)
-    write_text(cache_dir / "tree.md", render_tree(notebooks, docs, include_stats=include_stats))
+    write_text(cache_dir / "tree.md", render_tree(notebooks, docs))
     ensure_text(workspace_dir / "README.md", render_workspace_readme())
 
     # Cache privacy rules
@@ -173,6 +176,11 @@ def format_word_count(count: int | None) -> str:
 
 def format_block_count(count: int | None) -> str:
     return "块数未统计" if count is None else f"{count} 块"
+
+
+def sum_document_stat(docs: list[dict[str, Any]], key: str) -> int | None:
+    values = [doc.get(key) for doc in docs]
+    return None if any(value is None for value in values) else sum(values)
 
 
 def format_date(ts: str) -> str:
@@ -305,7 +313,6 @@ def render_tree(
         notebook_list.append({"id": notebook_id, "name": notebook_id or "Unknown Notebook"})
 
     doc_list = [doc for ndocs in docs_by_notebook.values() for doc in ndocs]
-    include_stats = include_stats and all(doc.get("word_count") is not None and doc.get("block_count") is not None for doc in doc_list)
     lines = [render_notebook_overview(notebook_list, doc_list, include_stats=include_stats), ""]
 
     # Layer 2: per-notebook document tree
@@ -318,9 +325,9 @@ def render_tree(
         date = format_date(updated) if updated else "-"
         stats = ""
         if include_stats:
-            words = sum(doc.get("word_count", 0) for doc in ndocs)
-            blocks = sum(doc.get("block_count", 0) for doc in ndocs)
-            stats = f" | {words:,} 字 | {blocks} 块"
+            words = sum_document_stat(ndocs, "word_count")
+            blocks = sum_document_stat(ndocs, "block_count")
+            stats = f" | {format_word_count(words)} | {format_block_count(blocks)}"
         lines.append(f"## {name}（`{nid}`）| {count} 篇{stats} | 最近 {date}")
         lines.append("")
         if count > 0:
@@ -341,23 +348,22 @@ def render_notebook_overview(
 ) -> str:
     notebook_list = list(notebooks)
     doc_list = list(docs)
-    include_stats = include_stats and all(doc.get("word_count") is not None and doc.get("block_count") is not None for doc in doc_list)
     docs_by_notebook: dict[str, list[dict[str, Any]]] = {}
     for doc in doc_list:
         docs_by_notebook.setdefault(str(doc.get("notebook_id", "")), []).append(doc)
 
-    def _stats(nid: str) -> tuple[int, int, int, str]:
+    def _stats(nid: str) -> tuple[int, int | None, int | None, str]:
         ndocs = docs_by_notebook.get(nid, [])
-        nwords = sum(d.get("word_count", 0) or 0 for d in ndocs) if include_stats else 0
-        nblocks = sum(d.get("block_count", 0) or 0 for d in ndocs) if include_stats else 0
+        nwords = sum_document_stat(ndocs, "word_count") if include_stats else None
+        nblocks = sum_document_stat(ndocs, "block_count") if include_stats else None
         nupdated = max((d.get("updated", "") for d in ndocs), default="")
         return len(ndocs), nwords, nblocks, nupdated
 
     stats = ""
     if include_stats:
-        total_words = sum(d.get("word_count", 0) for d in doc_list)
-        total_blocks = sum(d.get("block_count", 0) for d in doc_list)
-        stats = f" | {total_words:,} 字 | {total_blocks} 块"
+        total_words = sum_document_stat(doc_list, "word_count")
+        total_blocks = sum_document_stat(doc_list, "block_count")
+        stats = f" | {format_word_count(total_words)} | {format_block_count(total_blocks)}"
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
 
     lines = [
@@ -373,7 +379,9 @@ def render_notebook_overview(
         name = str(nb.get("name") or nid or "Unknown Notebook")
         count, words, blocks, updated = _stats(nid)
         date = format_date(updated) if updated else "-"
-        stats = f" | {words:,} | {blocks}" if include_stats else ""
+        word_text = "未统计" if words is None else f"{words:,}"
+        block_text = "未统计" if blocks is None else str(blocks)
+        stats = f" | {word_text} | {block_text}" if include_stats else ""
         lines.append(f"| {name} | `{nid}` | {count}{stats} | {date} |")
     lines.append("")
     return "\n".join(lines)
