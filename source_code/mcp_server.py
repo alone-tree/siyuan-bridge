@@ -1586,6 +1586,32 @@ def extract_embed_select(markdown: str) -> str | None:
     return statement
 
 
+def nest_startup_headings(markdown: str, first_level: int = 4) -> str:
+    """将单篇正文标题嵌入启动包；代码与引用中的原文保持不变。"""
+    lines = markdown.splitlines(keepends=True)
+    headings: list[tuple[int, re.Match[str]]] = []
+    fence: tuple[str, int] | None = None
+    for index, line in enumerate(lines):
+        marker = re.match(r" {0,3}(`{3,}|~{3,})(.*)", line)
+        if fence is not None:
+            if marker and marker[1][0] == fence[0] and len(marker[1]) >= fence[1] and not marker[2].strip():
+                fence = None
+            continue
+        if marker:
+            fence = (marker[1][0], len(marker[1]))
+            continue
+        heading = re.match(r" {0,3}(#{1,6})(?=[ \t\r\n]|$)", line)
+        if heading:
+            headings.append((index, heading))
+    if not headings:
+        return markdown
+    offset = first_level - min(len(heading[1]) for _, heading in headings)
+    for index, heading in headings:
+        level = min(6, len(heading[1]) + offset)
+        lines[index] = lines[index][:heading.start(1)] + "#" * level + lines[index][heading.end(1):]
+    return "".join(lines)
+
+
 def quote_embedded_markdown(markdown: str) -> str:
     lines = str(markdown or "").rstrip().splitlines()
     if not lines:
@@ -2237,34 +2263,17 @@ class McpServer:
         parts: list[str] = [
             "# 思源桥启动包",
             "",
-            (
-                f"思源版本：{version}｜当前工作空间：**{profile.name}**｜"
-                f"隐私规则：{privacy_status}"
-            ),
+            "## 开发者说明",
             "",
-            "## MCP 使用指南",
+            "### MCP 使用指南",
             "",
             (
-                state.mcp_usage_guide_markdown.strip()
+                nest_startup_headings(state.mcp_usage_guide_markdown.strip())
                 if state.mcp_usage_guide_markdown
                 else "（MCP 使用指南为空）"
             ),
             "",
-            "## 用户个性化要求",
-            "",
-            (
-                state.ai_guide_markdown.strip()
-                if state.ai_guide_markdown
-                else "（用户尚未填写个性化要求）"
-            ),
-            "",
-            "## 笔记本概览",
-            "",
-            overview,
-            "",
-            "## 工作空间索引",
-            "",
-            f"最后更新时间：{format_siyuan_updated(state.workspace_index_updated)}",
+            "### 工作空间索引创建指南",
             "",
             (
                 "创建或更新索引前，先阅读索引创建／更新指南："
@@ -2272,6 +2281,13 @@ class McpServer:
                 if state.workspace_index_guide_path
                 else "创建或更新索引前，先阅读内置的索引创建／更新指南。"
             ),
+            "",
+            "## 运行状态与程序数据",
+            "",
+            "### 连接与隐私状态",
+            "",
+            f"思源版本：{version}｜当前工作空间：{profile.name}｜隐私规则：{privacy_status}",
+            "",
         ]
         non_privacy_missing = [
             key for key in state.missing_document_keys if key != "privacy_rules"
@@ -2283,15 +2299,32 @@ class McpServer:
                 "about": "关于思源桥",
             }
             missing_text = "、".join(labels.get(key, key) for key in non_privacy_missing)
-            parts[4:4] = [
-                "## 系统文档警告",
+            parts.extend([
+                "### 系统文档警告",
                 "",
                 (
                     f"> 以下系统文档缺失：{missing_text}。当前功能继续运行；"
                     "请提醒用户禁用并重新启用思源桥插件以重新创建。"
                 ),
                 "",
-            ]
+            ])
+
+        parts.extend([
+            "### 笔记本概览",
+            "",
+            overview,
+            "",
+            "## 用户维护内容",
+            "",
+            "### 用户个性化要求",
+            "",
+            state.ai_guide_markdown.strip() if state.ai_guide_markdown else "（用户尚未填写个性化要求）",
+            "",
+            "### 工作空间索引",
+            "",
+            f"最后更新时间：{format_siyuan_updated(state.workspace_index_updated)}",
+            "",
+        ])
 
         age_days = workspace_index_age_days(state.workspace_index_updated)
         if state.workspace_index_is_placeholder:
@@ -2346,7 +2379,7 @@ class McpServer:
                             markdown = rewrite_local_asset_links(markdown, doc_id, self.root)
                         if markdown.strip():
                             parts.append(markdown)
-                    contents[key].append("\n\n".join(parts))
+                    contents[key].append(nest_startup_headings("\n\n".join(parts)))
         return replace(
             state,
             ai_guide_markdown="\n\n---\n\n".join(contents["ai_guide"]),
@@ -5368,7 +5401,7 @@ def tool_specs() -> list[dict[str, Any]]:
     return [
         {
             "name": "siyuan_start",
-            "description": "Read the plugin-maintained system notebook, load and merge system documents, refresh safe document metadata without full-workspace word/block counts, and return the mandatory startup packet: notebook overview table, Workspace Index, MCP Usage Guide, and User Preferences. This tool never creates, updates, migrates, or registers system documents. Missing non-privacy documents produce a warning and startup continues; if all registered Privacy Rules documents are missing, startup stops and asks the user to disable and re-enable the plugin. Always call this first.",
+            "description": "Read the plugin-maintained system notebook, load and merge system documents, refresh safe document metadata without full-workspace word/block counts, and return the startup packet grouped into developer instructions, runtime data, and user-maintained content. This tool never creates, updates, migrates, or registers system documents. Missing non-privacy documents produce a warning and startup continues; if all registered Privacy Rules documents are missing, startup stops and asks the user to disable and re-enable the plugin. Always call this first.",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
         },
         {

@@ -124,13 +124,23 @@ class StartupPacketTests(unittest.TestCase):
         result = mcp_server.McpServer(self.root).siyuan_start({})
 
         headings = [
-            "## MCP 使用指南",
-            "## 用户个性化要求",
-            "## 笔记本概览",
-            "## 工作空间索引",
+            "## 开发者说明",
+            "### MCP 使用指南",
+            "### 工作空间索引创建指南",
+            "## 运行状态与程序数据",
+            "### 连接与隐私状态",
+            "### 笔记本概览",
+            "## 用户维护内容",
+            "### 用户个性化要求",
+            "### 工作空间索引",
         ]
         positions = [result.index(heading) for heading in headings]
         self.assertEqual(positions, sorted(positions))
+        self.assertEqual(
+            [line for line in result.splitlines() if line.startswith("## ")],
+            ["## 开发者说明", "## 运行状态与程序数据", "## 用户维护内容"],
+        )
+        self.assertIn("#### 我的工作空间索引", result)
         self.assertIn("这是完整 MCP 使用指南。", result)
         self.assertIn("用户要求：简洁回答。", result)
         self.assertIn("思源版本：3.7.2", result)
@@ -181,10 +191,27 @@ class StartupPacketTests(unittest.TestCase):
         result = mcp_server.McpServer(self.root).siyuan_start({})
 
         self.assertIn("# 思源桥启动包", result)
-        self.assertIn("## 系统文档警告", result)
+        self.assertIn("### 系统文档警告", result)
+        self.assertLess(result.index("## 运行状态与程序数据"), result.index("### 系统文档警告"))
+        self.assertLess(result.index("### 系统文档警告"), result.index("## 用户维护内容"))
         self.assertIn("关于思源桥、用户个性化要求", result)
         self.assertEqual(len(self.client.messages), 1)
         self.assertIn("当前仍可继续使用", self.client.messages[0][0])
+
+    def test_same_name_documents_nest_each_own_heading_tree_without_mutating_sources(self):
+        state = self._state()
+        state.document_ids["workspace_index"] = ("index-id", "index-2")
+        self.client.blocks["index-id"] = [{"id": "a", "type": "p", "markdown": "## 第一篇\n### 第一子节"}]
+        self.client.blocks["index-2"] = [{"id": "b", "type": "p", "markdown": "# 第二篇\n## 第二子节"}]
+        path = self.root / "knowledge_base" / "docs.jsonl"
+        with path.open("a", encoding="utf-8") as target:
+            target.write(json.dumps({"id": "index-2", "notebook_id": "system-nb", "notebook_name": "思源桥",
+                                     "hpath": "/工作空间索引", "title": "工作空间索引"}, ensure_ascii=False) + "\n")
+        original_blocks = json.dumps(self.client.blocks)
+        result = mcp_server.McpServer(self.root)._render_startup_documents(self.client, state)
+        self.assertEqual(result.workspace_index_markdown,
+                         "#### 第一篇\n##### 第一子节\n\n---\n\n#### 第二篇\n##### 第二子节")
+        self.assertEqual(json.dumps(self.client.blocks), original_blocks)
 
     def test_index_age_boundary_is_strictly_more_than_30_days(self):
         now = datetime(2026, 7, 31, 12, 0, 0)
@@ -198,6 +225,27 @@ class StartupPacketTests(unittest.TestCase):
         self.assertEqual(
             mcp_server.workspace_index_age_days("20260630120000", now), 31
         )
+
+
+class StartupHeadingTests(unittest.TestCase):
+    def test_preserves_relative_heading_depth_and_clamps_to_six(self):
+        result = mcp_server.nest_startup_headings("## 章\n### 节\n#### 小节\n###### 深层\n")
+        self.assertEqual(result, "#### 章\n##### 节\n###### 小节\n###### 深层\n")
+
+    def test_fenced_indented_and_quoted_headings_do_not_affect_nesting(self):
+        body = ("## 真实标题\n```markdown\n# 代码示例\n```\n"
+                "~~~text\n# 另一示例\n~~~\n    # 缩进代码\n\t# 制表符代码\n"
+                "> # 引用标题\n> > ## 嵌套引用标题\n### 真实子节\n")
+        result = mcp_server.nest_startup_headings(body)
+        self.assertEqual(result, body.replace("## 真实标题", "#### 真实标题").replace("### 真实子节", "##### 真实子节"))
+
+    def test_longer_fence_with_shorter_inner_marker_stays_open(self):
+        body = "````markdown\n```\n# 代码标题\n````\n## 正文标题\n"
+        self.assertEqual(mcp_server.nest_startup_headings(body), body.replace("## 正文标题", "#### 正文标题"))
+
+    def test_body_without_headings_is_unchanged(self):
+        body = "普通正文\n\n> ## 引用\n\n    # 代码\n"
+        self.assertEqual(mcp_server.nest_startup_headings(body), body)
 
 
 if __name__ == "__main__":
