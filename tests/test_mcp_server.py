@@ -4591,17 +4591,49 @@ class TokenEstimationTests(unittest.TestCase):
     def test_empty_string_returns_zero(self):
         self.assertEqual(mcp_server.estimate_token_count(""), 0)
 
+    def test_character_categories_and_rounding(self):
+        self.assertEqual(mcp_server.estimate_token_count("A" * 20), 3)
+        self.assertEqual(mcp_server.estimate_token_count("12345"), 4)
+        self.assertEqual(mcp_server.estimate_token_count("中文汉字词"), 4)
+        self.assertEqual(mcp_server.estimate_token_count("\U0001f600"), 2)
+        self.assertEqual(mcp_server.estimate_token_count("!" * 10), 9)
+        self.assertEqual(mcp_server.estimate_token_count(" \n\t\r\v"), 1)
+        self.assertEqual(mcp_server.estimate_token_count("あ。Ａé\U0002a700"), 5)
+        # 0.15 + 0.8 + 0.8 + 2 + 0.9 + 0.2 + 1 = 5.85，整体取整为6。
+        self.assertEqual(mcp_server.estimate_token_count("A1中\U0001f600! あ"), 6)
+
+    def test_long_runs_and_nonempty_symbols_are_not_lost(self):
+        self.assertEqual(mcp_server.estimate_token_count("a" * 200000), 30000)
+        for text in ["1", "!", " ", "\uff01", "\U0002a700", "\ud800"]:
+            with self.subTest(text=repr(text)):
+                self.assertGreater(mcp_server.estimate_token_count(text), 0)
+
+    def test_read_result_counts_its_own_header(self):
+        text, estimate = mcp_server.format_read_result(
+            ["# 文档：/测试/资料"], ["## 大纲", "", "[1] id=20261111120000-abcdefg type=p", "正文。"], 1000,
+        )
+        self.assertEqual(estimate, mcp_server.estimate_token_count(text))
+        self.assertIn(f"估算令牌数：{estimate:,} / 1,000", text)
+
+    def test_read_result_counts_sent_image_annotations_and_images(self):
+        images = [{"data": "AAAA", "mimeType": "image/png", "source": "D:/图表.png"}]
+        text, estimate = mcp_server.format_read_result(
+            ["# 文档：/测试"], ["正文 @@SIYUAN-IMAGE:0@@"], 10000, images,
+        )
+        content = mcp_server.build_read_content(text, images)
+        visible_text = "".join(part["text"] for part in content if part["type"] == "text")
+        self.assertEqual(estimate, mcp_server.estimate_token_count(visible_text) + mcp_server.INLINE_IMAGE_TOKEN_COST)
+
     def test_pure_cjk(self):
         tokens = mcp_server.estimate_token_count("人工智能芯片市场分析报告")
-        # 10 CJK chars * 1.0 = 10
+        # 12 CJK chars * 0.8 = 9.6, rounded to 10
         self.assertGreater(tokens, 8)
         self.assertLessEqual(tokens, 12)
 
     def test_pure_english(self):
         tokens = mcp_server.estimate_token_count("The quick brown fox jumps over the lazy dog")
-        # 9 words * 1.3 ≈ 11-12
-        self.assertGreater(tokens, 9)
-        self.assertLess(tokens, 14)
+        # 按字母和空格分类累计，不再按词数计算。
+        self.assertEqual(tokens, 7)
 
     def test_mixed_cjk_english(self):
         tokens = mcp_server.estimate_token_count("NVIDIA B300 芯片性能分析报告 2026")
@@ -5048,6 +5080,64 @@ class McpServerReadBlockWindowTests(unittest.TestCase):
         self.assertIn("估算令牌数：", result)
         # At least one block returned
         self.assertIn("Short.", result)
+
+    def _assert_full_read_estimate(self, result):
+        import re
+        match = re.search(r"估算令牌数：([\d,]+) / ([\d,]+)", result)
+        self.assertIsNotNone(match)
+        total, budget = (int(value.replace(",", "")) for value in match.groups())
+        self.assertEqual(total, mcp_server.estimate_token_count(result))
+        return total, budget
+
+    def test_full_return_budget_counts_reference_labels_and_paginates(self):
+        blocks = {"doc1": [
+            {"id": f"20261111120000-abc{i:04d}", "parent_id": "doc1", "type": "p",
+             "markdown": f"第{i}段：" + "资料分析与核对。" * 30, "sort": i}
+            for i in range(12)
+        ]}
+        normal = self._read({"document_id": "doc1", "token_budget": 1000}, blocks_for_doc=blocks)
+        referenced = self._read(
+            {"document_id": "doc1", "token_budget": 1000, "include_block_ids": True}, blocks_for_doc=blocks,
+        )
+        import re
+        normal_total, _ = self._assert_full_read_estimate(normal)
+        ref_total, _ = self._assert_full_read_estimate(referenced)
+        self.assertLessEqual(normal_total, 1000)
+        self.assertLessEqual(ref_total, 1000)
+        last = int(re.search(r"展示块：1-(\d+)", referenced).group(1))
+        self.assertLess(last, 12)
+        self.assertIn(f"下一窗口：block_start={last + 1}", referenced)
+        following = self._read(
+            {"document_id": "doc1", "token_budget": 1000, "include_block_ids": True, "block_start": last + 1},
+            blocks_for_doc=blocks,
+        )
+        self.assertIn(f"展示块：{last + 1}-", following)
+        self._assert_full_read_estimate(following)
+
+    def test_coordinate_table_and_asset_paths_are_in_full_estimate(self):
+        blocks = {"doc1": [
+            {"id": "table1", "parent_id": "doc1", "type": "t",
+             "markdown": "| 项目 | 值 |\n|---|---|\n| 收入 | 100 |", "sort": 1},
+            {"id": "asset1", "parent_id": "doc1", "type": "p",
+             "markdown": "[报告](assets/report.pdf)", "sort": 2},
+        ]}
+        result = self._read({"document_id": "doc1", "include_block_ids": True}, blocks_for_doc=blocks)
+        self.assertIn("row 1", result)
+        self.assertIn("原始资源引用", result)
+        self.assertIn("report.pdf", result)
+        self._assert_full_read_estimate(result)
+
+    def test_first_oversized_plain_block_stays_whole_and_reports_full_cost(self):
+        blocks = {"doc1": [
+            {"id": "long1", "parent_id": "doc1", "type": "p", "markdown": "a" * 20000, "sort": 1},
+            {"id": "next1", "parent_id": "doc1", "type": "p", "markdown": "后续内容", "sort": 2},
+        ]}
+        result = self._read({"document_id": "doc1", "token_budget": 1000}, blocks_for_doc=blocks)
+        total, _ = self._assert_full_read_estimate(result)
+        self.assertGreater(total, 1000)
+        self.assertIn("a" * 20000, result)
+        self.assertIn("展示块：1-1 / 2", result)
+        self.assertNotIn("后续内容", result)
 
     def test_default_token_budget_stays_within_host_output_limit(self):
         spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_read")
@@ -5877,7 +5967,10 @@ class McpServerReadInlineImagesTests(unittest.TestCase):
         result = server.siyuan_read({"document_id": "doc1", "token_budget": 3000})
         self.assertIn("展示块：1-1 / 3", result)
         self.assertIn("继续阅读：`block_start=2", result)
-        self.assertIn("1,5", result.split("估算令牌数：", 1)[1][:12])
+        content = mcp_server.build_read_content(result, server._pending_read_images)
+        text = "".join(part["text"] for part in content if part["type"] == "text")
+        total = mcp_server.estimate_token_count(text) + mcp_server.INLINE_IMAGE_TOKEN_COST
+        self.assertIn(f"估算令牌数：{total:,} / 3,000", result)
 
     def test_build_read_content_interleaves_text_and_images(self):
         images = [

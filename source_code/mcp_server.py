@@ -6,6 +6,7 @@ import re
 import shutil
 import sys
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -1524,38 +1525,53 @@ def parse_tags_input(raw: str) -> list[str]:
     return tags
 
 
-def estimate_token_count(text: str) -> int:
-    """Heuristic token estimator. CJK ~1.0 tok/char, Latin ~1.3 tok/word, digits ~0.8 tok/item, punctuation ~0.4 tok/char."""
-    if not text:
-        return 0
-    cjk = 0
-    latin_words = 0
-    digits = 0
-    punct = 0
-    buf = ""
+def _estimate_token_units(text: str) -> int:
+    """依据 ARCHITECTURE.md「文本 token 估算」，以百分之一 token 累计。"""
+    units = 0
     for ch in text:
-        cp = ord(ch)
-        if cp >= 0x4E00 and cp <= 0x9FFF or cp >= 0x3400 and cp <= 0x4DBF or cp >= 0x20000 and cp <= 0x2A6DF:
-            if buf:
-                latin_words += len(buf.split())
-                buf = ""
-            cjk += 1
-        elif ch.isdigit():
-            if buf:
-                latin_words += len(buf.split())
-                buf = ""
-            digits += 1
-        elif ch.isalpha():
-            buf += ch
+        if ch.isspace():
+            units += 20
+        elif "A" <= ch <= "Z" or "a" <= ch <= "z":
+            units += 15
+        elif "0" <= ch <= "9":
+            units += 80
+        elif ord(ch) < 128:
+            units += 90
+        elif unicodedata.name(ch, "").startswith(("CJK UNIFIED IDEOGRAPH", "CJK COMPATIBILITY IDEOGRAPH")):
+            units += 80
+        elif unicodedata.category(ch) == "So":
+            units += 200
         else:
-            if buf:
-                latin_words += len(buf.split())
-                buf = ""
-            if not ch.isspace() and not cp >= 0x4E00:
-                punct += 1
-    if buf:
-        latin_words += len(buf.split())
-    return int(cjk * 1.0 + latin_words * 1.3 + digits * 0.8 + punct * 0.4)
+            units += 100
+    return units
+
+
+def estimate_token_count(text: str) -> int:
+    """字符分类粗估；全部字符累计后统一向上取整，不依赖宿主模型。"""
+    return (_estimate_token_units(text) + 99) // 100
+
+
+def format_read_result(
+    header_lines: list[str],
+    parts: list[str],
+    token_budget: int,
+    images: list[dict[str, str]] | None = None,
+) -> tuple[str, int]:
+    """统计实际发给 AI 的全部文字及内联图片，含令牌统计行自身。"""
+    estimated = 0
+    while True:
+        text = "\n".join([
+            *header_lines,
+            f"估算令牌数：{estimated:,} / {token_budget:,}",
+            "",
+            *parts,
+        ])
+        content = build_read_content(text, images) if images else [{"type": "text", "text": text}]
+        units = sum(_estimate_token_units(part["text"]) for part in content if part["type"] == "text")
+        total = (units + 99) // 100 + INLINE_IMAGE_TOKEN_COST * sum(part["type"] == "image" for part in content)
+        if total == estimated:
+            return text, total
+        estimated = total
 
 
 def extract_embed_select(markdown: str) -> str | None:
@@ -1697,7 +1713,7 @@ def build_display_blocks(
                     visit(child)
             return
 
-        estimated_tokens = estimate_token_count(block_md)
+        estimated_tokens = estimate_token_count(display_md)
         lazy_embed_resolver = None
         if resolve_embeds and block_type == "query_embed" and embed_resolver is not None:
             captured_block = dict(block)
@@ -3337,6 +3353,7 @@ class McpServer:
         budget = INLINE_RESPONSE_BUDGET_BYTES if budget_bytes is None else budget_bytes
         doc_id = str(doc.get("id"))
         notebook_id = str(doc.get("notebook_id", ""))
+        token_budget = clamp_int(args.get("token_budget"), DEFAULT_TOKEN_BUDGET, MIN_TOKEN_BUDGET, MAX_TOKEN_BUDGET)
 
         embed_context = self._make_embed_resolution_context(client)
 
@@ -3374,6 +3391,7 @@ class McpServer:
                     markdown = client.export_markdown(doc_id)
             attachment_count = extract_attachments(markdown, client, doc_id, self.root)
             image_stats: dict[str, int] | None = None
+            images: list[dict[str, str]] = []
             if inline_images:
                 markdown, images, image_stats = inline_images_into_markdown(
                     markdown,
@@ -3400,11 +3418,10 @@ class McpServer:
                 header_lines.append(f"附件：{attachment_count} 个已提取到 {attachment_root_dir(self.root, doc_id).resolve()}")
             if image_stats and image_stats.get("over_budget"):
                 header_lines.append(build_inline_image_budget_note(image_stats, budget))
-            return "\n".join(["\n".join(header_lines), "", "---", "", markdown])
+            return format_read_result(header_lines, ["---", "", markdown], token_budget, images)[0]
 
         # Compute stats
         total_blocks = len(display_blocks)
-        heading_count = sum(1 for b in display_blocks if b.is_heading)
 
         # Read only the host document's own block Markdown here. Export may expand
         # query embeds before their target visibility has been checked.
@@ -3416,7 +3433,6 @@ class McpServer:
         # Clamp block window params
         block_start = max(int(args.get("block_start") or 1), 1)
         block_limit = clamp_int(args.get("block_limit"), DEFAULT_BLOCK_LIMIT, MIN_BLOCK_LIMIT, MAX_BLOCK_LIMIT)
-        token_budget = clamp_int(args.get("token_budget"), DEFAULT_TOKEN_BUDGET, MIN_TOKEN_BUDGET, MAX_TOKEN_BUDGET)
 
         # Select one contiguous block window. Embedded blocks are resolved only when
         # they are reached, so blocks outside this window never read their targets.
@@ -3432,6 +3448,77 @@ class McpServer:
             {"total": 0, "inlined": 0, "inlined_bytes": 0, "over_budget": 0}
             if inline_images else None
         )
+
+        window_embeds: list[EmbeddedContent | None] = []
+        image_snapshots: list[tuple[int, int, bool, dict[str, int] | None]] = []
+        outline = build_block_outline(display_blocks)
+        window_preview = build_window_preview(display_blocks)
+
+        def append_window_block(db: DisplayBlock, markdown: str, embedded: EmbeddedContent | None = None) -> None:
+            window_blocks.append(db)
+            body_lines.append(markdown)
+            window_embeds.append(embedded)
+            image_snapshots.append((
+                len(image_items), image_bytes_used, image_fill_stopped,
+                dict(image_stats) if image_stats is not None else None,
+            ))
+
+        def pop_window_block() -> None:
+            nonlocal image_bytes_used, image_fill_stopped
+            window_blocks.pop()
+            body_lines.pop()
+            window_embeds.pop()
+            image_snapshots.pop()
+            empty_stats = {key: 0 for key in image_stats} if image_stats is not None else None
+            count, image_bytes_used, image_fill_stopped, stats = (
+                image_snapshots[-1] if image_snapshots else (0, 0, False, empty_stats)
+            )
+            del image_items[count:]
+            if image_stats is not None:
+                image_stats.clear()
+                image_stats.update(stats or {})
+
+        def render_window() -> tuple[str, int]:
+            first_idx = window_blocks[0].index if window_blocks else start_idx + 1
+            last_idx = window_blocks[-1].index if window_blocks else start_idx
+            body = "\n\n".join(line for line in body_lines if line.strip())
+            body = rewrite_local_asset_links(body, doc_id, self.root)
+
+            # Build header
+            doc_path = display_document_path(doc)
+            date = format_date(str(doc.get("updated", "")))
+            mode_label = "引用阅读（显示块序号、ID 和类型）" if include_block_ids else "普通阅读"
+            header_lines = [
+                f"# 文档：{doc_path}",
+                f"文档 ID：`{doc_id}`",
+                f"更新：{date}",
+                f"阅读模式：{mode_label}",
+                f"展示块：{first_idx}-{last_idx} / {total_blocks}",
+            ]
+            tags_text = format_doc_tags(doc.get("tags"))
+            if tags_text:
+                header_lines.insert(3, f"tag：{tags_text}")
+            if last_idx < total_blocks:
+                next_start = last_idx + 1
+                header_lines.append(f"下一窗口：block_start={next_start}, block_limit={block_limit}")
+            if attachment_count:
+                header_lines.append(f"附件：{attachment_count} 个已提取到 {attachment_root_dir(self.root, doc_id).resolve()}")
+            if image_stats and image_stats.get("over_budget"):
+                header_lines.append(build_inline_image_budget_note(image_stats, budget))
+
+            parts = [outline]
+            if window_preview:
+                parts.extend(["", window_preview])
+            parts.extend(["", "---", "", body])
+
+            if last_idx < total_blocks:
+                parts.extend([
+                    "",
+                    "---",
+                    f"> 继续阅读：`block_start={last_idx + 1}, block_limit={block_limit}`",
+                ])
+
+            return format_read_result(header_lines, parts, token_budget, image_items)
 
         def add_image_results(
             markdown: str,
@@ -3479,10 +3566,11 @@ class McpServer:
                 f"嵌入内容共{total_count}个块，当前展示0个块",
                 EMBED_CONTENT_HINT,
             ])
-            window_blocks.append(db)
-            body_lines.append(fallback_markdown)
+            append_window_block(db, fallback_markdown)
             token_sum += estimate_token_count(fallback_markdown)
 
+        # 固定开销先占预算，最终仍按完整返回复核，避免路径改写等增加漏计。
+        body_budget = max(0, token_budget - render_window()[1])
         for db in display_blocks[start_idx:end_idx]:
             resolved: EmbeddedContent | None = None
             candidate_markdown = db.markdown
@@ -3506,7 +3594,7 @@ class McpServer:
             if inline_images:
                 block_cost += INLINE_IMAGE_TOKEN_COST * count_inlineable_images(candidate_markdown)
 
-            exceeds_token_budget = token_sum + block_cost > token_budget
+            exceeds_token_budget = token_sum + block_cost > body_budget
             if resolved is not None and exceeds_token_budget:
                 if window_blocks:
                     break
@@ -3536,62 +3624,26 @@ class McpServer:
                     break
                 candidate_markdown = add_image_results(prepared, images, stats)
 
-            window_blocks.append(db)
-            if candidate_markdown.strip():
-                body_lines.append(candidate_markdown)
+            append_window_block(db, candidate_markdown, resolved)
             token_sum += block_cost
 
-        window_tokens = token_sum
-        first_idx = window_blocks[0].index if window_blocks else start_idx + 1
-        last_idx = window_blocks[-1].index if window_blocks else start_idx
-        body = "\n\n".join(body_lines)
+        text, estimated = render_window()
+        while estimated > token_budget and window_blocks:
+            if len(window_blocks) == 1:
+                embedded = window_embeds[0]
+                if embedded is None:
+                    break  # 保留至少返回一个完整普通块的既有约定。
+                db = window_blocks[0]
+                pop_window_block()
+                append_embed_fallback(db, embedded)
+                text, estimated = render_window()
+                break
+            pop_window_block()
+            text, estimated = render_window()
+
         if inline_images:
             self._pending_read_images = image_items or None
-        body = rewrite_local_asset_links(body, doc_id, self.root)
-
-        # Build header
-        doc_path = display_document_path(doc)
-        date = format_date(str(doc.get("updated", "")))
-        mode_label = "引用阅读（显示块序号、ID 和类型）" if include_block_ids else "普通阅读"
-        header_lines = [
-            f"# 文档：{doc_path}",
-            f"文档 ID：`{doc_id}`",
-            f"更新：{date}",
-            f"阅读模式：{mode_label}",
-            f"展示块：{first_idx}-{last_idx} / {total_blocks}",
-            f"估算令牌数：{window_tokens:,} / {token_budget:,}",
-        ]
-        tags_text = format_doc_tags(doc.get("tags"))
-        if tags_text:
-            header_lines.insert(3, f"tag：{tags_text}")
-        if start_idx + block_limit < total_blocks:
-            next_start = last_idx + 1
-            header_lines.append(f"下一窗口：block_start={next_start}, block_limit={block_limit}")
-        if attachment_count:
-            header_lines.append(f"附件：{attachment_count} 个已提取到 {attachment_root_dir(self.root, doc_id).resolve()}")
-        if image_stats and image_stats.get("over_budget"):
-            header_lines.append(build_inline_image_budget_note(image_stats, budget))
-        header = "\n".join(header_lines)
-
-        # Build outline (always full document outline with block positions)
-        outline = build_block_outline(display_blocks)
-
-        # Build window preview (only when headings < 5 AND total blocks > 100)
-        window_preview = build_window_preview(display_blocks)
-
-        parts = [header, "", outline]
-        if window_preview:
-            parts.extend(["", window_preview])
-        parts.extend(["", "---", "", body])
-
-        if last_idx < total_blocks:
-            parts.extend([
-                "",
-                "---",
-                f"> 继续阅读：`block_start={last_idx + 1}, block_limit={block_limit}`",
-            ])
-
-        return "\n".join(parts)
+        return text
 
     def resolve_visible_document(self, args: dict[str, Any]) -> dict[str, Any]:
         document = str(args.get("document") or "").strip()
@@ -5332,7 +5384,7 @@ def tool_specs() -> list[dict[str, Any]]:
                     "document_id": {"type": "string", "description": "Document ID fallback or disambiguator. If document is also provided, both must identify the same document."},
                     "block_start": {"type": "integer", "default": 1, "description": "Starting display block index (1-based). Default 1 reads from the first block."},
                     "block_limit": {"type": "integer", "default": DEFAULT_BLOCK_LIMIT, "description": "Maximum display blocks to return in this window, 1–1000."},
-                    "token_budget": {"type": "integer", "default": DEFAULT_TOKEN_BUDGET, "description": "Estimated token ceiling for this window. Blocks stop before exceeding budget (at least one block always returned)."},
+                    "token_budget": {"type": "integer", "default": DEFAULT_TOKEN_BUDGET, "description": "Estimated token budget for the complete returned text and inline images, including outline, block IDs and paths. At least one complete plain block is returned."},
                     "include_block_ids": {"type": "boolean", "default": False, "description": "Enable reference reading for editing: each block is shown as [index] id=... type=... followed by content. Use these exact values for siyuan_edit start_index/start_id."},
                     "include_images": {"type": "boolean", "description": "Control whether images in this window are returned as image content blocks alongside the text. Omit to follow the plugin's inline-image setting; set true to inline images for this call, or false to return only image locations for AI to read separately. Inlined images still count toward the token budget and the per-call image budget; images beyond the budget are reported at their position with their location."},
                     "include_large_images": {"type": "boolean", "default": False, "description": "Set true only after the user explicitly agrees, to ignore the per-call image budget and inline every image in this window. Responses over 10 MB can be rejected or disconnect on MCP clients using default buffer limits; use only when the client is known to accept large messages. Only relevant when images are actually inlined in this read (plugin default on, or include_images=true)."},
