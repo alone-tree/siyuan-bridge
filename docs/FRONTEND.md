@@ -31,6 +31,7 @@
 - `config.local.json`：profiles、Token、内部语言配置、`read_inline_images` 图片内联开关、`inline_image_budget_mb` 单次读取图片体积上限（MB，默认 9）。Token 不写入 MCP JSON。
 - `telemetry.json`：匿名 ID、遥测开关、本地副本开关、端点、代理。
 - `block-index.json`：块序号显示开关。
+- `copy-full-path.json`：完整路径复制菜单开关（`enabled`，缺省为开启）。
 
 `system_state.json` 已弃用（v1.11.2 取消系统文档登记表）：插件和 Python Bridge 都不再写入或读取；残留文件静默保留在插件数据区，不主动清理。
 
@@ -47,6 +48,16 @@ Home Dialog 保持紧凑：外层 `padding: 16px`、卡片间距 `gap: 12px`、�
 MCP 配置页没有「保存」按钮。工作空间配置和「单次读取时总图片体积上限」改动后 500ms 防抖写入 `config.local.json`；Python 命令与 MCP 名称只在本次对话框内影响复制出来的 JSON，不持久化。体积上限单位为 MB、默认 9，留空或填非法值时回填当前值；这一项决定读侧单次返回图片的总量预算，语义见 `ARCHITECTURE.md` 的「阅读模型」。
 
 插件只维护 `bridge/templates/system-docs/` 中的四类系统文档模板（About、Privacy Rules、User Preferences、Workspace Index 占位）。MCP 使用指南和索引创建指南自 v1.11.2 起属于代码资产（`templates/guides/`，随集市更新覆盖），不进系统笔记本、不提供设置页重置；插件不再读取 manifest，也不做指南哈希校验。
+
+## 复制完整路径
+
+文档树中单篇文档的「复制」子菜单，在原生「复制可读路径」下方提供「复制完整路径(思源桥)」。复制纯文本 `/笔记本名/父文档/当前文档`，不改变原菜单和快捷键，不修改 MCP 工具。实现同步在根 `index.js` 和参考源码 `src/index.js` 中。
+
+Home Dialog 在「显示思源桥块序号」下方提供「复制完整路径」开关，默认开启。说明为「在文档树的“复制”菜单中显示“复制完整路径(思源桥)”，复制包含笔记本名的完整可读路径，方便直接发给 AI。」关闭后隐藏该菜单项，重新开启后下次打开菜单即可显示；通过独立的插件数据 `copy-full-path.json` 保存 `{enabled: boolean}`，不改 MCP 配置。启用插件时先加载保存值，再按该值决定是否注入；修改开关后立即保存，保存失败恢复开关并保持原行为。
+
+实现入口为 `open-menu-doctree`：使用事件中的目标文档 ID，在已生成菜单中找到 `data-id="copyHPath"`，由思源原生菜单方法创建新菜单项后移动到其下方。官方事件的 `detail.menu.addItem()` 只进入「插件」子菜单，不能满足这个位置。点击时调用 `/api/filetree/getFullHPathByID` 获取实时完整路径，补齐开头 `/` 后写入剪贴板；失败只提示，不复制不完整路径。插件卸载时移除监听和当前菜单项。
+
+兼容性依赖：`window.siyuan.menus.menu.addItem()` 与原生 `copyHPath` 节点；若找不到目标节点则不注入。核查依据为思源 v3.8.9 的 `app/src/menus/navigation.ts`、`menus/commonMenuItem.ts`、`menus/Menu.ts`、`plugin/EventBus.ts` 和 `kernel/model/file.go`。`tests/test_plugin_menu.js` 加载实际根入口及参考源码，覆盖相邻位置、重复事件、实时取路径、接口与剪贴板失败，以及禁用后清理；由 `tests/test_plugin_entry.py` 纳入全量测试。真实菜单观感需在测试工作空间验收，当前结果见开发日志。
 
 ## 块序号显示
 
@@ -84,4 +95,5 @@ python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE% --fre
 - MCP JSON 不包含 Token。
 - MCP JSON 中的 `run_mcp.py` 是当前设备、当前工作空间的绝对路径；切换电脑后重新打开配置页应自动变化。
 - Home Dialog 的通知、反馈、遥测、块序号、读取图片开关不会阻塞 MCP 配置；不再出现系统指南区域。
+- 「复制完整路径」默认开启；关闭后文档树菜单项隐藏，重新启用插件仍保持关闭，再次开启后可复制完整路径。
 - 旧版本留下的 `MCP 使用指南` / `工作空间索引创建指南` 文档按普通文档处理，插件激活不报错、不覆盖、不改名。

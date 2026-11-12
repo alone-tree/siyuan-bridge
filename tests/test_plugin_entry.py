@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -10,6 +11,13 @@ SRC_INDEX_JS = Path(__file__).resolve().parents[1] / "siyuan-plugin" / "src" / "
 
 
 class PluginEntryContractTests(unittest.TestCase):
+    def test_full_path_copy_menu_behavior(self):
+        completed = subprocess.run(
+            ["node", str(Path(__file__).with_name("test_plugin_menu.js"))],
+            capture_output=True, text=True, encoding="utf-8",
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
     def test_root_index_is_single_file_commonjs(self):
         text = INDEX_JS.read_text(encoding="utf-8")
         requires = re.findall(r"\brequire\((['\"])(.+?)\1\)", text)
