@@ -92,18 +92,30 @@ def runtime_ready(root: Path) -> bool:
     return (target / ".ready").is_file() and (target / "PIL" / "Image.py").is_file() and any((target / "PIL").glob("_imaging.*"))
 
 
+def record_runtime(root: Path) -> dict:
+    assets_root = Path(__file__).absolute().parents[1]
+    manifest = json.loads((assets_root / "templates" / "dependencies" / f"pillow-{PILLOW_VERSION}.json").read_text(encoding="utf-8"))
+    wheel = select_wheel(manifest["wheels"])
+    state = {"version": PILLOW_VERSION, "tag": runtime_tag(), "filename": wheel["filename"]}
+    directory = plugin_data_dir(root)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "image-runtime.json").write_text(json.dumps(state), encoding="utf-8")
+    return wheel
+
+
+def _remove_private_directory(path: Path, parent: Path) -> None:
+    if path.is_symlink() or not path.resolve().is_relative_to(parent.resolve()) or path.resolve() == parent.resolve():
+        raise RuntimeError("图片组件清理目录异常")
+    shutil.rmtree(path)
+
+
 def prepare_runtime(root: Path) -> Path:
     """不调用 pip，不写系统 Python；只有固定清单中的二进制 wheel 可安装。"""
     target = runtime_directory(root)
     with _lock:
+        wheel = record_runtime(root)
         if runtime_ready(root):
             return target
-        assets_root = Path(__file__).absolute().parents[1]
-        manifest = json.loads((assets_root / "templates" / "dependencies" / f"pillow-{PILLOW_VERSION}.json").read_text(encoding="utf-8"))
-        wheel = select_wheel(manifest["wheels"])
-        state = {"version": PILLOW_VERSION, "tag": runtime_tag(), "filename": wheel["filename"]}
-        plugin_data_dir(root).mkdir(parents=True, exist_ok=True)
-        (plugin_data_dir(root) / "image-runtime.json").write_text(json.dumps(state), encoding="utf-8")
         cached_wheel = plugin_data_dir(root) / "deps" / "downloads" / wheel["filename"]
         data = cached_wheel.read_bytes() if cached_wheel.is_file() else b""
         if len(data) != wheel["size"] or hashlib.sha256(data).hexdigest() != wheel["sha256"]:
@@ -125,23 +137,25 @@ def prepare_runtime(root: Path) -> Path:
                 if runtime_ready(root):
                     return target
                 # 只清理本模块专属、尚未准备成功的版本目录。
-                if target.parent != runtime_directory(root).parent:
-                    raise RuntimeError("图片组件目录异常")
-                shutil.rmtree(target)
-            staging.replace(target)
+                _remove_private_directory(target, plugin_data_dir(root) / "deps")
+            try:
+                staging.replace(target)
+            except OSError:
+                if not runtime_ready(root):
+                    raise
         finally:
             if staging.exists():
-                shutil.rmtree(staging)
+                _remove_private_directory(staging, plugin_data_dir(root) / "deps")
         return target
 
 
 def start_preparation(root: Path, client) -> None:
     """MCP 首次连接补齐插件尚无解释器记录的情况，不增加工具调用。"""
-    if runtime_ready(root):
-        return
-
     def run():
         try:
+            record_runtime(root)
+            if runtime_ready(root):
+                return
             try:
                 client.push_msg("思源桥正在自动准备图片处理组件，完成后读图即可使用。", timeout=10000)
             except Exception:

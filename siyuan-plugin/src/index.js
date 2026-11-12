@@ -97,7 +97,10 @@ async function prepareImageDependency(plugin) {
   if ((platform.includes("win") && !state.tag.includes("win"))
       || (platform.includes("mac") && !state.tag.includes("macosx"))
       || (platform.includes("linux") && !state.tag.includes("linux"))) return;
-  const manifestResponse = await fetch("/plugins/siyuan-bridge/bridge/templates/dependencies/pillow-13.0.0.json");
+  const manifestResponse = await fetch("/api/file/getFile", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({path: "/data/plugins/siyuan-bridge/bridge/templates/dependencies/pillow-13.0.0.json"}),
+  });
   if (!manifestResponse.ok) throw new Error("无法读取图片组件清单");
   const manifest = await manifestResponse.json();
   const wheel = manifest.wheels.find((entry) => entry.filename === state.filename);
@@ -108,6 +111,16 @@ async function prepareImageDependency(plugin) {
     body: JSON.stringify({path: `${base}/pillow/${state.version}/${state.tag}/.ready`}),
   });
   if (markerResponse.ok && (await markerResponse.text()).trim() === wheel.sha256) return;
+  const cachedResponse = await fetch("/api/file/getFile", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({path: `${base}/downloads/${wheel.filename}`}),
+  });
+  if (cachedResponse.ok) {
+    const cached = await cachedResponse.arrayBuffer();
+    const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", cached)))
+      .map((value) => value.toString(16).padStart(2, "0")).join("");
+    if (cached.byteLength === wheel.size && digest === wheel.sha256) return;
+  }
   showMessage("思源桥正在自动下载图片处理组件，无需手动安装。", 10000);
   const packagePath = new URL(wheel.url).pathname;
   const urls = [wheel.url, "https://pypi.tuna.tsinghua.edu.cn" + packagePath,
