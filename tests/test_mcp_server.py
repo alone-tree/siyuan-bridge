@@ -5,12 +5,26 @@ import shutil
 import unittest
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
 from unittest import mock
 
 from source_code import mcp_server
 from source_code.client import SiYuanApiError, SiYuanConnectionError, SiYuanTimeoutError
 from source_code.config import Profile, load_config
 from source_code.ignore import PrivacyRules, write_privacy_rules_cache
+
+
+def setUpModule():
+    # 本文件验证 MCP/预算/隐私，历史图片夹具仅含魔数；真实编解码在 test_image_processing.py 验证。
+    global _image_codec_mock
+    _image_codec_mock = mock.patch.object(mcp_server, "prepare_image", side_effect=lambda data, root, large=False: [
+        SimpleNamespace(data=data, mime=mcp_server.sniff_image_mime(data) or "image/png", tokens=1568, box=(0, 0, 784, 1568))
+    ])
+    _image_codec_mock.start()
+
+
+def tearDownModule():
+    _image_codec_mock.stop()
 
 
 class FakeSearchClient:
