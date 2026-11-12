@@ -1585,7 +1585,7 @@ def format_read_result(
     while True:
         text = "\n".join([
             *header_lines,
-            f"估算令牌数：{estimated:,} / {token_budget:,}",
+            f"估算令牌数：{estimated:,} / {token_budget:,}" + ("（图片另计，预算仅控制文字分页）" if images else ""),
             "",
             *parts,
         ])

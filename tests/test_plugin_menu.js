@@ -92,6 +92,7 @@ async function loadEntry(entry, storage = {}) {
     ensureDefaultBridgeConfig = async () => {};
     ensureTelemetryConfig = async () => {};
     ensureSystemNotebook = async () => null;
+    prepareImageDependency = async () => {};
   `;
   vm.runInNewContext(source, sandbox, {filename});
   const plugin = new sandbox.module.exports.SiyuanBridgePlugin();
