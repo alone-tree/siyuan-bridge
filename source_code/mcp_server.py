@@ -5927,8 +5927,6 @@ def inline_images_into_markdown(
                 stats["over_budget"] += 1
                 return budget_note(local_display(url) if not is_network else url, not is_network, exhausted=True)
             if is_network:
-                # 流式下载边下边计数：中止线取剩余预算对应的原始字节上限
-                # （原始 L 字节 base64 后为 ceil(L/3)*4，floor((remaining//4)*3) 保证不超）。
                 # 输入文件可以大于传输预算；先生成阅读副本，后算实际返回大小。
                 data = fetch(url, IMAGE_DOWNLOAD_LIMIT_BYTES)
                 if mime is None:

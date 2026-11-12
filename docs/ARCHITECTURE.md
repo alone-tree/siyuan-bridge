@@ -704,7 +704,7 @@ scope：
 | `block_limit`       | integer | 200   | 最大展示块数量                              |
 | `token_budget`      | integer | 10000 | 文字分页预算；图片估算另计并报告合计 |
 | `include_block_ids` | boolean | false | 启用引用阅读                                |
-| `include_images` | boolean | 跟随插件开关 | 本次读取是否把图片作为图片块随文字返回；显式传入可按次覆盖插件设置「读文档时默认同时读取图片」，内联图片仍计入 token 与单笔图片体积预算 |
+| `include_images` | boolean | 跟随插件开关 | 按次覆盖插件图片开关；图片自动优化、视觉 token 单独估算，原图完整组服从图片与消息预算 |
 | `include_large_images` | boolean | false | 原像素、无有损压缩；长图仍完整裁剪并服从传输预算；仅实际内联图片时相关 |
 
 数据流：
