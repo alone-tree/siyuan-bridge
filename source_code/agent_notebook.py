@@ -75,6 +75,8 @@ def load_agent_notebook(
     client: SiYuanClient,
     root: Path,
     config_language: str | None = None,
+    *,
+    read_content: bool = True,
 ) -> AgentNotebookState:
     """Locate the system notebook and its documents by name; read-only."""
     language = resolve_language(config_language)
@@ -128,7 +130,7 @@ def load_agent_notebook(
 
     privacy_rules = _merge_privacy_rules(markdown_for("privacy_rules"))
     workspace_docs = grouped["workspace_index"]
-    workspace_markdown = markdown_for("workspace_index")
+    workspace_markdown = markdown_for("workspace_index") if read_content else []
     workspace_updated = max(
         (
             str(live_by_id.get(str(doc.get("id") or ""), {}).get("updated") or "")
@@ -136,20 +138,13 @@ def load_agent_notebook(
         ),
         default="",
     )
-    placeholder_hashes = {
-        markdown_sha256(markdown)
-        for markdown in WORKSPACE_INDEX_PLACEHOLDERS.values()
-    }
-    workspace_is_placeholder = bool(workspace_docs) and all(
-        markdown_sha256(markdown) in placeholder_hashes
-        for markdown in workspace_markdown
-    )
+    workspace_is_placeholder = is_workspace_index_placeholder(workspace_markdown)
     return AgentNotebookState(
         language=language,
         notebook_id=notebook_id,
         notebook_name=notebook_name,
         document_ids=document_ids,
-        ai_guide_markdown=_merge_markdown(markdown_for("ai_guide")),
+        ai_guide_markdown=_merge_markdown(markdown_for("ai_guide")) if read_content else "",
         workspace_index_markdown=_merge_markdown(workspace_markdown),
         privacy_rules=privacy_rules,
         mcp_usage_guide_markdown=load_guide_asset(root, MCP_USAGE_GUIDE_FILES, language),
@@ -160,6 +155,11 @@ def load_agent_notebook(
         workspace_index_is_placeholder=workspace_is_placeholder,
         missing_document_keys=tuple(missing),
     )
+
+
+def is_workspace_index_placeholder(markdowns: list[str]) -> bool:
+    placeholder_hashes = {markdown_sha256(markdown) for markdown in WORKSPACE_INDEX_PLACEHOLDERS.values()}
+    return bool(markdowns) and all(markdown_sha256(markdown) in placeholder_hashes for markdown in markdowns)
 
 
 def _list_system_docs(

@@ -9,12 +9,12 @@ description: Use when the user wants to read, search, or write their private SiY
 
 ## 启动流程
 
-1. 调用 `siyuan_start` —— 只读获取插件已经维护的系统笔记本内容，刷新安全索引，返回启动包（运行状态、MCP 使用指南、用户个性化要求、笔记本概览、工作空间索引）。
+1. 调用 `siyuan_start` —— 只读获取插件已经维护的系统笔记本内容，刷新安全元数据而不统计全库字数和块数，返回启动包（运行状态、MCP 使用指南、用户个性化要求、笔记本概览、工作空间索引）。系统文档正文共用 read 的块渲染；嵌入只展示来源路径、正文和引用层级，不附 SQL、统计与编辑提醒。
 2. 阅读返回的启动包。
 3. 遵循启动包中的 MCP 使用指南和用户个性化要求。
 4. **以工作空间索引为导航主入口。** 快速导航表将用户意图映射到笔记本，笔记本详情是 AI 扫描后浓缩的结构摘要和判断——信任它来定位相关笔记本。
 5. 若启动包提示用户尚未创建或长期未更新工作空间索引，先询问用户是否需要创建或更新。具体方法见系统笔记本中的《工作空间索引创建指南》。
-6. 用 `siyuan_list`（带 `notebook_id`）查看单个笔记本的文档树，含有效权限、字数、更新时间和文档标签。
+6. 用 `siyuan_list`（带 `notebook_id`）查看单个笔记本的文档树，含有效权限、字数、更新时间和文档标签。start 后字数、块数显示「未统计」；确有需要时调用 `siyuan_operate(action=refresh)` 获取。
 7. 用 `siyuan_read` 按需深读。始终按展示块窗口返回，不截断字符。始终返回大纲（标题→block 位置映射）。长文档用 `block_start=N` 翻页继续阅读，用 `block_limit` 和 `token_budget` 控制窗口大小。token 预算计入完整返回文字（含大纲、块坐标、资源路径和提示）；引用阅读使用相同预算，可能更早翻页。需要精确跨文档块引用或编辑定位时，开启 `include_block_ids=true`（引用阅读模式）。思源 `query_embed` 仅在所读窗口内解析 `SELECT`；最多展开 20 个可见匹配，按来源文档路径及对应文档 ID 或块 ID 以引用块形式显示，并在末尾提供展示块统计和“编辑应前往来源文档”提示。隐藏匹配先过滤，不读正文、不计数、不泄露来源信息；没有可见结果时，来源和内容均按“查无此块”处理，不透露原因。嵌入内容作为一个完整块，共享宿主文档的 token 与图片预算：中途超预算时窗口停在嵌入块之前，下一窗口从它开始仍超预算或无法安全渲染时，保留原 SQL 并输出“嵌入块内容：内容超预算不展开”，再从其后继续阅读。用户在插件设置开启「读文档时默认返回图片」后，`siyuan_read` 会随文字按文档顺序返回图片，单笔响应图片累计默认不超过 9 MB（用户可在插件设置「高级配置」调整）：装不下的图在原位置声明并给出路径（本地图）或原地址（网络图），可按声明单独读取；确有需要且用户明确同意后，可用 `include_large_images=true` 无视该预算强制全部内联（响应超过 10 MB 时默认配置的客户端会断开连接）。无论开关状态，都可在单次调用中用 `include_images=true` 临时要求返回图片，或用 `include_images=false` 只取文字与路径（覆盖插件默认值）。
 8. 系统笔记本 `思源桥` / `SiYuan Bridge` 和普通笔记本一样可读写；只有 Privacy Rules 文档本身被硬隔离。
 
@@ -51,7 +51,7 @@ description: Use when the user wants to read, search, or write their private SiY
 - 编辑普通Markdown表格时，使用引用阅读返回的网格坐标：`row=0`是表头，`row>=1`是数据行，`column_index`从1开始。坐标视图不可原样写回；整体替换需提供标准Markdown表格。源表格裸换行导致边界不明时先在思源中修正，不要忽略拒绝提示继续重写；写后出现结构变化警告时核对是否符合用户意图。
 - 读取图片/附件时，本地副本路径只供查看；复用到思源文档应使用返回的原始`assets/...`引用，不要再次上传副本。
 - 插入本地图片、文件或文件夹时使用 `siyuan_edit(action="insert_assets")`：一次调用只用一个锚点，但可在该位置按顺序插入多个项目。`name` 是图片 alt 或正文链接名；`title` 才是图片下方标题（文件/文件夹通常仅悬停显示）。超过 20 MB 的普通文件只有在用户明确同意后才传 `upload_large_files=true`。
-- `siyuan_operate` —— `action=refresh` 会话中途刷新安全索引，不清理 `ai_workspace/`；`action=sync` 调用思源内置默认同步，相当于点击思源同步按钮，并返回当前同步状态。同步默认等待 10 秒；慢同步可设置 `timeout_seconds` 到 5-120 秒，该参数只改变 MCP 等待时间，不改变思源同步行为。超时说明同步尚未在等待窗口内完成，不等同于思源未启动。只有 `siyuan_start` 会在新会话启动时清理 workspace。
+- `siyuan_operate` —— `action=refresh` 会话中途刷新安全索引并统计字数、块数，不清理 `ai_workspace/`；`action=sync` 调用思源内置默认同步，相当于点击思源同步按钮，并返回当前同步状态。同步默认等待 10 秒；慢同步可设置 `timeout_seconds` 到 5-120 秒，该参数只改变 MCP 等待时间，不改变思源同步行为。超时说明同步尚未在等待窗口内完成，不等同于思源未启动。只有 `siyuan_start` 会在新会话启动时清理 workspace。
 - 想知道“本文档引用了哪些块”，使用 `siyuan_operate(action="check_forward_references", document="/Notebook/Folder/Doc")`；想知道“哪些块引用了本文档”，改用 `action="check_backward_references"`。路径歧义时改传 `document_id`，不要传 `direction`。两者覆盖文档 ID、全部真实正文块 ID、块引用、可识别嵌入块和 `siyuan://` 块链接，也计入本篇内部引用。正向按目标文档展示目标块，反向按来源文档展示来源块；子文档递归汇总次数，不展开块详情。默认各展示 10 篇可见对端/子文档，`limit="none"` 查看全部，展示限制不影响关系总数。隐藏对端只计关系次数，不披露文档数、路径、ID 或内容。两个 action 均只读，不需要 `confirmed`。
 - `siyuan_bridge_feedback` —— 通过对话提交对思源桥 MCP 的反馈。type 为 bug/feature/idea，title 和 description 必填，contact 可选。不修改思源内容，不需要 confirmed=true，即使思源未启动也可使用（只要配置了遥测端点）。
 - 系统笔记本 `思源桥` / `SiYuan Bridge` 及其六篇固定文档会被自动创建和维护。MCP 使用指南和工作空间索引创建指南允许用户修改，并可在插件设置中重置。

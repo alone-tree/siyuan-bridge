@@ -652,6 +652,7 @@ class McpServerTests(unittest.TestCase):
             mock.patch.object(mcp_server, "load_agent_notebook", return_value=state),
             mock.patch.object(mcp_server, "refresh_index"),
             mock.patch.object(mcp_server, "build_notebook_overview", return_value="# 概览\n\n内容"),
+            mock.patch.object(server, "_render_startup_documents", return_value=state),
         ):
             result = server.siyuan_start({})
 
@@ -5500,6 +5501,78 @@ class McpServerReadEmbeddedBlocksTests(unittest.TestCase):
             {block_id for block_id in ("visible-a", "visible-b") if any(f"'{block_id}'" in query for query in client.content_queries)},
         )
         self.assertTrue(all("secret-block" not in query for query in client.content_queries))
+
+    def _startup_body(self, client, document_ids=("host",)):
+        state = mcp_server.AgentNotebookState(
+            language="zh-CN", notebook_id="nb1", notebook_name="Main",
+            document_ids={"workspace_index": document_ids},
+            ai_guide_markdown="", workspace_index_markdown="",
+            privacy_rules=PrivacyRules(ignore=[], allow=[]),
+        )
+        return mcp_server.McpServer(self.root)._render_startup_documents(client, state).workspace_index_markdown
+
+    def test_startup_reuses_nested_embed_rendering_without_sql_or_edit_details(self):
+        nested = self._embed("nested-embed", "SELECT id FROM blocks WHERE root_id='source-b'")
+        client = self._make_client(
+            [self._embed()],
+            result_map=[("root_id='source-doc'", ["source-doc"]), ("root_id='source-b'", ["leaf"])],
+            metadata_rows=[self._meta("source-doc", "source-doc", "d"), self._meta("leaf", "source-b")],
+            content_rows=[{"id": "source-doc", "markdown": ""},
+                          {"id": "leaf", "markdown": "Nested content ((ref-id '引用'))"}],
+            blocks_by_root={"source-doc": [{**nested, "parent_id": "source-doc"}]},
+        )
+        result = self._startup_body(client)
+        self.assertIn("嵌入块来源：/Main/Source\n", result)
+        self.assertIn("> 嵌入块来源：/Main/Source B", result)
+        self.assertIn("> > Nested content ((ref-id '引用'))", result)
+        self.assertNotIn("{{SELECT", result)
+        self.assertNotIn("嵌入内容共", result)
+        self.assertNotIn(mcp_server.EMBED_CONTENT_HINT, result)
+        _, read = self._read(client)
+        self.assertIn("{{SELECT", read)
+        self.assertIn("嵌入内容共", read)
+        self.assertIn(mcp_server.EMBED_CONTENT_HINT, read)
+
+    def test_startup_filters_hidden_targets_before_reading_content(self):
+        client = self._make_client(
+            [self._embed()], result_ids=["visible", "secret-block"],
+            metadata_rows=[self._meta("visible", "source-doc"), self._meta("secret-block", "secret-doc")],
+            content_rows=[{"id": "visible", "markdown": "Visible body"},
+                          {"id": "secret-block", "markdown": "SECRET_CONTENT"}],
+        )
+        result = self._startup_body(client)
+        self.assertIn("> Visible body", result)
+        self.assertNotIn("secret", result.lower())
+        self.assertTrue(all("secret-block" not in query for query in client.content_queries))
+
+    def test_startup_skips_hidden_host_and_merges_duplicate_documents(self):
+        client = self._make_client(
+            [{"id": "host-p", "type": "p", "markdown": "First body"}],
+            blocks_by_root={"source-doc": [{"id": "source-p", "type": "p", "markdown": "Second body"}],
+                            "secret-doc": [{"id": "secret-p", "type": "p", "markdown": "SECRET_CONTENT"}]},
+        )
+        with mock.patch.object(client, "get_child_blocks", wraps=client.get_child_blocks) as children:
+            result = self._startup_body(client, ("host", "secret-doc", "source-doc"))
+        self.assertEqual(result, "First body\n\n---\n\nSecond body")
+        self.assertNotIn(mock.call("secret-doc"), children.call_args_list)
+
+    def test_list_and_search_accept_uncomputed_statistics(self):
+        for doc in self.docs:
+            doc.update(word_count=None, block_count=None)
+        (self.root / "knowledge_base" / "docs.jsonl").write_text(
+            "".join(json.dumps(doc) + "\n" for doc in self.docs), encoding="utf-8",
+        )
+        server = mcp_server.McpServer(self.root)
+        result = server.siyuan_list({"path": "/Main"})
+        self.assertIn("未统计", result)
+        self.assertIn('siyuan_operate(action="refresh")', result)
+        client = self._make_client([])
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = client
+        client.blocks = [{"id": "hit", "root_id": "host", "content": "Host", "type": "p", "box": "nb1"}]
+        result = server.siyuan_find({"query": "Host", "scope": "full"})
+        self.assertIn("字数、块数未统计", result)
+
 
     def test_all_hidden_results_are_reported_only_as_missing(self):
         embed = self._embed()

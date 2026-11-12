@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from source_code.ignore import (
@@ -15,6 +16,7 @@ from source_code.ignore import (
     write_privacy_rules_cache,
 )
 from source_code.indexer import find_documents, normalize_documents, refresh_index, resolve_document
+from source_code import indexer
 
 
 class FakeClient:
@@ -108,6 +110,31 @@ class FakeClient:
 
 
 class IndexerTests(unittest.TestCase):
+    def test_metadata_refresh_skips_all_statistics_and_explicit_refresh_restores_them(self):
+        root = Path.cwd() / ".test_tmp" / "indexer_metadata_only"
+        shutil.rmtree(root, ignore_errors=True)
+        root.mkdir(parents=True)
+        write_privacy_rules_cache(root, PrivacyRules(ignore=[], allow=[]))
+        client = FakeClient()
+        with (
+            mock.patch.object(client, "query_sql", wraps=client.query_sql) as query,
+            mock.patch.object(indexer, "compute_word_count", side_effect=AssertionError("不应计算字数")),
+        ):
+            refresh_index(client, root, include_stats=False)
+        statements = [call.args[0] for call in query.call_args_list]
+        self.assertFalse(any("GROUP BY root_id" in stmt or "ORDER BY root_id" in stmt for stmt in statements))
+        docs = indexer.load_docs(root)
+        self.assertTrue(all(doc["word_count"] is None and doc["block_count"] is None for doc in docs))
+        tree = (root / "knowledge_base" / "tree.md").read_text(encoding="utf-8")
+        self.assertIn("| 笔记本 | ID | 文档数 | 最近更新 |", tree)
+        self.assertNotIn("| 字数 | 块数 |", tree)
+        self.assertIn("字数未统计", tree)
+
+        refresh_index(client, root)
+        self.assertTrue(all(doc["word_count"] > 0 and doc["block_count"] > 0 for doc in indexer.load_docs(root)))
+        refresh_index(client, root, include_stats=False)
+        self.assertTrue(all(doc["word_count"] is None for doc in indexer.load_docs(root)))
+
     def test_refresh_writes_indexes_and_preserves_existing_guide(self):
         root = Path.cwd() / ".test_tmp" / "indexer_refresh"
         shutil.rmtree(root, ignore_errors=True)

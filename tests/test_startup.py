@@ -5,15 +5,24 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 from source_code import mcp_server
 from source_code.config import Profile
 from source_code.ignore import PrivacyRules
+from source_code.i18n import WORKSPACE_INDEX_PLACEHOLDERS
 
 
 class StartupClient:
     def __init__(self):
         self.messages = []
+        self.blocks = {}
+
+    def list_notebooks(self):
+        return [{"id": "nb1", "name": "主笔记本"}, {"id": "system-nb", "name": "思源桥"}]
+
+    def get_child_blocks(self, doc_id):
+        return self.blocks.get(doc_id, [])
 
     def version(self):
         return "3.7.2"
@@ -45,6 +54,10 @@ class StartupPacketTests(unittest.TestCase):
             }, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
+        with (cache / "docs.jsonl").open("a", encoding="utf-8") as target:
+            for doc_id, title in (("preferences-id", "用户个性化要求"), ("index-id", "工作空间索引")):
+                target.write(json.dumps({"id": doc_id, "notebook_id": "system-nb", "notebook_name": "思源桥",
+                                         "hpath": "/" + title, "title": title}, ensure_ascii=False) + "\n")
         self.original_detect = mcp_server.detect_active_profile
         self.original_load = mcp_server.load_agent_notebook
         self.original_refresh = mcp_server.refresh_index
@@ -78,6 +91,11 @@ class StartupPacketTests(unittest.TestCase):
         updated="20260501000000",
         missing_document_keys=(),
     ):
+        self.client.blocks = {
+            "preferences-id": [{"id": "pref-p", "type": "p", "markdown": "用户要求：简洁回答。"}],
+            "index-id": [{"id": "index-p", "type": "p", "markdown":
+                          WORKSPACE_INDEX_PLACEHOLDERS["zh-CN"].strip() if placeholder else "# 我的工作空间索引"}],
+        }
         return mcp_server.AgentNotebookState(
             language="zh-CN",
             notebook_id="system-nb",
@@ -108,7 +126,7 @@ class StartupPacketTests(unittest.TestCase):
         headings = [
             "## MCP 使用指南",
             "## 用户个性化要求",
-            "## 笔记本概览和统计",
+            "## 笔记本概览",
             "## 工作空间索引",
         ]
         positions = [result.index(heading) for heading in headings]
@@ -121,6 +139,15 @@ class StartupPacketTests(unittest.TestCase):
         self.assertNotIn("语言偏好", result)
         self.assertNotIn("给人看的说明", result)
         self.assertNotIn("系统笔记本：", result)
+        self.assertIn("| 笔记本 | ID | 文档数 | 最近更新 |", result)
+        self.assertNotIn("| 字数 | 块数 |", result)
+
+    def test_start_requests_metadata_only_before_rendering(self):
+        mcp_server.load_agent_notebook = lambda *_args, **_kwargs: self._state()
+        with mock.patch.object(mcp_server, "refresh_index") as refresh:
+            mcp_server.McpServer(self.root).siyuan_start({})
+        self.assertIs(refresh.call_args.kwargs["include_stats"], False)
+
 
     def test_placeholder_gets_not_created_prompt_without_stale_warning(self):
         mcp_server.load_agent_notebook = (

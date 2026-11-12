@@ -2,6 +2,14 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
+
+## 2026-11-12：start 跳过全库统计并共用正文渲染（待验证）
+
+- 用户确认启动不计算字数、块数，需要时通过显式 refresh 获取；不新增统计缓存或后台任务。已确认方案保存点 f295798，路径 `docs/start启动与展示优化讨论-2026-11-12.md`。
+- start 改为元数据刷新；未计算统计写 null，列表、搜索和文档树显示未统计。启动概览只显示笔记本名称、ID、文档数和最近更新。
+- 先加载 Privacy Rules 并刷新安全索引，再共用 read 的展示块和嵌入解析读取可见系统文档；启动不附 SQL、来源 ID、块数统计和编辑提醒，read 默认输出保持不变。长期规范见 ARCHITECTURE.md「siyuan_start」「索引模型」。
+- 改动前轻量计时为内部 6.994 秒、统计 6.464 秒（92.4%）；原始产物保留在主仓库 start-performance-probe/20261112/。本轮自动化与能力库实调尚未完成，不宣称优化后耗时。
+
 ## 2026-11-12：整合全部现有分支（验证完成）
 
 - 用户授权把现有全部分支整合到 main，继续不发版。合入 codex/copy-full-path-menu 的 9 个提交（原 tip 55ab738）与 codex/compare-sisyphus-edit-design 的 1 个提交（原 tip 4bbd3b9）；read-token-estimation、siyuan-plugin、improve-siyuan-edit 已在 main 历史内，不重复引入。

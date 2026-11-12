@@ -103,6 +103,15 @@ class AgentNotebookReadTests(unittest.TestCase):
         self.assertNotIn("mcp_usage_guide", state.document_ids)
         self.assertNotIn("workspace_index_guide", state.document_ids)
 
+    def test_startup_bootstrap_exports_only_privacy_rules(self):
+        self._complete_documents()
+        state = load_agent_notebook(self.client, self.root, read_content=False)
+        self.assertEqual(self.client.exports, ["privacy-1"])
+        self.assertEqual(state.ai_guide_markdown, "")
+        self.assertEqual(state.workspace_index_markdown, "")
+        self.assertEqual(state.document_ids["workspace_index"], ("index-1",))
+
+
     def test_english_language_selects_english_guide_assets(self):
         self._complete_documents()
         self.client.notebooks = [{"id": "system-nb", "name": "SiYuan Bridge", "closed": False}]

@@ -7,7 +7,7 @@ import shutil
 import sys
 import time
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -46,6 +46,7 @@ from .agent_notebook import (
     collect_system_notebook_ids,
     is_privacy_rules_document,
     is_system_notebook_name,
+    is_workspace_index_placeholder,
     load_agent_notebook,
 )
 from .telemetry import (
@@ -493,6 +494,7 @@ class EmbedResolutionContext:
     compiled_ignore: list[dict[str, Any]]
     compiled_allow: list[dict[str, Any]]
     system_notebook_ids: frozenset[str] = frozenset()
+    include_details: bool = True
 
 
 @dataclass
@@ -1591,7 +1593,9 @@ def quote_embedded_markdown(markdown: str) -> str:
     return "\n".join(f"> {line}" if line else ">" for line in lines)
 
 
-def finish_embedded_content(content: EmbeddedContent, displayed_count: int) -> str:
+def finish_embedded_content(content: EmbeddedContent, displayed_count: int, *, include_details: bool = True) -> str:
+    if not include_details:
+        return content.markdown
     total_count = content.total_block_count
     if total_count is None:
         total_count = content.block_count
@@ -2097,12 +2101,12 @@ class McpServer:
         client: SiYuanClient,
         *,
         notify_missing: bool = False,
+        read_content: bool = True,
     ) -> AgentNotebookState:
         config = load_config(self.root)
         try:
-            state = load_agent_notebook(
-                client, self.root, config_language=config.language or None
-            )
+            options = {} if read_content else {"read_content": False}
+            state = load_agent_notebook(client, self.root, config_language=config.language or None, **options)
         except PrivacyRulesUnavailableError as exc:
             try:
                 client.push_err_msg(str(exc), timeout=12000)
@@ -2184,7 +2188,7 @@ class McpServer:
         ensure_session_id()
 
         # Read the plugin-maintained system notebook and parse privacy rules.
-        state = self._load_system_context(client, notify_missing=True)
+        state = self._load_system_context(client, notify_missing=True, read_content=False)
         nb_id = state.notebook_id
 
         # Cache privacy rules for other tools
@@ -2206,9 +2210,11 @@ class McpServer:
             client, self.root,
             system_notebook_id=nb_id,
             privacy_rules_doc_ids=set(state.privacy_rules_doc_ids),
+            include_stats=False,
         )
 
-        overview = build_notebook_overview(self.root)
+        state = self._render_startup_documents(client, state)
+        overview = build_notebook_overview(self.root, include_stats=False)
         overview = re.sub(r"^# [^\n]+\n+", "", overview).strip()
         total_ignore = len(state.privacy_rules.ignore)
         total_permissions = len(state.privacy_rules.permissions)
@@ -2251,7 +2257,7 @@ class McpServer:
                 else "（用户尚未填写个性化要求）"
             ),
             "",
-            "## 笔记本概览和统计",
+            "## 笔记本概览",
             "",
             overview,
             "",
@@ -2316,6 +2322,36 @@ class McpServer:
         self._active_profile = profile
         self._active_client = client
         return result
+
+    def _render_startup_documents(self, client: Any, state: AgentNotebookState) -> AgentNotebookState:
+        # 与 read 共用展示块、可见性过滤和嵌入解析；启动只改变附加信息的展示。
+        context = self._make_embed_resolution_context(client)
+        context.include_details = False
+        contents: dict[str, list[str]] = {}
+        for key in ("ai_guide", "workspace_index"):
+            contents[key] = []
+            for doc_id in state.document_ids.get(key, ()):
+                doc = context.docs_by_id.get(doc_id)
+                if doc is None:
+                    continue
+                with ensure_notebooks_open(client, [str(doc.get("notebook_id") or "")]):
+                    blocks = self._build_embedded_display_blocks(context, doc_id, 0, frozenset())
+                    self._expand_nested_embeds(blocks, include_details=False)
+                    parts = []
+                    for block in blocks:
+                        markdown = block.markdown
+                        if block.type != "query_embed":
+                            extract_attachments(markdown, client, doc_id, self.root)
+                            markdown = rewrite_local_asset_links(markdown, doc_id, self.root)
+                        if markdown.strip():
+                            parts.append(markdown)
+                    contents[key].append("\n\n".join(parts))
+        return replace(
+            state,
+            ai_guide_markdown="\n\n---\n\n".join(contents["ai_guide"]),
+            workspace_index_markdown="\n\n---\n\n".join(contents["workspace_index"]),
+            workspace_index_is_placeholder=is_workspace_index_placeholder(contents["workspace_index"]),
+        )
 
     def _refresh_safe_index(self) -> str:
         client = self._require_active_client()
@@ -2702,8 +2738,8 @@ class McpServer:
                     doc_path,
                     f"`{doc.get('id', '')}`",
                     permission,
-                    format_int(doc.get("word_count", 0)),
-                    format_int(doc.get("block_count", 0)),
+                    "未统计" if doc.get("word_count") is None else format_int(doc["word_count"]),
+                    "未统计" if doc.get("block_count") is None else format_int(doc["block_count"]),
                     format_date(str(doc.get("updated", ""))),
                     format_int(descendant_count(doc, docs)),
                     format_doc_tags(doc.get("tags")),
@@ -2717,6 +2753,8 @@ class McpServer:
                 f"还有 {remaining} 项未显示。",
                 f"继续：siyuan_list(path=\"{path}\", offset={offset + limit}, limit={limit})",
             ])
+        if any(doc.get("word_count") is None or doc.get("block_count") is None for doc in page):
+            lines.extend(["", '字数、块数未统计；需要时调用 siyuan_operate(action="refresh") 获取。'])
         return "\n".join(lines)
 
     def _notebook_name(self, notebook_id: str) -> str:
@@ -2824,7 +2862,8 @@ class McpServer:
                 doc_id = str(item.get("id") or "")
                 source = str(item.get("source") or "")
                 source_text = f" [{source}]" if source else ""
-                lines.append(f"- `{doc_id}` {hpath} {wc:,}字 {bc}块 {date}{source_text}".rstrip())
+                stats = f"{wc:,}字 {bc}块" if wc is not None and bc is not None else "字数、块数未统计"
+                lines.append(f"- `{doc_id}` {hpath} {stats} {date}{source_text}".rstrip())
                 tags_text = format_doc_tags(item.get("tags"))
                 if tags_text:
                     lines.append(f"  tag：{tags_text}")
@@ -3127,7 +3166,7 @@ class McpServer:
             embed_resolver=resolve,
         )
 
-    def _expand_nested_embeds(self, blocks: list[DisplayBlock]) -> list[DisplayBlock]:
+    def _expand_nested_embeds(self, blocks: list[DisplayBlock], *, include_details: bool = True) -> list[DisplayBlock]:
         for display_block in blocks:
             resolver = display_block.embed_resolver
             if resolver is None:
@@ -3137,7 +3176,10 @@ class McpServer:
             if embedded is None:
                 continue
             display_block.markdown = "\n".join(
-                part for part in (display_block.markdown, finish_embedded_content(embedded, embedded.block_count))
+                part for part in (
+                    display_block.markdown if include_details else "",
+                    finish_embedded_content(embedded, embedded.block_count, include_details=include_details),
+                )
                 if part
             )
             display_block.estimated_tokens = estimate_token_count(display_block.markdown)
@@ -3163,7 +3205,7 @@ class McpServer:
             blocks = self._build_embedded_display_blocks(
                 context, doc_id, nested_depth, nested_active_ids
             )
-            self._expand_nested_embeds(blocks)
+            self._expand_nested_embeds(blocks, include_details=context.include_details)
             markdown = "\n\n".join(item.markdown for item in blocks if item.markdown.strip())
             block_count = len(blocks)
         elif block_type == "h":
@@ -3175,7 +3217,7 @@ class McpServer:
             children = self._build_embedded_display_blocks(
                 context, block_id, nested_depth, nested_active_ids
             )
-            self._expand_nested_embeds(children)
+            self._expand_nested_embeds(children, include_details=context.include_details)
             markdown = "\n\n".join(
                 part for part in [heading_markdown, *(item.markdown for item in children)] if part.strip()
             )
@@ -3197,7 +3239,10 @@ class McpServer:
                 )
                 if nested is not None:
                     markdown = "\n".join(
-                        part for part in (markdown, finish_embedded_content(nested, nested.block_count)) if part
+                        part for part in (
+                            markdown if context.include_details else "",
+                            finish_embedded_content(nested, nested.block_count, include_details=context.include_details),
+                        ) if part
                     )
             block_count = 1 if markdown.strip() else 0
 
@@ -3237,13 +3282,13 @@ class McpServer:
                 lines = ["嵌入块内容："]
                 if len(matches) == 1:
                     lines = [
-                        f"嵌入块来源：{self._embedded_source_label(matches[0])}",
+                        f"嵌入块来源：{self._embedded_source_label(matches[0], include_ids=context.include_details)}",
                         f"嵌入块内容：{stop_reason}",
                     ]
                 else:
                     for target in matches[:MAX_EMBED_RESULTS]:
                         lines.extend([
-                            f"嵌入块来源：{self._embedded_source_label(target)}",
+                            f"嵌入块来源：{self._embedded_source_label(target, include_ids=context.include_details)}",
                             f"> {stop_reason}",
                         ])
                 return EmbeddedContent("\n".join(lines), 0)
@@ -3294,7 +3339,7 @@ class McpServer:
                         "\n".join(["嵌入块来源：查无此块", "嵌入块内容：", "> 查无此块"]),
                         0,
                     )
-                rendered.append((self._embedded_source_label(target), markdown))
+                rendered.append((self._embedded_source_label(target, include_ids=context.include_details), markdown))
                 block_count += rendered_count
 
             if len(rendered) == 1:
@@ -3307,13 +3352,19 @@ class McpServer:
                     body_lines.append(f"嵌入块来源：{source}")
                     body_lines.append(quote_embedded_markdown(markdown))
             total_block_count = block_count + truncated_match_count
+            if not context.include_details:
+                body_lines = [line for line in body_lines if line != "嵌入块内容："]
+                if truncated_match_count:
+                    body_lines.append("> 嵌入结果超过展示上限，未全部展开。")
             return EmbeddedContent("\n".join(body_lines), block_count, total_block_count)
 
-    def _embedded_source_label(self, target: dict[str, Any]) -> str:
+    def _embedded_source_label(self, target: dict[str, Any], *, include_ids: bool = True) -> str:
         block = target["block"]
         doc = target["document"]
         doc_id = str(doc.get("id") or "")
         block_type = str(block.get("type") or "")
+        if not include_ids:
+            return display_document_path(doc)
         label = f"{display_document_path(doc)} {doc_id}"
         if block_type not in ("d", "NodeDocument"):
             label += f" {block.get('id') or ''}".rstrip()
@@ -5316,7 +5367,7 @@ def tool_specs() -> list[dict[str, Any]]:
     return [
         {
             "name": "siyuan_start",
-            "description": "Read the plugin-maintained system notebook, load and merge all registered system documents, refresh the safe index, and return the mandatory startup packet: notebook overview table, Workspace Index, MCP Usage Guide, and User Preferences. This tool never creates, updates, migrates, or registers system documents. Missing non-privacy documents produce a warning and startup continues; if all registered Privacy Rules documents are missing, startup stops and asks the user to disable and re-enable the plugin. Always call this first.",
+            "description": "Read the plugin-maintained system notebook, load and merge system documents, refresh safe document metadata without full-workspace word/block counts, and return the mandatory startup packet: notebook overview table, Workspace Index, MCP Usage Guide, and User Preferences. This tool never creates, updates, migrates, or registers system documents. Missing non-privacy documents produce a warning and startup continues; if all registered Privacy Rules documents are missing, startup stops and asks the user to disable and re-enable the plugin. Always call this first.",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
         },
         {
@@ -5325,7 +5376,7 @@ def tool_specs() -> list[dict[str, Any]]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["refresh", "sync", "check_forward_references", "check_backward_references"], "description": "refresh: update the local safe index without cleaning ai_workspace. sync: trigger SiYuan built-in default sync. check_forward_references: show which blocks this document references, grouped by target document. check_backward_references: show which blocks reference this document or its blocks, grouped by source document. Both reference queries detail the selected document, summarize descendants, and include references within the same document."},
+                    "action": {"type": "string", "enum": ["refresh", "sync", "check_forward_references", "check_backward_references"], "description": "refresh: update the local safe index and word/block counts without cleaning ai_workspace. sync: trigger SiYuan built-in default sync. check_forward_references: show which blocks this document references, grouped by target document. check_backward_references: show which blocks reference this document or its blocks, grouped by source document. Both reference queries detail the selected document, summarize descendants, and include references within the same document."},
                     "timeout_seconds": {"type": "integer", "default": 10, "description": "For action=sync only. How long to wait for SiYuan built-in sync to return, 5-120 seconds. Does not change SiYuan sync behavior."},
                     "document": {"type": "string", "description": "For either reference query. Preferred document path including notebook name. Existing unique-title and unique-partial locator compatibility is preserved."},
                     "document_id": {"type": "string", "description": "For either reference query. Document ID fallback when the path is ambiguous or unavailable. If document is also provided, it must identify the same document. A body block ID is rejected."},
