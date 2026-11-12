@@ -134,7 +134,7 @@ class StartupPacketTests(unittest.TestCase):
             "### 用户个性化要求",
             "### 工作空间索引",
         ]
-        positions = [result.index(heading) for heading in headings]
+        positions = [result.splitlines().index(heading) for heading in headings]
         self.assertEqual(positions, sorted(positions))
         self.assertEqual(
             [line for line in result.splitlines() if line.startswith("## ")],
