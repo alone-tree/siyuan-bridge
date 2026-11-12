@@ -2,11 +2,13 @@
 
 > **2026-06-07**：项目已更名为 **SiYuan Bridge（思源桥）**。本文档中 `siyuan-agent-bridge` 均为历史旧名记录，不反映当前项目名称。
 
-## 2026-11-12：整合全部现有分支（待验证）
+## 2026-11-12：整合全部现有分支（验证完成）
 
 - 用户授权把现有全部分支整合到 main，继续不发版。合入 codex/copy-full-path-menu 的 9 个提交（原 tip 55ab738）与 codex/compare-sisyphus-edit-design 的 1 个提交（原 tip 4bbd3b9）；read-token-estimation、siyuan-plugin、improve-siyuan-edit 已在 main 历史内，不重复引入。
 - 两次冲突均位于 devlog：保留 11 月 token 估算与复制菜单记录，并将旧比较记录并入 2026-06-02 章节；保留 main 此后的全部演进内容。docs/compare-sisyphus-qa.md 标为历史讨论，不能用旧工具名或旧实现判断当前行为。
-- 当前合并未改写两侧功能代码；计划运行全量 pytest、前端语法与菜单行为检查，并逐一核对本地及远端所有分支 tip 均为 main 祖先。测算产物和本地配置保持不跟踪，未部署、未升级版本或创建 Release。
+- 合并提交：6b8c77c（完整路径菜单）、7d627f8（比较文档）。验证两侧功能代码内容保持原样；main 合并前的日志原文逐行完整保留，当前已无冲突标记。
+- 合并后全量 python -m pytest tests -q 为 470 passed、1 skipped、11 条现有 locale 弃用警告；两个前端 node --check 及 20 项菜单/开关 Node 行为测试通过。Git 祖先检查确认全部 5 条其他本地分支及对应远端分支都已被 main 包含。
+- 测算产物和本地配置保持不跟踪，既有分支和其他工作区保留。未导入测试或用户插件，未升级版本、打 tag 或创建 Release；完整路径开关的真实界面验收状态仍见 2026-11-11 记录。
 
 ## 2026-11-12：read 全返回文本 token 估算（验证完成）
 
