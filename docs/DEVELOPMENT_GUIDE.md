@@ -528,6 +528,22 @@ python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE%
 
 旧版升级必须验证：在插件程序目录准备旧配置、遥测、隐私缓存与 `stats/`（旧 `system_state.json` 不迁移），插件数据区为空时普通导入会完整复制；插件数据区预置不同内容时保持目标不变；插件启用后 Python Bridge 读到插件数据区内容。跨设备 Token 合并改动还必须验证：在插件数据区准备一个已有其他设备 Token 的 `config.local.json`，启用插件后当前设备 Token 会追加到 profiles，原有 profile 的名称、Token 和顺序保持不变；重复启用不产生重复项；打开设置页同样合并当前 Token，改动任意配置项后随 500ms 防抖自动保存写入。MCP 会话连接改动必须验证：未调用 `siyuan_start` 时普通工具明确要求先 start；一次成功 start 后多个工具不重复探测 profiles；连接或 401/403 鉴权失效后缓存被清空并要求重新 start。
 
+### 公司电脑 caplib CLI 验证入口
+
+2026-11-12 已按用户明确授权在 `D:\HermesSync\capability-library\mcps\registry.json` 注册 `siyuan-bridge-dev`。本机使用能力库 CLI，不依赖平台暴露 `mcp_load/mcp_use`；下方 DSH 方式仅适用于实际存在旧 DSH 注册表的环境。
+
+- 开发版直接指向本次工作树 `C:\Users\Zinger\.codex\worktrees\read-token-estimation\siyuan-agent-bridge`，运行 `python -m source_code.mcp_server`；不是主仓库或用户安装副本。移动或归档工作树前应先处理该注册项。
+- 修改能力库前先读 `D:\HermesSync\capability-library\capability-entry\references\能力库维护指南.md`。以后复用已有条目，只切换 `enabled`，不要重复注册；确需更换源码路径时先核对本次验证的分支和工作树。
+- 平时 `enabled=false`；验证前临时启用，`load --keep-alive` 后先调用 `siyuan_start`，再逐次 `use` 调用受影响工具。结束时先 `close`，再恢复停用并刷新、检查能力库索引。
+- 工作树使用自身被 Git 忽略的连接配置与关闭的遥测配置；验证使用「测试思源桥专用」现有夹具。注册表只保存启动配置，不复制 Token。
+
+```powershell
+cmd.exe /d /c D:\HermesSync\capability-library\caplib.cmd load --name siyuan-bridge-dev --keep-alive
+cmd.exe /d /c D:\HermesSync\capability-library\caplib.cmd use --mcp siyuan-bridge-dev --tool siyuan_start
+cmd.exe /d /c D:\HermesSync\capability-library\caplib.cmd use --mcp siyuan-bridge-dev --tool siyuan_read --params-file <参数文件绝对路径>
+cmd.exe /d /c D:\HermesSync\capability-library\caplib.cmd close --name siyuan-bridge-dev
+```
+
 ### DSH 能力库中的三个思源桥
 
 DSH 能力库注册表（`~/.dsh/skill-mcp-manager/registry.json`）里只保留三个思源桥。开发版和测试版已经注册好。第二层验证只切换这两个的档位，禁止再 `mcp_register` 新名字，也禁止删除这两个正式注册项。
