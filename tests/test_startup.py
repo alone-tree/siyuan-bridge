@@ -124,33 +124,29 @@ class StartupPacketTests(unittest.TestCase):
         result = mcp_server.McpServer(self.root).siyuan_start({})
 
         headings = [
-            "## 开发者说明",
-            "### MCP 使用指南",
-            "### 工作空间索引创建指南",
             "## 运行状态与程序数据",
-            "### 连接与隐私状态",
-            "### 笔记本概览",
-            "## 用户维护内容",
-            "### 用户个性化要求",
-            "### 工作空间索引",
+            "## 工作空间索引",
+            "## 用户个性化要求",
+            "## 思源桥使用指南",
+            "### 工作空间索引创建指南",
         ]
         positions = [result.splitlines().index(heading) for heading in headings]
         self.assertEqual(positions, sorted(positions))
         self.assertEqual(
             [line for line in result.splitlines() if line.startswith("## ")],
-            ["## 开发者说明", "## 运行状态与程序数据", "## 用户维护内容"],
+            ["## 运行状态与程序数据", "## 工作空间索引", "## 用户个性化要求", "## 思源桥使用指南"],
         )
-        self.assertIn("#### 我的工作空间索引", result)
+        self.assertIn("### 我的工作空间索引", result)
         self.assertIn("这是完整 MCP 使用指南。", result)
         self.assertIn("用户要求：简洁回答。", result)
-        self.assertIn("思源版本：3.7.2", result)
+        self.assertIn(f"思源版本：3.7.2\n\n思源桥MCP版本：{mcp_server.__version__}", result)
         self.assertIn("隐私规则：已正常加载（无规则）", result)
         self.assertIn("最后更新时间：2026-05-01 00:00", result)
         self.assertNotIn("语言偏好", result)
         self.assertNotIn("给人看的说明", result)
         self.assertNotIn("系统笔记本：", result)
         self.assertIn("| 笔记本 | ID | 文档数 | 字数 | 块数 | 最近更新 |", result)
-        self.assertIn("字数、块数来自已有索引统计，非实时", result)
+        self.assertIn('字数、块数统计时间：未记录。需要更新时调用 siyuan_operate(action="refresh")。', result)
 
     def test_start_requests_metadata_only_before_rendering(self):
         mcp_server.load_agent_notebook = lambda *_args, **_kwargs: self._state()
@@ -193,7 +189,7 @@ class StartupPacketTests(unittest.TestCase):
         self.assertIn("# 思源桥启动包", result)
         self.assertIn("### 系统文档警告", result)
         self.assertLess(result.index("## 运行状态与程序数据"), result.index("### 系统文档警告"))
-        self.assertLess(result.index("### 系统文档警告"), result.index("## 用户维护内容"))
+        self.assertLess(result.splitlines().index("### 系统文档警告"), result.splitlines().index("## 工作空间索引"))
         self.assertIn("关于思源桥、用户个性化要求", result)
         self.assertEqual(len(self.client.messages), 1)
         self.assertIn("当前仍可继续使用", self.client.messages[0][0])
@@ -210,7 +206,7 @@ class StartupPacketTests(unittest.TestCase):
         original_blocks = json.dumps(self.client.blocks)
         result = mcp_server.McpServer(self.root)._render_startup_documents(self.client, state)
         self.assertEqual(result.workspace_index_markdown,
-                         "#### 第一篇\n##### 第一子节\n\n---\n\n#### 第二篇\n##### 第二子节")
+                         "### 第一篇\n#### 第一子节\n\n---\n\n### 第二篇\n#### 第二子节")
         self.assertEqual(json.dumps(self.client.blocks), original_blocks)
 
     def test_index_age_boundary_is_strictly_more_than_30_days(self):
@@ -230,18 +226,18 @@ class StartupPacketTests(unittest.TestCase):
 class StartupHeadingTests(unittest.TestCase):
     def test_preserves_relative_heading_depth_and_clamps_to_six(self):
         result = mcp_server.nest_startup_headings("## 章\n### 节\n#### 小节\n###### 深层\n")
-        self.assertEqual(result, "#### 章\n##### 节\n###### 小节\n###### 深层\n")
+        self.assertEqual(result, "### 章\n#### 节\n##### 小节\n###### 深层\n")
 
     def test_fenced_indented_and_quoted_headings_do_not_affect_nesting(self):
         body = ("## 真实标题\n```markdown\n# 代码示例\n```\n"
                 "~~~text\n# 另一示例\n~~~\n    # 缩进代码\n\t# 制表符代码\n"
                 "> # 引用标题\n> > ## 嵌套引用标题\n### 真实子节\n")
         result = mcp_server.nest_startup_headings(body)
-        self.assertEqual(result, body.replace("## 真实标题", "#### 真实标题").replace("### 真实子节", "##### 真实子节"))
+        self.assertEqual(result, body.replace("## 真实标题", "### 真实标题").replace("### 真实子节", "#### 真实子节"))
 
     def test_longer_fence_with_shorter_inner_marker_stays_open(self):
         body = "````markdown\n```\n# 代码标题\n````\n## 正文标题\n"
-        self.assertEqual(mcp_server.nest_startup_headings(body), body.replace("## 正文标题", "#### 正文标题"))
+        self.assertEqual(mcp_server.nest_startup_headings(body), body.replace("## 正文标题", "### 正文标题"))
 
     def test_body_without_headings_is_unchanged(self):
         body = "普通正文\n\n> ## 引用\n\n    # 代码\n"

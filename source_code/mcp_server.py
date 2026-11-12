@@ -1586,7 +1586,7 @@ def extract_embed_select(markdown: str) -> str | None:
     return statement
 
 
-def nest_startup_headings(markdown: str, first_level: int = 4) -> str:
+def nest_startup_headings(markdown: str, first_level: int = 3) -> str:
     """将单篇正文标题嵌入启动包；代码与引用中的原文保持不变。"""
     lines = markdown.splitlines(keepends=True)
     headings: list[tuple[int, re.Match[str]]] = []
@@ -2242,7 +2242,6 @@ class McpServer:
         state = self._render_startup_documents(client, state)
         overview = build_notebook_overview(self.root)
         overview = re.sub(r"^# [^\n]+\n+", "", overview).strip()
-        overview += '\n\n字数、块数来自已有索引统计，非实时；需要更新时调用 siyuan_operate(action="refresh")。'
         total_ignore = len(state.privacy_rules.ignore)
         total_permissions = len(state.privacy_rules.permissions)
         nb_rules = [
@@ -2263,30 +2262,13 @@ class McpServer:
         parts: list[str] = [
             "# 思源桥启动包",
             "",
-            "## 开发者说明",
-            "",
-            "### MCP 使用指南",
-            "",
-            (
-                nest_startup_headings(state.mcp_usage_guide_markdown.strip())
-                if state.mcp_usage_guide_markdown
-                else "（MCP 使用指南为空）"
-            ),
-            "",
-            "### 工作空间索引创建指南",
-            "",
-            (
-                "创建或更新索引前，先阅读索引创建／更新指南："
-                f"`{state.workspace_index_guide_path}`"
-                if state.workspace_index_guide_path
-                else "创建或更新索引前，先阅读内置的索引创建／更新指南。"
-            ),
-            "",
             "## 运行状态与程序数据",
             "",
-            "### 连接与隐私状态",
+            f"思源版本：{version}",
             "",
-            f"思源版本：{version}｜当前工作空间：{profile.name}｜隐私规则：{privacy_status}",
+            f"思源桥MCP版本：{__version__}",
+            "",
+            f"当前工作空间：{profile.name}｜隐私规则：{privacy_status}",
             "",
         ]
         non_privacy_missing = [
@@ -2310,17 +2292,9 @@ class McpServer:
             ])
 
         parts.extend([
-            "### 笔记本概览",
-            "",
             overview,
             "",
-            "## 用户维护内容",
-            "",
-            "### 用户个性化要求",
-            "",
-            state.ai_guide_markdown.strip() if state.ai_guide_markdown else "（用户尚未填写个性化要求）",
-            "",
-            "### 工作空间索引",
+            "## 工作空间索引",
             "",
             f"最后更新时间：{format_siyuan_updated(state.workspace_index_updated)}",
             "",
@@ -2332,7 +2306,7 @@ class McpServer:
                 "",
                 (
                     "> 用户尚未创建工作空间索引。请询问用户是否需要创建；"
-                    "创建方法见启动包上方给出的索引创建指南。"
+                    "创建方法见启动包「思源桥使用指南」中的索引创建指南。"
                 ),
             ])
         elif age_days is not None and age_days > 30:
@@ -2340,7 +2314,7 @@ class McpServer:
                 "",
                 (
                     f"> 工作空间索引已经 {age_days} 天没有更新。请询问用户是否需要更新；"
-                    "更新方法见启动包上方给出的索引创建指南。"
+                    "更新方法见启动包「思源桥使用指南」中的索引创建指南。"
                 ),
             ])
         parts.extend([
@@ -2349,6 +2323,27 @@ class McpServer:
                 state.workspace_index_markdown.strip()
                 if state.workspace_index_markdown
                 else "（工作空间索引为空）"
+            ),
+            "",
+            "## 用户个性化要求",
+            "",
+            state.ai_guide_markdown.strip() if state.ai_guide_markdown else "（用户尚未填写个性化要求）",
+            "",
+            "## 思源桥使用指南",
+            "",
+            (
+                nest_startup_headings(state.mcp_usage_guide_markdown.strip())
+                if state.mcp_usage_guide_markdown
+                else "（MCP 使用指南为空）"
+            ),
+            "",
+            "### 工作空间索引创建指南",
+            "",
+            (
+                "创建或更新索引前，先阅读索引创建／更新指南："
+                f"`{state.workspace_index_guide_path}`"
+                if state.workspace_index_guide_path
+                else "创建或更新索引前，先阅读内置的索引创建／更新指南。"
             ),
             "",
         ])
@@ -5401,7 +5396,7 @@ def tool_specs() -> list[dict[str, Any]]:
     return [
         {
             "name": "siyuan_start",
-            "description": "Read the plugin-maintained system notebook, load and merge system documents, refresh safe document metadata without full-workspace word/block counts, and return the startup packet grouped into developer instructions, runtime data, and user-maintained content. This tool never creates, updates, migrates, or registers system documents. Missing non-privacy documents produce a warning and startup continues; if all registered Privacy Rules documents are missing, startup stops and asks the user to disable and re-enable the plugin. Always call this first.",
+            "description": "Read the plugin-maintained system notebook, load and merge system documents, refresh safe document metadata without full-workspace word/block counts, and return the startup packet in this order: runtime data, Workspace Index, User Preferences, and usage instructions. This tool never creates, updates, migrates, or registers system documents. Missing non-privacy documents produce a warning and startup continues; if all registered Privacy Rules documents are missing, startup stops and asks the user to disable and re-enable the plugin. Always call this first.",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
         },
         {

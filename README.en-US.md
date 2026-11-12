@@ -2,6 +2,8 @@
 
 Let AI safely read, search, and edit your SiYuan notes.
 
+Each session startup refreshes document metadata and reuses existing word/block statistics, showing the device time when they were calculated. Ask the AI to refresh the index when updated statistics are needed. New documents without statistics show “not counted.” User Preferences and Workspace Index use the shared block renderer, preserving embedded sources and quote nesting.
+
 After installing Siyuan Bridge, you can work with your knowledge base directly inside AI agents like Codex, Claude Code, Hermes, and WorkBuddy. Just tell the AI what to find, read, or modify — Siyuan Bridge handles document navigation, long-text reading, block structure, and write verification.
 
 It focuses on documents and knowledge bases: writing, organizing, editing tables, managing document trees, and handling cross-document references. Databases, flashcards, and block styling are not currently supported.

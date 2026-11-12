@@ -5,7 +5,7 @@ import re
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Generator, Iterable
 
@@ -127,7 +127,7 @@ def refresh_index(
         else:
             for doc in docs:
                 previous = previous_docs.get(str(doc["id"]), {})
-                for key in ("word_count", "block_count", "char_count"):
+                for key in ("word_count", "block_count", "char_count", "stats_updated_at"):
                     doc[key] = previous.get(key)
 
     # Hard-remove Privacy Rules document from all AI-facing indexes
@@ -277,12 +277,14 @@ def update_document_stats(client: SiYuanClient, docs: list[dict[str, Any]]) -> N
     stats = _fetch_block_stats(client)
     doc_ids = {str(doc["id"]) for doc in docs}
     word_counts = _compute_word_counts_from_blocks(client, doc_ids)
+    stats_updated_at = datetime.now().astimezone().isoformat(timespec="seconds")
     for doc in docs:
         did = str(doc["id"])
         s = stats.get(did, {})
         doc["block_count"] = s.get("block_count", 0)
         doc["char_count"] = s.get("char_count", 0)
         doc["word_count"] = word_counts.get(did, 0)
+        doc["stats_updated_at"] = stats_updated_at
 
 
 def parse_tags(value: Any) -> list[str]:
@@ -364,12 +366,14 @@ def render_notebook_overview(
         total_words = sum_document_stat(doc_list, "word_count")
         total_blocks = sum_document_stat(doc_list, "block_count")
         stats = f" | {format_word_count(total_words)} | {format_block_count(total_blocks)}"
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+        recorded_at = max((doc.get("stats_updated_at") or "" for doc in doc_list), default="")
+        stats_time = datetime.fromisoformat(recorded_at).astimezone().strftime("%Y-%m-%d %H:%M:%S") if recorded_at else "未记录"
+        stats += f' 字数、块数统计时间：{stats_time}。需要更新时调用 siyuan_operate(action="refresh")。'
 
     lines = [
         "# 思源桥文档树",
         "",
-        f"> {now} | {len(notebook_list)} 个笔记本 | {len(doc_list)} 篇文档{stats}",
+        f"> {len(notebook_list)} 个笔记本 | {len(doc_list)} 篇文档{stats}",
         "",
         "| 笔记本 | ID | 文档数 | 字数 | 块数 | 最近更新 |" if include_stats else "| 笔记本 | ID | 文档数 | 最近更新 |",
         "|----------|----|------|------|------|----------|" if include_stats else "|----------|----|------|----------|",

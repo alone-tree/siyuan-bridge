@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import unittest
+from datetime import datetime, timedelta
 from unittest import mock
 from pathlib import Path
 
@@ -129,11 +130,29 @@ class IndexerTests(unittest.TestCase):
         self.assertIn("| 笔记本 | ID | 文档数 | 字数 | 块数 | 最近更新 |", tree)
         self.assertIn("字数未统计", tree)
 
-        refresh_index(client, root)
+        first_time = datetime(2026, 11, 12, 9, 30, 15).astimezone()
+        with mock.patch.object(indexer, "datetime", wraps=datetime) as clock:
+            clock.now.return_value = first_time
+            refresh_index(client, root)
         cached = {doc["id"]: doc for doc in indexer.load_docs(root)}
         self.assertTrue(all(doc["word_count"] > 0 and doc["block_count"] > 0 for doc in cached.values()))
-        refresh_index(client, root, include_stats=False)
+        self.assertEqual({doc["stats_updated_at"] for doc in cached.values()}, {first_time.isoformat(timespec="seconds")})
+        with mock.patch.object(indexer, "datetime", wraps=datetime) as clock:
+            clock.now.side_effect = AssertionError("start 不应生成新统计时间")
+            refresh_index(client, root, include_stats=False)
         self.assertEqual(cached, {doc["id"]: doc for doc in indexer.load_docs(root)})
+        self.assertIn("字数、块数统计时间：2026-11-12 09:30:15", indexer.build_notebook_overview(root))
+        with mock.patch.object(indexer, "datetime", wraps=datetime) as clock:
+            clock.now.return_value = first_time + timedelta(hours=1)
+            refresh_index(client, root)
+        self.assertIn("字数、块数统计时间：2026-11-12 10:30:15", indexer.build_notebook_overview(root))
+
+    def test_legacy_statistics_do_not_invent_a_recorded_time(self):
+        overview = indexer.render_notebook_overview(
+            [{"id": "nb1", "name": "Main"}],
+            [{"notebook_id": "nb1", "word_count": 1234, "block_count": 20}],
+        )
+        self.assertIn("> 1 个笔记本 | 1 篇文档 | 1,234 字 | 20 块 字数、块数统计时间：未记录。", overview)
 
     def test_metadata_refresh_reuses_statistics_by_id_but_updates_paths_and_membership(self):
         root = Path.cwd() / ".test_tmp" / "indexer_reused_stats"
@@ -157,8 +176,10 @@ class IndexerTests(unittest.TestCase):
         self.assertEqual(docs[cached["id"]]["updated"], "20261112000000")
         self.assertEqual(docs[cached["id"]]["word_count"], cached["word_count"])
         self.assertEqual(docs[cached["id"]]["block_count"], cached["block_count"])
+        self.assertEqual(docs[cached["id"]]["stats_updated_at"], cached["stats_updated_at"])
         self.assertIsNone(docs["new-doc"]["word_count"])
         self.assertIsNone(docs["new-doc"]["block_count"])
+        self.assertIsNone(docs["new-doc"]["stats_updated_at"])
         overview = indexer.build_notebook_overview(root)
         self.assertIn("| Main | `nb1` | 2 | 未统计 | 未统计 |", overview)
 
