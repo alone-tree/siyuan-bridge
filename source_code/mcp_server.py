@@ -76,7 +76,7 @@ MAX_REFERENCE_BLOCK_CHARACTERS = 2000
 POST_WRITE_SYNC_TIMEOUT = 5.0
 POST_WRITE_SYNC_INTERVAL = 0.25
 ASSET_LARGE_FILE_THRESHOLD_BYTES = 20 * 1024 * 1024
-# 读侧单笔响应图片总量预算：逐图累计 base64 字节上限（docs/图片总量闸门方案-2026-09-28.md）。
+# 读侧图片预算：处理后的原图完整组累计 Base64 字节，现行契约见 ARCHITECTURE.md「本地图片处理」。
 # 只约束 siyuan_read 的图片内联；写入侧 insert_assets 的 20 MB 阈值与此无关。
 # MCP SDK 客户端默认单消息读缓冲 10 MB（10,485,760 字节），9 MB 留出文本与协议开销余量。
 # 这是内置默认值；插件设置页「单次读取时总图片体积上限」通过 config.local.json 的
@@ -91,7 +91,7 @@ SIYUAN_IMAGE_EXTENSIONS = frozenset({
 })
 
 # 读文档时内联返回图片（docs/图片内联需求-2026-09-14.md 的已定决策）。
-# 单张计价 1,568 token 取主流厂商单图上限；单张上限与 insert_assets 的 20 MB 大文件阈值一致。
+# 未携带尺寸的内部旧调用保留估算值；正常读取按各切片的实际尺寸累计。
 INLINE_IMAGE_TOKEN_COST = 1568
 INLINE_IMAGE_MIME: dict[str, str] = {
     ".png": "image/png",
@@ -5627,7 +5627,7 @@ def tool_specs() -> list[dict[str, Any]]:
                     "document_id": {"type": "string", "description": "Document ID fallback or disambiguator. If document is also provided, both must identify the same document."},
                     "block_start": {"type": "integer", "default": 1, "description": "Starting display block index (1-based). Default 1 reads from the first block."},
                     "block_limit": {"type": "integer", "default": DEFAULT_BLOCK_LIMIT, "description": "Maximum display blocks to return in this window, 1–1000."},
-                    "token_budget": {"type": "integer", "default": DEFAULT_TOKEN_BUDGET, "description": "Estimated token budget for the complete returned text and inline images, including outline, block IDs and paths. At least one complete plain block is returned."},
+                    "token_budget": {"type": "integer", "default": DEFAULT_TOKEN_BUDGET, "description": "Estimated text budget for pagination, including outline, block IDs and paths. Image tokens are estimated separately by delivered dimensions and included in the reported total; an original image's slices are never split across calls. At least one complete plain block is returned."},
                     "include_block_ids": {"type": "boolean", "default": False, "description": "Enable reference reading for editing: each block is shown as [index] id=... type=... followed by content. Use these exact values for siyuan_edit start_index/start_id."},
                     "include_images": {"type": "boolean", "description": "Control whether images in this window are returned as image content blocks alongside the text. Omit to follow the plugin's inline-image setting; set true to inline images for this call, or false to return only image locations for AI to read separately. Inlined images still count toward the token budget and the per-call image budget; images beyond the budget are reported at their position with their location."},
                     "include_large_images": {"type": "boolean", "default": False, "description": "Preserve original pixels without lossy compression. Long images are still split and every slice from one original is returned together. Standard reads automatically optimize image size and quality. Both modes obey the per-call image budget and the complete 10 MB response limit. Only relevant when images are included."},

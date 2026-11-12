@@ -5,6 +5,7 @@ import hashlib
 import importlib
 import json
 import platform
+import re
 import shutil
 import sys
 import sysconfig
@@ -40,7 +41,19 @@ def select_wheel(wheels: list[dict]) -> dict:
     if system == "Windows":
         plat = sysconfig.get_platform().replace("-", "_")
     elif system == "Darwin":
-        plat = "macosx_11_0_arm64" if machine == "arm64" else "macosx_10_13_x86_64"
+        arch = "arm64" if machine == "arm64" else "x86_64"
+        release = platform.mac_ver()[0]
+        running = tuple(int(n) for n in release.split(".")[:2]) if release else None
+        candidates = []
+        for wheel in wheels:
+            match = re.search(rf"-{py}-{abi}-macosx_(\d+)_(\d+)_{arch}\.whl$", wheel["filename"])
+            if match:
+                minimum = (int(match[1]), int(match[2]))
+                if running is None or minimum <= running:
+                    candidates.append((minimum, wheel))
+        if candidates:
+            return max(candidates, key=lambda candidate: candidate[0])[1]
+        raise RuntimeError("当前 macOS/Python 没有兼容的预编译图片组件")
     elif system == "Linux":
         arch = "aarch64" if machine in ("aarch64", "arm64") else "x86_64" if machine in ("x86_64", "amd64") else machine
         libc, version = platform.libc_ver()
