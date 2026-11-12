@@ -11,6 +11,13 @@ SRC_INDEX_JS = Path(__file__).resolve().parents[1] / "siyuan-plugin" / "src" / "
 
 
 class PluginEntryContractTests(unittest.TestCase):
+    def test_image_dependency_preparation(self):
+        completed = subprocess.run(
+            ["node", str(Path(__file__).with_name("test_plugin_images.js"))],
+            capture_output=True, text=True, encoding="utf-8",
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
     def test_full_path_copy_menu_behavior(self):
         completed = subprocess.run(
             ["node", str(Path(__file__).with_name("test_plugin_menu.js"))],
