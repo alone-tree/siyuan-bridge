@@ -2,9 +2,13 @@
 
 Let AI safely read, search, and edit your SiYuan notes.
 
+Each session startup refreshes document metadata and reuses existing word/block statistics, showing the device time when they were calculated. Ask the AI to refresh the index when updated statistics are needed. New documents without statistics show “not counted.” User Preferences and Workspace Index use the shared block renderer, preserving embedded sources and quote nesting.
+
 After installing Siyuan Bridge, you can work with your knowledge base directly inside AI agents like Codex, Claude Code, Hermes, and WorkBuddy. Just tell the AI what to find, read, or modify — Siyuan Bridge handles document navigation, long-text reading, block structure, and write verification.
 
 It focuses on documents and knowledge bases: writing, organizing, editing tables, managing document trees, and handling cross-document references. Databases, flashcards, and block styling are not currently supported.
+
+Session startup refreshes document metadata and reuses word and block counts from the existing index. Ask the AI to refresh the index to update these statistics. Documents without prior statistics are marked as not counted. User Preferences and the Workspace Index use block-based rendering, preserving embedded content sources and quotation nesting.
 
 ## What You Can Ask AI to Do
 
@@ -17,11 +21,13 @@ It focuses on documents and knowledge bases: writing, organizing, editing tables
 - "Import a local Markdown file as a new note, or insert part of it into an existing note."
 - "Create a new project notebook and organize these PDFs into categorized documents."
 
-AI can search the entire knowledge base by keyword and browse notebook and document trees. SQL search returns the first 20 privacy-visible hits in the original query order: complete text for body blocks, or the first 20 display blocks for documents. Hidden content is neither returned nor counted. Images remain addresses and embedded SQL is not expanded. Upstream truncation includes LIMIT/OFFSET guidance; the bridge does not automatically fetch more candidates. For long documents, it sees the outline first, then reads in complete paragraphs — never splitting mid-sentence. When editing, it can rewrite single paragraphs, reorganize multiple paragraphs, insert before or after, delete ranges, and append.
+AI can search the entire knowledge base by keyword and browse notebook and document trees. SQL search returns the first 20 privacy-visible hits in the original query order: complete text for body blocks, or the first 20 display blocks for documents. Hidden content is neither returned nor counted. Images remain addresses and embedded SQL is not expanded. Upstream truncation includes LIMIT/OFFSET guidance; the bridge does not automatically fetch more candidates. For long documents, it sees the outline first, then reads in complete paragraphs — never splitting mid-sentence. All returned text, including outlines, block numbers, IDs, table coordinates, and attachment paths, counts toward the same reading budget. When editing, it can rewrite single paragraphs, reorganize multiple paragraphs, insert before or after, delete ranges, and append.
 
 Tables support cell-level editing by row and column, including adding or removing rows and columns. Images and files can be uploaded to SiYuan assets; local folders are inserted as links. Local Markdown files can be imported directly as new documents, or their content inserted at a specific position in an existing document. Local image, file, and folder references in the Markdown are imported as SiYuan assets; network URLs are left unchanged. AI can also create notebooks and documents, and rename, move, copy, export, or delete existing ones.
 
-After enabling "Read images together with documents by default" in the plugin settings, AI reads documents with screenshots and charts interleaved with the text in original order. Images per read call are capped at 9 MB in total by default (adjustable under "Advanced" in the plugin settings); images that do not fit are reported with a reason plus the local file path or original URL so AI can read them separately. With the toggle off, the text keeps only image locations; AI can also override this per call with the include_images parameter. With your explicit confirmation, AI may bypass this cap and return all images in one call. This toggle is off by default. **Important:** If your model does not support image input, enabling this may cause an error when the tool is called. I have not actually verified this. Most models that previously could not view images, including DeepSeek and GLM, now support multimodal input. If you hit an error, please open an issue or report it in the community.
+After enabling "Read images together with documents by default", screenshots and charts are returned with the text in document order. Standard reads automatically reduce image size while preserving useful visual detail. Images with an aspect ratio greater than 3:1 are split, and every slice from one original is returned together. AI can select include_large_images for original-pixel reading without lossy compression; long images may still be split. Original attachments remain unchanged.
+
+Image components are downloaded automatically into SiYuan Bridge's own directory and reused; no manual installation is needed. The default image budget is 9 MiB (adjustable under "Advanced"), and the entire response always respects the 10 MB transport limit. An original image that cannot fit is reported with its location as a complete group; partial slice groups are never sent. With the image toggle off, only image locations are returned. AI can override this per call with include_images. The toggle is off by default, and the selected model must support image input.
 
 SiYuan block references are supported. You can ask which blocks a document references, or which blocks reference that document. Both queries cover the document and all its blocks, and recursively summarize reference counts for child documents. When AI modifies or deletes content, Siyuan Bridge verifies whether any existing references would break. Query embeds written as `{{SELECT ...}}` are read too: Siyuan Bridge confirms each target is visible before reading it, then shows the source path as a quote block; hidden targets never appear and are not counted, and when nothing is visible it only says "no such block".
 
@@ -56,13 +62,15 @@ If you use SiYuan on multiple computers with different directory paths, open the
 
 ![MCP configuration page](image/README/1785317465017.png)
 
-When the plugin is first enabled, Siyuan Bridge creates a notebook named "Siyuan Bridge" in the current workspace. It stores user preferences, the workspace index, usage guides, and privacy rules. Installation and updates maintain it automatically when the plugin reloads; opening settings or calling an AI tool first is not required. All documents can be viewed and edited like any other SiYuan document.
+When the plugin is first enabled, Siyuan Bridge creates a notebook named "Siyuan Bridge" in the current workspace. It contains four documents: User Preferences, Workspace Index, About SiYuan Bridge, and Privacy Rules. Installation and updates maintain them when the plugin reloads; opening settings or calling an AI tool first is not required. Privacy Rules are managed by the user and isolated from AI. The MCP Usage Guide and Workspace Index Guide ship as code assets and can be read in full through MCP without local file access by the AI client. The startup packet still includes the complete MCP Usage Guide. Older same-named notes are no longer used as guides.
 
 In "User Preferences," you can tell AI how concise answers should be, when to ask for confirmation before writing, which notebooks are more important, and what conventions to follow when organizing content. These preferences live in SiYuan and sync with your workspace.
 
 ![User preferences](image/README/1784634489547.png)
 
 Siyuan Bridge shows live block numbers on the left side of the editor by default, so you and AI can use the same numbers to locate specific paragraphs. The numbers refresh automatically after structural edits.
+
+Right-click a single document in the document tree and select "Copy → 复制完整路径(思源桥)" to copy a path including its notebook name, such as `/Research/Companies/Example`. Paste it directly into your AI conversation to identify the document. This entry appears below SiYuan's built-in "Copy readable path". The "复制完整路径" (Copy full path) toggle in the plugin panel is on by default; turning it off hides the menu entry.
 
 ![Siyuan Bridge block number display](image/README/block-index-preview.png)
 
