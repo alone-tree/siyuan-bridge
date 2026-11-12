@@ -5972,6 +5972,25 @@ class McpServerReadInlineImagesTests(unittest.TestCase):
         total = mcp_server.estimate_token_count(text) + mcp_server.INLINE_IMAGE_TOKEN_COST
         self.assertIn(f"估算令牌数：{total:,} / 3,000", result)
 
+    def test_final_text_budget_removes_images_from_trimmed_blocks(self):
+        first = "assets/first-" + "_" * 180 + ".png"
+        second = "assets/second-" + "_" * 180 + ".png"
+        blocks = self._blocks([("p1", f"![first]({first})"), ("p2", f"![second]({second})")])
+        server = self._make_server(blocks, "")
+        result = server.call_tool(1, "siyuan_read", {
+            "document_id": "doc1", "include_images": True, "token_budget": 4000,
+        })["result"]
+        self.assertFalse(result.get("isError", False))
+        content = result["content"]
+        text = "".join(part["text"] for part in content if part["type"] == "text")
+        self.assertIn("展示块：1-1 / 2", text)
+        self.assertIn("下一窗口：block_start=2", text)
+        self.assertEqual(sum(part["type"] == "image" for part in content), 1)
+        self.assertNotIn(second, text)
+        total = mcp_server.estimate_token_count(text) + mcp_server.INLINE_IMAGE_TOKEN_COST
+        self.assertLessEqual(total, 4000)
+        self.assertIn(f"估算令牌数：{total:,} / 4,000", text)
+
     def test_build_read_content_interleaves_text_and_images(self):
         images = [
             {"data": "AAAA", "mimeType": "image/png", "source": "C:/a.png"},
