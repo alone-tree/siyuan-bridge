@@ -1002,16 +1002,25 @@ def code_language(markdown: str) -> str:
     return ""
 
 
-def block_metadata_line(index: int, block_id: str, raw_type: str, subtype: str, markdown: str) -> str:
+def block_metadata_line(
+    index: int,
+    block_id: str,
+    raw_type: str,
+    subtype: str,
+    markdown: str,
+    extra: list[str] | None = None,
+) -> str:
     semantic_type = semantic_block_type(raw_type, subtype, markdown)
-    parts = [f"[{index}]", f"id={block_id}", f"type={semantic_type}"]
+    parts = [f"{index}", f"id={block_id}", f"type={semantic_type}"]
     if semantic_type == "code":
         lang = code_language(markdown)
         if lang:
             parts.append(f"language={lang}")
     elif semantic_type == "database":
         parts.append("readonly=true")
-    return " ".join(parts)
+    if extra:
+        parts.extend(extra)
+    return "[" + " ".join(parts) + "]"
 
 
 def display_block_source(block: DisplayBlock) -> str:
@@ -1842,14 +1851,22 @@ def build_display_blocks(
                     visit(child)
                 return
         elif include_block_ids and block_type == "t" and block_md.strip():
-            metadata = block_metadata_line(len(blocks) + 1, block_id, block_type, subtype, block_md)
             try:
                 headers, rows = parse_markdown_table(block_md)
+                metadata = block_metadata_line(
+                    len(blocks) + 1,
+                    block_id,
+                    block_type,
+                    subtype,
+                    block_md,
+                    extra=[f"rows={len(rows)}", f"columns={len(headers)}"],
+                )
                 display_md = (
-                    f"{metadata} rows={len(rows)} columns={len(headers)}\n\n"
+                    f"{metadata}\n\n"
                     f"{render_table_coordinate_view(block_md)}"
                 )
             except ValueError:
+                metadata = block_metadata_line(len(blocks) + 1, block_id, block_type, subtype, block_md)
                 display_md = f"{metadata}\n{block_md}"
         elif include_block_ids and block_md.strip():
             metadata = block_metadata_line(len(blocks) + 1, block_id, block_type, subtype, block_md)
@@ -5619,7 +5636,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_read",
-            "description": "Read a visible SiYuan document as Markdown. Prefer document path including notebook name, e.g. /Notebook/Folder/Doc; use document_id only as fallback. Always returns the document outline and one complete block window. Set include_block_ids=true before any siyuan_edit call to get exact [index] id type targets. Normal reading keeps Markdown clean and hides block IDs. SELECT query_embed blocks in the selected window expand privacy-visible matches as quoted Markdown with source paths; hidden targets are never disclosed. Embedded blocks remain atomic under token and shared image budgets, preserving contiguous-window behavior. When images are inlined (plugin setting, or include_images=true), images in this window are returned as image content blocks interleaved with the text, up to the per-call image budget (9 MB by default, set in the plugin settings); images beyond the budget and unsupported images are reported at their position with their location.",
+            "description": "Read a visible SiYuan document as Markdown. Prefer document path including notebook name, e.g. /Notebook/Folder/Doc; use document_id only as fallback. Always returns the document outline and one complete block window. Set include_block_ids=true before any siyuan_edit call to get exact [index id=... type=...] targets. Normal reading keeps Markdown clean and hides block IDs. SELECT query_embed blocks in the selected window expand privacy-visible matches as quoted Markdown with source paths; hidden targets are never disclosed. Embedded blocks remain atomic under token and shared image budgets, preserving contiguous-window behavior. When images are inlined (plugin setting, or include_images=true), images in this window are returned as image content blocks interleaved with the text, up to the per-call image budget (9 MB by default, set in the plugin settings); images beyond the budget and unsupported images are reported at their position with their location.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -5628,7 +5645,7 @@ def tool_specs() -> list[dict[str, Any]]:
                     "block_start": {"type": "integer", "default": 1, "description": "Starting display block index (1-based). Default 1 reads from the first block."},
                     "block_limit": {"type": "integer", "default": DEFAULT_BLOCK_LIMIT, "description": "Maximum display blocks to return in this window, 1–1000."},
                     "token_budget": {"type": "integer", "default": DEFAULT_TOKEN_BUDGET, "description": "Estimated text budget for pagination, including outline, block IDs and paths. Image tokens are estimated separately by delivered dimensions and included in the reported total; an original image's slices are never split across calls. At least one complete plain block is returned."},
-                    "include_block_ids": {"type": "boolean", "default": False, "description": "Enable reference reading for editing: each block is shown as [index] id=... type=... followed by content. Use these exact values for siyuan_edit start_index/start_id."},
+                    "include_block_ids": {"type": "boolean", "default": False, "description": "Enable reference reading for editing: each block is shown as [index id=... type=...] followed by content. Use these exact values for siyuan_edit start_index/start_id."},
                     "include_images": {"type": "boolean", "description": "Omit to follow the plugin's image setting; true returns images alongside text, false returns only their locations. Standard images are optimized automatically and every slice of one long image is returned together. Image tokens are reported separately from the text pagination budget. The image budget and complete 10 MB response limit still apply; images that cannot fit are reported at their original position."},
                     "include_large_images": {"type": "boolean", "default": False, "description": "Preserve original pixels without lossy compression. Long images are still split and every slice from one original is returned together. Standard reads automatically optimize image size and quality. Both modes obey the per-call image budget and the complete 10 MB response limit. Only relevant when images are included."},
                 },

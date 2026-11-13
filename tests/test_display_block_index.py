@@ -77,5 +77,5 @@ class SuperblockReferenceReadingTests(unittest.TestCase):
         self.assertEqual([block.id for block in blocks], ["super", "inner"])
         self.assertEqual(blocks[0].index, 1)
         self.assertEqual(blocks[1].index, 2)
-        self.assertIn("[1] id=super type=superblock", blocks[0].markdown)
-        self.assertIn("[2] id=inner type=paragraph", blocks[1].markdown)
+        self.assertIn("[1 id=super type=superblock]", blocks[0].markdown)
+        self.assertIn("[2 id=inner type=paragraph]", blocks[1].markdown)

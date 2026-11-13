@@ -4342,7 +4342,7 @@ class McpServerWriteTests(unittest.TestCase):
             self.assertIn("Original text.", result)
             self.assertIn("## 新内容", result)
             self.assertIn("Replaced text.", result)
-            self.assertIn("[1] id=block1 type=paragraph", result)
+            self.assertIn("[1 id=block1 type=paragraph]", result)
         finally:
             mcp_server.detect_active_profile = original
 
@@ -4628,7 +4628,7 @@ class TokenEstimationTests(unittest.TestCase):
 
     def test_read_result_counts_its_own_header(self):
         text, estimate = mcp_server.format_read_result(
-            ["# 文档：/测试/资料"], ["## 大纲", "", "[1] id=20261111120000-abcdefg type=p", "正文。"], 1000,
+            ["# 文档：/测试/资料"], ["## 大纲", "", "[1 id=20261111120000-abcdefg type=p]", "正文。"], 1000,
         )
         self.assertEqual(estimate, mcp_server.estimate_token_count(text))
         self.assertIn(f"估算令牌数：{estimate:,} / 1,000", text)
@@ -4723,7 +4723,7 @@ class DisplayBlockBuildTests(unittest.TestCase):
             ]
         })
         blocks = mcp_server.build_display_blocks(client, "doc1", include_block_ids=True)
-        self.assertIn("[1] id=p1 type=paragraph", blocks[0].markdown)
+        self.assertIn("[1 id=p1 type=paragraph]", blocks[0].markdown)
         self.assertIn("Text here.", blocks[0].markdown)
 
     def test_no_comments_when_ids_off(self):
@@ -4743,7 +4743,7 @@ class DisplayBlockBuildTests(unittest.TestCase):
             ]
         })
         blocks = mcp_server.build_display_blocks(client, "doc1", include_block_ids=True)
-        self.assertIn("[1] id=table1 type=table rows=1 columns=2", blocks[0].markdown)
+        self.assertIn("[1 id=table1 type=table rows=1 columns=2]", blocks[0].markdown)
         self.assertIn("| row_index | col 1 | col 2 |", blocks[0].markdown)
         self.assertIn("| row 0 | A | B |", blocks[0].markdown)
         self.assertIn("| row 1 | 1 | 2 |", blocks[0].markdown)
@@ -5182,7 +5182,7 @@ class McpServerReadBlockWindowTests(unittest.TestCase):
         }
         result = self._read({"document_id": "doc1", "include_block_ids": True}, blocks_for_doc=blocks)
         self.assertIn("引用阅读", result)
-        self.assertIn("[1] id=p1 type=paragraph", result)
+        self.assertIn("[1 id=p1 type=paragraph]", result)
 
     def test_window_preview_integration(self):
         blocks = {}
@@ -5310,9 +5310,9 @@ class McpServerReadBlockIdTests(unittest.TestCase):
         server._active_profile = Profile(name="test", token="test")
         server._active_client = client
         result = server.siyuan_read({"document_id": "doc1", "include_block_ids": True})
-        self.assertIn("[1] id=block-h1 type=heading", result)
+        self.assertIn("[1 id=block-h1 type=heading]", result)
         self.assertIn("## Section One", result)
-        self.assertIn("[2] id=block-p1 type=paragraph", result)
+        self.assertIn("[2 id=block-p1 type=paragraph]", result)
         self.assertIn("Body paragraph here.", result)
         self.assertIn("引用阅读", result)
 
@@ -5329,7 +5329,7 @@ class McpServerReadBlockIdTests(unittest.TestCase):
         server._active_profile = Profile(name="test", token="test")
         server._active_client = client
         result = server.siyuan_read({"document_id": "doc1", "include_block_ids": True})
-        self.assertIn("[1] id=block-h1 type=heading", result)
+        self.assertIn("[1 id=block-h1 type=heading]", result)
         self.assertIn("大纲", result)
         self.assertIn("Section One", result)
 
@@ -5505,7 +5505,7 @@ class McpServerReadEmbeddedBlocksTests(unittest.TestCase):
 
         _, result = self._read(client, include_block_ids=True)
 
-        self.assertIn("[1] id=embed-1 type=query_embed", result)
+        self.assertIn("[1 id=embed-1 type=query_embed]", result)
         self.assertIn("嵌入块来源：/Main/Source source-doc visible-a", result)
         self.assertIn("嵌入块来源：/Main/Source B source-b visible-b", result)
         self.assertLess(result.index("> Alpha visible text"), result.index("> Beta visible text"))
@@ -5542,8 +5542,8 @@ class McpServerReadEmbeddedBlocksTests(unittest.TestCase):
                     self.assertIn("嵌入内容共1个块，当前展示1个块", result)
                     self.assertIn("展示块：1-2 / 2", result)
                     if ids:
-                        self.assertIn(f"[1] id=container type={label}", result)
-                        self.assertIn("[2] id=after type=paragraph", result)
+                        self.assertIn(f"[1 id=container type={label}]", result)
+                        self.assertIn("[2 id=after type=paragraph]", result)
                     self.assertNotIn("id=inside", result)
                     self.assertEqual(result.count("VISIBLE_CONTAINER_CONTENT"), 1)
 

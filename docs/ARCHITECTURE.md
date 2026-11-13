@@ -411,7 +411,7 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 
 引用阅读：
 
-- `include_block_ids=true` 时，每个展示块前加 `[index] id=... type=...`。
+- `include_block_ids=true` 时，每个展示块前加 `[index id=... type=...]` 块头。
 - 这是编辑和跨文档块引用的定位模式。
 - 普通阅读不显示块 ID，保持 Markdown 干净。
 - 插件可在思源正文旁显示同一套实时序号。序号来自 `/api/block/getChildBlocks` 与 `build_display_blocks(include_block_ids=true)`，不是 DOM 顺序。文档结构变化后立即重算；AI 再次引用序号前必须重新读取。Python 与插件的 `index/id/type` 由 `tests/fixtures/display_block_index_cases.json` 锁死。
@@ -908,7 +908,7 @@ scope：
 普通 Markdown 表格在引用阅读中渲染成坐标视图：
 
 ```text
-[41] id=... type=table rows=4 columns=4
+[41 id=... type=table rows=4 columns=4]
 
 | row_index | col 1 | col 2 |
 | row 0 | 表头1 | 表头2 |
