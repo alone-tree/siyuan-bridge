@@ -42,7 +42,9 @@
         ]
       },
       "expected": [
-        {"index": 1, "id": "list1", "type": "list"}
+        {"index": 1, "id": "list1", "type": "list", "indent": 0, "text": ""},
+        {"index": 2, "id": "item1", "type": "list_item", "indent": 1, "text": "item 1"},
+        {"index": 3, "id": "item2", "type": "list_item", "indent": 1, "text": "item 2"}
       ]
     },
     {
@@ -58,8 +60,9 @@
         ]
       },
       "expected": [
-        {"index": 1, "id": "item1", "type": "list_item"},
-        {"index": 2, "id": "item2", "type": "list_item"}
+        {"index": 1, "id": "list1", "type": "list", "indent": 0, "text": ""},
+        {"index": 2, "id": "item1", "type": "list_item", "indent": 1, "text": "item 1"},
+        {"index": 3, "id": "item2", "type": "list_item", "indent": 1, "text": "item 2"}
       ]
     },
     {
@@ -70,7 +73,9 @@
           {"id": "outer", "type": "l", "subtype": "u", "markdown": "- parent\n  - child"}
         ],
         "outer": [
-          {"id": "item", "type": "i", "subtype": "u", "markdown": "- parent"},
+          {"id": "item", "type": "i", "subtype": "u", "markdown": "- parent"}
+        ],
+        "item": [
           {"id": "inner", "type": "l", "subtype": "u", "markdown": "- child"}
         ],
         "inner": [
@@ -78,7 +83,9 @@
         ]
       },
       "expected": [
-        {"index": 1, "id": "outer", "type": "list"}
+        {"index": 1, "id": "outer", "type": "list", "indent": 0, "text": ""},
+        {"index": 2, "id": "item", "type": "list_item", "indent": 1, "text": "parent"},
+        {"index": 3, "id": "child-item", "type": "list_item", "indent": 2, "text": "child"}
       ]
     },
     {

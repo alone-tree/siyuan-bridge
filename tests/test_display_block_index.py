@@ -46,7 +46,18 @@ class DisplayBlockIndexFixtureTests(unittest.TestCase):
                     }
                     for block in blocks
                 ]
-                self.assertEqual(actual, case["expected"], case["name"])
+                core_expected = [
+                    {key: entry[key] for key in ("index", "id", "type")}
+                    for entry in case["expected"]
+                ]
+                self.assertEqual(actual, core_expected, case["name"])
+                for expected_entry, block in zip(case["expected"], blocks):
+                    if "indent" in expected_entry:
+                        self.assertEqual(block.indent, expected_entry["indent"], case["name"])
+                    if "text" in expected_entry:
+                        lines = block.markdown.splitlines()
+                        text = lines[1].strip() if len(lines) > 1 else ""
+                        self.assertEqual(text, expected_entry["text"], case["name"])
 
     def test_javascript_matches_shared_fixtures(self):
         completed = subprocess.run(

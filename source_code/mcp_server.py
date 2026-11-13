@@ -517,6 +517,8 @@ class DisplayBlock:
     heading_level: int | None = None
     heading_text: str = ""
     source_markdown: str = ""
+    indent: int = 0
+    parent_id: str = ""
     embed_resolver: Callable[[], EmbeddedContent | None] | None = field(
         default=None, repr=False, compare=False
     )
@@ -993,6 +995,16 @@ def semantic_block_type(raw_type: str, subtype: str, markdown: str) -> str:
 
 def list_kind(subtype: str) -> str:
     return {"o": "ordered", "u": "unordered", "t": "task"}.get(subtype, subtype)
+
+
+def list_level_prefix(level: int) -> str:
+    """展示缩进：每个展示层级 2 个空格（docs/列表块编辑方案-2026-11-13.md 3.3）。"""
+    return "  " * level
+
+
+def strip_list_marker(line: str) -> str:
+    """去掉行首列表标记（- * + 或 1.），保留任务标记 [ ]/[x]（方案 3.5/3.6）。"""
+    return re.sub(r"^[ \t]*(?:[-*+]|\d+\.)[ \t]+", "", line, count=1)
 
 
 def code_language(markdown: str) -> str:
@@ -1776,6 +1788,115 @@ def build_display_blocks(
     blocks: list[DisplayBlock] = []
     visited: set[str] = set()
 
+    # 引用阅读模式的列表展开（docs/列表块编辑方案-2026-11-13.md 3.2-3.4）：
+    # 列表块与每个列表项各占一个序号，首段落块和子列表块不占序号。
+    # 仅引用阅读启用；普通阅读保持整树 markdown 和嵌入块展开。
+    # 注意 siyuan_read 引用阅读也传 resolve_embeds=True（嵌入块惰性解析），
+    # 因此这里只看 include_block_ids；列表展开分支内的嵌入块按原文显示。
+    list_expansion = include_block_ids
+    # 列表递归的防环集合。visit 入口的 visited 已登记列表块 ID，
+    # 列表分支内部必须用独立集合，否则顶层容器会被 visited 检查挡掉。
+    list_seen: set[str] = set()
+
+    def append_list_item_display(
+        item: dict[str, Any],
+        item_id: str,
+        item_subtype: str,
+        level: int,
+        parent_id: str,
+    ) -> None:
+        if not item_id or item_id in list_seen:
+            return
+        list_seen.add(item_id)
+        item_md = block_field(item, "markdown")
+        children = client.get_child_blocks(item_id)
+        # 任务标记只存在于列表项 markdown 首行（首段落块是纯文字），解析后前置
+        task_marker = ""
+        first_line = item_md.splitlines()[0] if item_md.strip() else ""
+        marker_match = re.match(r"^[ \t]*(?:[-*+]|\d+\.)[ \t]+\[( |x|X)\][ \t]+", first_line)
+        if marker_match:
+            task_marker = f"[{marker_match.group(1)}] "
+        # 正文：首段落块文字 + 后续段落等非子列表子块；子列表递归展开不进正文
+        body_parts = []
+        for child in children:
+            if block_field(child, "type") == "l":
+                continue
+            child_md = block_field(child, "markdown")
+            if child_md.strip():
+                body_parts.append(child_md.rstrip())
+        if body_parts:
+            body_parts[0] = task_marker + body_parts[0]
+        else:
+            body_parts = [strip_list_marker(first_line)]
+        body = "\n".join(part for part in body_parts if part.strip())
+        header_extra = [f"subtype={item_subtype}"] if item_subtype == "t" else None
+        header = block_metadata_line(
+            len(blocks) + 1, item_id, "i", item_subtype, item_md, extra=header_extra
+        )
+        prefix = list_level_prefix(level)
+        lines = [f"{prefix}{header}"]
+        lines.extend(f"{prefix}{line}" for line in body.splitlines())
+        display_md = "\n".join(lines)
+        blocks.append(DisplayBlock(
+            index=len(blocks) + 1,
+            id=item_id,
+            type="i",
+            subtype=item_subtype,
+            markdown=display_md,
+            estimated_tokens=estimate_token_count(display_md),
+            is_heading=False,
+            heading_level=None,
+            heading_text="",
+            source_markdown=item_md,
+            indent=level,
+            parent_id=parent_id,
+        ))
+        for child in children:
+            if block_field(child, "type") == "l":
+                # 子列表容器不占层级；它给子项统一加一级
+                append_list_container_display(child, block_field(child, "id"), level, item_id, False)
+
+    def append_list_container_display(
+        container: dict[str, Any],
+        container_id: str,
+        level: int,
+        parent_id: str,
+        display_self: bool,
+    ) -> None:
+        if not container_id or container_id in list_seen:
+            return
+        list_seen.add(container_id)
+        container_subtype = block_field(container, "subtype", "subType")
+        if display_self:
+            container_md = block_field(container, "markdown")
+            header = block_metadata_line(
+                len(blocks) + 1, container_id, "l", container_subtype, container_md
+            )
+            display_md = f"{list_level_prefix(level)}{header}"
+            blocks.append(DisplayBlock(
+                index=len(blocks) + 1,
+                id=container_id,
+                type="l",
+                subtype=container_subtype,
+                markdown=display_md,
+                estimated_tokens=estimate_token_count(display_md),
+                is_heading=False,
+                heading_level=None,
+                heading_text="",
+                source_markdown=container_md,
+                indent=level,
+                parent_id=parent_id,
+            ))
+        for child in client.get_child_blocks(container_id):
+            if block_field(child, "type") == "i":
+                append_list_item_display(
+                    child,
+                    block_field(child, "id"),
+                    block_field(child, "subtype", "subType"),
+                    level + 1,
+                    container_id,
+                )
+
     def visit(block: dict[str, Any]) -> None:
         block_id = block_field(block, "id")
         if not block_id or block_id in visited:
@@ -1820,6 +1941,17 @@ def build_display_blocks(
 
         subtype = block_field(block, "subtype", "subType")
         block_md = block_field(block, "markdown")
+
+        # 含嵌入标记的列表块回退整树路径：嵌入展开契约（测试
+        # test_quote_and_list_embeds_expand_without_changing_numbering_or_type_names）
+        # 优先于列表展开，嵌入方案行为零改动。
+        if list_expansion and block_type in ("l", "i") and "{{" not in block_md:
+            if block_type == "l":
+                append_list_container_display(block, block_id, 0, "", display_self=True)
+            else:
+                # 思源文档根不会直接挂列表项；防御性处理散列表项
+                append_list_item_display(block, block_id, subtype, 0, "")
+            return
 
         if block_type == "l" and not block_md.strip():
             for child in client.get_child_blocks(block_id):
