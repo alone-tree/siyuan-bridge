@@ -1,5 +1,14 @@
 # SiYuan Bridge 项目工程文档
 
+## 2026-11-13：反馈结案与待办清理
+
+- 反馈 #27「复制完整路径」：v1.14.0 已随集市更新到用户版（2026-11-13 08:30），用户完成真实界面验收并确认可用，台账标 done。
+- 反馈 #25「SELECT 嵌入展开与只展开当前窗口不一致」：11-09 在隔离 FakeClient 下 52 组调用未复现，越界与超预算保护均通过。相关 token 估算的退化问题已由 57c5648 修复，无空格长字母串按长度线性计入，现行口径见 ARCHITECTURE.md「文本 token 估算」。用户确认结案，台账标 done。
+- 当前反馈台账与 GitHub issue 均无 open 项，后续判断以台账为准，不要只按旧 devlog 的「保留 open」表述重新开案。
+- 清理 `docs/IDEAS.md` 中已完成的两条：`insert_assets` 交接记录、历史遗留代码清理。后者对应的 `knowledge_base` 与 `siyuan-plugin/bridge` 已在 `.gitignore`，README 已是根目录单一来源加脚本同步。
+- 删除 `ARCHITECTURE.md`「短期开发计划」中已失效的 Codex 插件 manifest 条目：仓库已无该材料，分发只走思源集市。
+- 现存开口项只剩三条：`cli.py` 旧启动包逻辑、`mcp_server.py` 与测试文件过大待拆分、缺统一验证入口。
+
 ## 2026-11-12：v1.14.0 发布
 
 - 汇总今日五组改动发版：start 启动包改为四分区固定顺序并显示思源桥 MCP 版本与统计完成时间、start 复用 refresh 已保存的统计、`siyuan_operate` 新增 `read_guide`、引用与列表容器内部嵌入展开修复、read 图片自动优化与完整长图切片。

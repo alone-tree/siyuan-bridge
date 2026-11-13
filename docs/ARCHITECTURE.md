@@ -1118,8 +1118,7 @@ API 设计原则：
 
 1. 迁移旧 devlog 和安装/使用说明时，删除“refresh 会清理 `ai_workspace`”的旧表述，明确只有 `siyuan_start` 清理。
 2. 清理 CLI 旧启动包逻辑，避免继续引用 `guide.md/index.md/START_HERE.md`。
-3. 更新 Codex 插件 manifest、安装指南异常链接和发布材料。
-4. 补充自动化验证入口，统一运行单元测试、MCP tools/list 探针和打包检查。
+3. 补充自动化验证入口，统一运行单元测试、MCP tools/list 探针和打包检查。
 
 ## 长期升级方向
 
