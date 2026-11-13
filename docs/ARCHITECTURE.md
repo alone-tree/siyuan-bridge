@@ -414,6 +414,7 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 - `include_block_ids=true` 时，每个展示块前加 `[index id=... type=...]` 块头。
 - 这是编辑和跨文档块引用的定位模式。
 - 普通阅读不显示块 ID，保持 Markdown 干净。
+- 列表块和每个列表项各占一个序号：列表项正文为首段落文字，不带 `- ` 或 `1. ` 标记（任务勾选 `[ ]`、`[x]` 保留，任务项块头带 `subtype=t`）；缩进按展示层级每层 2 个空格，隐藏的子列表块不占序号也不占层级；首段落块不单独占序号；空列表块占一个序号。列表项内多段文字接在正文行后，不单独编号。含嵌入标记（`{{...}}`）的列表保持整树展示以维持嵌入展开契约。普通阅读保持列表 Markdown 原样。读写格式差异：edit 提交列表项时必须带 `- ` 或 `1. ` 标记，因为思源按 Markdown 解析写入内容。详细规则与编辑场景见 `docs/列表块编辑方案-2026-11-13.md`。
 - 插件可在思源正文旁显示同一套实时序号。序号来自 `/api/block/getChildBlocks` 与 `build_display_blocks(include_block_ids=true)`，不是 DOM 顺序。文档结构变化后立即重算；AI 再次引用序号前必须重新读取。Python 与插件的 `index/id/type` 由 `tests/fixtures/display_block_index_cases.json` 锁死。
 
 图片内联（可选，由插件设置页开关控制，决策见 `docs/图片内联需求-2026-09-14.md`）：
@@ -442,7 +443,7 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 块展示规则：
 
 - 文档块不作为正文展示。
-- 列表容器通常不单独展示；列表项或列表 Markdown 作为一个展示块处理。
+- 普通阅读中列表容器不单独展示，列表项或列表 Markdown 作为一个展示块处理；引用阅读中列表块与每个列表项各占一个序号（见上文引用阅读）。
 - 表格在普通阅读中保留原始 Markdown。
 - 表格在引用阅读中渲染为带`row`/`column_index`的坐标视图，并提示该视图不可原样写回；整体替换必须提供标准Markdown表格。
 - 超级块普通阅读展开子块；引用阅读显示 superblock 开始/结束标记并遍历子块。
@@ -869,6 +870,7 @@ scope：
 - `default_block_replace` 是默认替换：删除旧块再建新块，不保留旧块 ID。
 - `single_block_replace` 只能替换单个块，且 markdown 只能生成一个展示块；仅当 `default_block_replace` 会破坏该块引用时使用。
 - 如果 markdown 会生成多个块，必须用 `default_block_replace`。
+- 列表块单位（详见 `docs/列表块编辑方案-2026-11-13.md`）：选中单个列表项时 `single_block_replace` 只改首段落文字，子项与子列表保留、列表项 ID 不变，提交必须以 `- ` 或 `1. ` 开头；提交带续行追加项内段落，带缩进子列表则把新子项插到原子项之前（原子项没有子列表时思源自动包裹）。提交首行带 `[x]`/`[ ]` 时按列表项整体更新以同步任务勾选。`default_block_replace` 选中单个列表项时目标自动扩展到整棵子树；选中列表块即整表替换，`single_block_replace` 选列表块直接拒绝（子块 ID 失效且反链检查覆盖不到）。删除列表项连带整棵子树，范围内后代自动去重。列表项范围必须从某个列表项开始、到起点同级某个列表项的最后后代或该项本身结束；横跨不同父容器的范围报 `validation:operation_order`。`append` 在文档末尾是列表时拒绝；`table_edit`、`insert_assets` 不适用于列表块和列表项。
 - 需要 markdown 的 action（default/single/insert_after/insert_before/append）可用 `markdown_file` 替代 `markdown`，二者互斥；文件内容按 UTF-8 → GBK → GB18030 解码并统一换行，读取失败在快照前拒绝。写入成功后只扫描本次新写入或替换的块，处理其中的本地引用和文内锚点；规则与 `siyuan_create` 相同。
 - 公开 schema 不暴露旧名 `multi_block_replace`；后端仍接受该旧名并按 `default_block_replace` 执行。
 - 复杂块类型拒绝 replace：attachment、database、superblock、html、iframe、video、audio、widget。

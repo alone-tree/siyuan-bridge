@@ -71,7 +71,7 @@ Home Dialog 在「显示思源桥块序号」下方提供「复制完整路径�
 
 设置页开关“显示思源桥块序号”和命令面板“显示/隐藏思源桥块序号”控制同一状态，默认开启，保存在插件 `saveData("block-index.json")`，不写入笔记。插件启用且序号开启时，以及用户每次打开开关时，都会提示：正文左侧数字由思源桥插件显示，与 AI 所说的「第 N 块」一致。
 
-编号规则与 `siyuan_read(include_block_ids=true)` 相同。Node 测试实现是 `siyuan-plugin/block-index.js`，插件运行时必须内联在 `index.js`。顺序只来自 `/api/block/getChildBlocks`。角标画在编辑器覆盖层上，不进入 `contenteditable`，不修改块 DOM 或块属性。序号贴在思源块标按钮同一套位置：短块垂直居中，多行块贴顶部；超级块和列表用内部第一行作为锚点，避免容器 padding 把 9/10/11 错位。嵌套超级块从左到右为外层→内层→叶子。
+编号规则与 `siyuan_read(include_block_ids=true)` 相同。Node 测试实现是 `siyuan-plugin/block-index.js`，插件运行时必须内联在 `index.js`。顺序只来自 `/api/block/getChildBlocks`。列表块与每个列表项各占一个序号，子列表容器不占序号；含嵌入标记（`{{...}}`）的列表回退整树编号。角标画在编辑器覆盖层上，不进入 `contenteditable`，不修改块 DOM 或块属性。序号贴在思源块标按钮同一套位置：短块垂直居中，多行块贴顶部；超级块和列表用内部第一行作为锚点，避免容器 padding 把 9/10/11 错位。嵌套超级块从左到右为外层→内层→叶子。
 
 打开或切换文档、以及 `ws-main` 中的 insert/delete/move/append 会重算完整 `ID → 序号`。动态加载只把已有映射补到新出现的块上。失败时清空角标并 `showMessage("块序号暂不可用")`。关闭开关、销毁编辑器或卸载插件时移除覆盖层和监听器。
 

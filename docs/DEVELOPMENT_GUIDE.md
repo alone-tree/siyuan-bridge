@@ -319,6 +319,8 @@ Error: invalid parameter
 - `document` 路径命中缓存但 live hpath 已变化时，必须停止读取并要求 refresh 后用新路径重试，或改用 `document_id`。
 - 普通阅读不显示块 ID。
 - 引用阅读显示 `[index id=... type=...]`。
+- 引用阅读中列表块与每个列表项各占一个序号：列表项正文不带 `- ` 或 `1. ` 标记（任务勾选保留，任务项块头带 `subtype=t`），缩进每层 2 个空格，隐藏子列表块不占序号；空列表块占一个序号。普通阅读保持列表 Markdown 原样。含嵌入标记（`{{...}}`）的列表回退整树展示。
+- 引用阅读的列表展开与编辑行为以 `docs/列表块编辑方案-2026-11-13.md` 为准；`siyuan_edit` 的列表项细则、范围对齐校验、跨父拒绝在 `tests/test_mcp_server.py` 的 `McpServerListEditTests` 锁定。
 - 大纲始终返回，并标注标题块位置。
 - token 统计覆盖实际返回的全部文字，包含大纲、块 ID/序号、表格坐标、资源路径、提示及统计行自身；普通/引用阅读按同一预算连续翻页。
 - 图片按实际发出的文字声明和图片数量计入；最终缩窗后不得残留被移除块的图片或图片统计。完整首个普通块及嵌入块原子降级规则保持有效。
@@ -337,7 +339,7 @@ Error: invalid parameter
 - 返回正文中的`assets/...`链接仍提供本机绝对路径，同时保留可复用的原始资源引用；覆盖普通读取、带title的附件链接、图片内联成功/超预算/不支持，以及嵌入来源附件。
 - 超级块普通阅读不重复渲染子块内容。
 - 引用阅读下超级块自身占号，并继续给内部块编号。
-- 插件块序号与 `include_block_ids=true` 的 `index/id/type` 一致；共享样例在 `tests/fixtures/display_block_index_cases.json`，Python 与 `siyuan-plugin/block-index.js` 都必须通过。
+- 插件块序号与 `include_block_ids=true` 的 `index/id/type` 一致；共享样例在 `tests/fixtures/display_block_index_cases.json`，Python 与 `siyuan-plugin/block-index.js` 都必须通过。含 `indent`/`text` 可选字段的用例两端都校验。
 - 图片内联关闭时，`siyuan_read` 返回行为与旧契约完全一致：单段文本，无内联标记。
 - 图片内联开启时，MCP content 按文档顺序交替返回文字与图片；视觉 token 按实际发送尺寸单独估算并计入报告合计，不用视觉 token 提前截断文字窗口。
 - 本地 assets 图片优先读已提取文件，缺失时回退 `get_asset`；网络 http/https 图片下载后内联。
