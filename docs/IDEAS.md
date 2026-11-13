@@ -5,10 +5,7 @@
 ## 待评估
 
 - 设计 `siyuan_import`：单篇 Markdown 及其中标准本地引用已由 `markdown_file` 覆盖；剩余方向是目录批量导入、多篇 Markdown 互转思源文档/块引用。
-- `insert_assets` 已实现，交接见 [`ASSET_INSERTION_PLAN.md`](./ASSET_INSERTION_PLAN.md)。
 - 多平台支持：验证 Mac/Linux 的 Python、路径、编码、MCP 注册和思源端口行为。
-
-- 处理历史遗留代码：knowledge_base文件夹、思源插件导入后不git（因为都是同一个代码）、readme维护一份
 
 ## 遥测看板（公开页面）
 
