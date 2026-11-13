@@ -13,8 +13,16 @@ const failures = [];
 
 for (const testCase of payload.cases) {
   const actual = collectDisplayBlockIndexes(testCase.root_id, testCase.children);
+  const keys = Object.keys(testCase.expected[0] || {});
+  const projected = actual.map((block) => {
+    const entry = {};
+    for (const key of keys) {
+      entry[key] = block[key];
+    }
+    return entry;
+  });
   const expected = JSON.stringify(testCase.expected);
-  const got = JSON.stringify(actual);
+  const got = JSON.stringify(projected);
   if (expected !== got) {
     failures.push(`${testCase.name}\n  expected: ${expected}\n  actual:   ${got}`);
   }

@@ -110,6 +110,28 @@ function childBlocks(childrenByParent, blockId) {
   return Array.isArray(children) ? children : [];
 }
 
+function hasEmbedMarker(markdown) {
+  const text = markdown || "";
+  return text.includes("{{") && text.includes("}}");
+}
+
+function stripListMarker(line) {
+  return (line || "").replace(/^[ \t]*(?:[-*+]|\d+\.)[ \t]+/, "");
+}
+
+function pushBlock(blocks, blockId, blockType, subtype, markdown, indent) {
+  const text = blockType === "i" && String(markdown || "").trim()
+    ? stripListMarker(String(markdown).split("\n")[0].trim())
+    : "";
+  blocks.push({
+    index: blocks.length + 1,
+    id: blockId,
+    type: semanticBlockType(blockType, subtype, markdown),
+    indent,
+    text,
+  });
+}
+
 function displayBlockNeedsChildren(block) {
   const blockType = blockField(block, "type");
   const markdown = blockField(block, "markdown").trim();
@@ -118,6 +140,9 @@ function displayBlockNeedsChildren(block) {
   }
   if (DATABASE_BLOCK_TYPES.has(blockType)) {
     return false;
+  }
+  if ((blockType === "l" || blockType === "i") && !hasEmbedMarker(markdown)) {
+    return true;
   }
   if (blockType === "l" && !markdown) {
     return true;
@@ -134,6 +159,37 @@ function displayBlockNeedsChildren(block) {
 function collectDisplayBlockIndexes(rootId, childrenByParent) {
   const blocks = [];
   const visited = new Set();
+  const listSeen = new Set();
+
+  function visitListItem(block, level) {
+    const blockId = blockField(block, "id");
+    if (!blockId || listSeen.has(blockId)) {
+      return;
+    }
+    listSeen.add(blockId);
+    pushBlock(blocks, blockId, "i", blockField(block, "subtype", "subType"), blockField(block, "markdown"), level);
+    for (const child of childBlocks(childrenByParent, blockId)) {
+      if (blockField(child, "type") === "l") {
+        visitListContainer(child, level, false);
+      }
+    }
+  }
+
+  function visitListContainer(block, level, displaySelf) {
+    const blockId = blockField(block, "id");
+    if (!blockId || listSeen.has(blockId)) {
+      return;
+    }
+    listSeen.add(blockId);
+    if (displaySelf) {
+      pushBlock(blocks, blockId, "l", blockField(block, "subtype", "subType"), blockField(block, "markdown"), level);
+    }
+    for (const child of childBlocks(childrenByParent, blockId)) {
+      if (blockField(child, "type") === "i") {
+        visitListItem(child, level + 1);
+      }
+    }
+  }
 
   function visit(block) {
     const blockId = blockField(block, "id");
@@ -154,6 +210,17 @@ function collectDisplayBlockIndexes(rootId, childrenByParent) {
 
     const subtype = blockField(block, "subtype", "subType");
     const markdown = blockField(block, "markdown");
+
+    // 引用阅读模式的列表展开（与 source_code/mcp_server.py 的 build_display_blocks 保持一致）；
+    // 含嵌入标记的列表回退整树行为，保持嵌入展开契约。
+    if ((blockType === "l" || blockType === "i") && !hasEmbedMarker(markdown)) {
+      if (blockType === "l") {
+        visitListContainer(block, 0, true);
+      } else {
+        visitListItem(block, 0);
+      }
+      return;
+    }
 
     if (DATABASE_BLOCK_TYPES.has(blockType)) {
       blocks.push({
