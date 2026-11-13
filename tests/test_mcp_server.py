@@ -6346,5 +6346,283 @@ class LoadConfigInlineImagesTests(unittest.TestCase):
         self.assertFalse(load_config(self.root).read_inline_images)
 
 
+class McpServerListEditTests(McpServerWriteTests):
+    """列表块编辑单元（docs/列表块编辑方案-2026-11-13.md 第4-5节）。"""
+
+    def _list_blocks(self):
+        return {
+            "doc1": [
+                {"id": "para1", "type": "p", "markdown": "引言", "sort": 0},
+                {"id": "list1", "type": "l", "subtype": "u", "markdown": "- 项1\n- 项2\n  - 子项2.1\n- 项3", "sort": 1},
+            ],
+            "list1": [
+                {"id": "itemA", "type": "i", "subtype": "u", "markdown": "- 项1", "sort": 0},
+                {"id": "itemB", "type": "i", "subtype": "u", "markdown": "- 项2\n  - 子项2.1", "sort": 1},
+                {"id": "itemC", "type": "i", "subtype": "u", "markdown": "- 项3", "sort": 2},
+            ],
+            "itemA": [
+                {"id": "pA", "type": "p", "markdown": "项1", "sort": 0},
+            ],
+            "itemB": [
+                {"id": "pB", "type": "p", "markdown": "项2", "sort": 0},
+                {"id": "subList", "type": "l", "subtype": "u", "markdown": "- 子项2.1", "sort": 1},
+            ],
+            "subList": [
+                {"id": "itemB1", "type": "i", "subtype": "u", "markdown": "- 子项2.1", "sort": 0},
+            ],
+            "itemB1": [
+                {"id": "pB1", "type": "p", "markdown": "子项2.1", "sort": 0},
+            ],
+            "itemC": [
+                {"id": "pC", "type": "p", "markdown": "项3", "sort": 0},
+            ],
+        }
+
+    def _edit(self, server, **overrides):
+        args = {
+            "document": "/Main/Projects/Doc One",
+            "action": "single_block_replace",
+            "start_index": 4,
+            "start_id": "itemB",
+            "markdown": "- 层级1，项2改",
+            "confirmed": True,
+        }
+        args.update(overrides)
+        return server.siyuan_edit(args)
+
+    def test_single_replace_updates_first_paragraph_and_keeps_children(self):
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            result = self._edit(server)
+            self.assertIn(("pB", "层级1，项2改"), client._updated_blocks)
+            self.assertNotIn("itemB", client._deleted_blocks)
+            self.assertNotIn("itemB1", client._deleted_blocks)
+            self.assertEqual(client._inserted_after, [])
+            self.assertIn("[4 id=itemB type=list_item]", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_single_replace_multi_paragraph_submission(self):
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            self._edit(server, markdown="- 层级1，项2改\n  补充说明")
+            self.assertIn(("pB", "层级1，项2改"), client._updated_blocks)
+            self.assertEqual(client._inserted_after, [("pB", "补充说明")])
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_single_replace_with_sublist_inserts_before_existing_children(self):
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            self._edit(server, markdown="- 层级1，项2改\n  - 新子项0")
+            self.assertIn(("pB", "层级1，项2改"), client._updated_blocks)
+            self.assertEqual(client._inserted_before, [("itemB1", "- 新子项0")])
+            self.assertNotIn("itemB1", client._deleted_blocks)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_single_replace_with_sublist_when_item_has_no_children_appends(self):
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            self._edit(server, start_index=3, start_id="itemA", markdown="- 项1改\n  - 新子项0")
+            self.assertIn(("pA", "项1改"), client._updated_blocks)
+            self.assertEqual(client._appended_blocks, [("itemA", "- 新子项0")])
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_single_range_replace_uses_default_semantics(self):
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            result = self._edit(server, end_index=5, end_id="itemB1", markdown="- 项2改")
+            self.assertEqual(client._inserted_before, [("itemB", "- 项2改")])
+            self.assertEqual(client._deleted_blocks, ["itemB"])
+            self.assertIn("default_block_replace", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_default_single_item_expands_to_subtree(self):
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            result = self._edit(server, action="default_block_replace", markdown="- 项2重建")
+            self.assertEqual(client._inserted_before, [("itemB", "- 项2重建")])
+            self.assertEqual(client._deleted_blocks, ["itemB"])
+            self.assertIn("[4]", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_delete_range_dedupes_descendants(self):
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            server.siyuan_edit({
+                "document": "/Main/Projects/Doc One",
+                "action": "delete",
+                "start_index": 4,
+                "start_id": "itemB",
+                "end_index": 5,
+                "end_id": "itemB1",
+                "confirmed": True,
+            })
+            self.assertEqual(client._deleted_blocks, ["itemB"])
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_delete_sibling_range_keeps_both_items(self):
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            server.siyuan_edit({
+                "document": "/Main/Projects/Doc One",
+                "action": "delete",
+                "start_index": 4,
+                "start_id": "itemB",
+                "end_index": 6,
+                "end_id": "itemC",
+                "confirmed": True,
+            })
+            self.assertEqual(client._deleted_blocks, ["itemC", "itemB"])
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_insert_after_list_item_passes_list_markdown(self):
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            self._edit(server, action="insert_after", markdown="- 项2.5")
+            self.assertEqual(client._inserted_after, [("itemB", "- 项2.5")])
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_insert_after_list_item_rejects_plain_markdown(self):
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                self._edit(server, action="insert_after", markdown="普通段落")
+            self.assertEqual(ctx.exception.error_code, "validation:wrong_shape")
+            self.assertFalse(client._snapshots)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_single_block_replace_on_list_container_rejected(self):
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                self._edit(server, start_index=2, start_id="list1")
+            self.assertEqual(ctx.exception.error_code, "validation:wrong_shape")
+            self.assertIn("default_block_replace", str(ctx.exception))
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_multi_sibling_submission_rejected(self):
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                self._edit(server, markdown="- 改1\n- 改2")
+            self.assertEqual(ctx.exception.error_code, "validation:wrong_shape")
+            self.assertIn("多个同级项", str(ctx.exception))
+            self.assertFalse(client._snapshots)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_cross_parent_range_rejected(self):
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                self._edit(server, start_index=5, start_id="itemB1", end_index=6, end_id="itemC",
+                           markdown="- 改")
+            self.assertEqual(ctx.exception.error_code, "validation:operation_order")
+            self.assertFalse(client._snapshots)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_end_not_aligned_to_subtree_boundary_rejected(self):
+        blocks = self._list_blocks()
+        blocks["subList"] = [
+            {"id": "itemB1", "type": "i", "subtype": "u", "markdown": "- 子项2.1", "sort": 0},
+            {"id": "itemB2", "type": "i", "subtype": "u", "markdown": "- 子项2.2", "sort": 1},
+        ]
+        blocks["itemB2"] = [
+            {"id": "pB2", "type": "p", "markdown": "子项2.2", "sort": 0},
+            {"id": "subList2", "type": "l", "subtype": "u", "markdown": "- 深层子项", "sort": 1},
+        ]
+        blocks["subList2"] = [
+            {"id": "itemB21", "type": "i", "subtype": "u", "markdown": "- 深层子项", "sort": 0},
+        ]
+        blocks["itemB21"] = [
+            {"id": "pB21", "type": "p", "markdown": "深层子项", "sort": 0},
+            {"id": "subList21", "type": "l", "subtype": "u", "markdown": "- 更深层", "sort": 1},
+        ]
+        blocks["subList21"] = [
+            {"id": "itemB211", "type": "i", "subtype": "u", "markdown": "- 更深层", "sort": 0},
+        ]
+        blocks["itemB211"] = [
+            {"id": "pB211", "type": "p", "markdown": "更深层", "sort": 0},
+        ]
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            # itemB(4) itemB1(5) itemB2(6) itemB21(7) itemB211(8)：end=7 不是同级项的末块
+            with self.assertRaises(ValueError) as ctx:
+                self._edit(server, start_index=4, start_id="itemB", end_index=7, end_id="itemB21",
+                           markdown="- 改")
+            self.assertEqual(ctx.exception.error_code, "validation:operation_order")
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_append_when_document_ends_with_list_rejected(self):
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_edit({
+                    "document": "/Main/Projects/Doc One",
+                    "action": "append",
+                    "markdown": "- 尾部项",
+                    "confirmed": True,
+                })
+            self.assertEqual(ctx.exception.error_code, "validation:wrong_target_type")
+            self.assertIn("insert_after", str(ctx.exception))
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_task_marker_submission_updates_list_item_whole(self):
+        blocks = {
+            "doc1": [
+                {"id": "list1", "type": "l", "subtype": "t", "markdown": "- [ ] 买牛奶", "sort": 0},
+            ],
+            "list1": [
+                {"id": "itemT", "type": "i", "subtype": "t", "markdown": "- [ ] 买牛奶", "sort": 0},
+            ],
+            "itemT": [
+                {"id": "pT", "type": "p", "markdown": "买牛奶", "sort": 0},
+            ],
+        }
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            server.siyuan_edit({
+                "document": "/Main/Projects/Doc One",
+                "action": "single_block_replace",
+                "start_index": 2,
+                "start_id": "itemT",
+                "markdown": "- [x] 买牛奶",
+                "confirmed": True,
+            })
+            self.assertEqual(
+                client._updated_blocks,
+                [("itemT", "- [x] 买牛奶")],
+            )
+        finally:
+            mcp_server.detect_active_profile = original
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1007,6 +1007,49 @@ def strip_list_marker(line: str) -> str:
     return re.sub(r"^[ \t]*(?:[-*+]|\d+\.)[ \t]+", "", line, count=1)
 
 
+_LIST_MARKER_PATTERN = re.compile(r"^([-*+]|\d+\.)[ \t]+(.*)$")
+
+
+def parse_submitted_list_items(markdown: str) -> list[dict[str, Any]] | None:
+    """解析编辑提交的 Markdown 顶层列表项（docs/列表块编辑方案-2026-11-13.md 5.1）。
+
+    返回顶层项列表：每项含 text（首行文字）、follow_lines（后续段落行）、
+    child_lines（子列表行，保留相对缩进）。无顶层项或出现顶层散行返回 None。
+    """
+    items: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for raw_line in markdown.splitlines():
+        if not raw_line.strip():
+            continue
+        top_match = re.match(r"^([-*+]|\d+\.)[ \t]+(.+)$", raw_line)
+        if top_match:
+            current = {
+                "text": top_match.group(2).strip(),
+                "follow_lines": [],
+                "child_lines": [],
+            }
+            items.append(current)
+            continue
+        if current is None:
+            return None
+        stripped = raw_line.strip()
+        child_match = re.match(r"^([-*+]|\d+\.)[ \t]+", stripped)
+        if child_match and raw_line.lstrip() == stripped and raw_line[:1].isspace():
+            current["child_lines"].append(stripped)
+        elif raw_line[:1].isspace():
+            current["follow_lines"].append(stripped)
+        else:
+            return None
+    return items or None
+
+
+def dedent_list_lines(lines: list[str]) -> str:
+    """去掉子列表行的公共前导缩进，返回可直接插入思源的 Markdown。"""
+    indents = [len(line) - len(line.lstrip(" ")) for line in lines if line.strip()]
+    common = min(indents) if indents else 0
+    return "\n".join(line[common:] if line.strip() else line for line in lines)
+
+
 def code_language(markdown: str) -> str:
     first = markdown.strip().splitlines()[0] if markdown.strip() else ""
     if first.startswith("```"):
@@ -4553,6 +4596,132 @@ class McpServer:
             raise tool_error(_ERR_OPERATION_ORDER, "范围操作要求 start_index <= end_index。")
         return blocks[start_pos:end_pos + 1]
 
+    @staticmethod
+    def _validate_list_range(
+        blocks: list[DisplayBlock],
+        target: list[DisplayBlock],
+    ) -> None:
+        """列表成员范围校验（docs/列表块编辑方案-2026-11-13.md 5.5/5.10）。
+
+        跨父容器拒绝；终点必须对齐起点某个同级列表项的最后后代或该项本身。
+        """
+        start = target[0]
+        end = target[-1]
+        list_types = {"l", "i"}
+        if start.type not in list_types and end.type not in list_types:
+            return
+        if start.type == "l" or end.type == "l":
+            raise tool_error(_ERR_OPERATION_ORDER,
+                "范围不能把列表块本身和其他块组合在一起。"
+                "整表替换请只选中列表块一个目标；列表项范围请从列表项开始。")
+        if start.type != "i" or end.type != "i":
+            raise tool_error(_ERR_OPERATION_ORDER,
+                "范围起点和终点必须同为列表项或同为普通块，不能混合选择。")
+        if len(target) == 1:
+            return
+        positions = {block.id: pos for pos, block in enumerate(blocks)}
+        start_pos = positions.get(start.id)
+        end_pos = positions.get(end.id)
+        if start_pos is None or end_pos is None:
+            return
+        # 合法终点集合：起点同级某个列表项本身，或它的整棵子树的最后一块。
+        # 后代终点与连续同级覆盖都由这个集合判定；跨父范围不在集合内，自然拒绝。
+        legal_end_positions: set[int] = set()
+        for pos in range(start_pos, len(blocks)):
+            block = blocks[pos]
+            if block.type != "i" or block.parent_id != start.parent_id:
+                continue
+            legal_end_positions.add(pos)
+            scan = pos + 1
+            while scan < len(blocks) and blocks[scan].indent > block.indent:
+                scan += 1
+            legal_end_positions.add(scan - 1)
+        if end_pos not in legal_end_positions:
+            raise tool_error(_ERR_OPERATION_ORDER,
+                "范围终点没有对齐同级列表项的子树边界，或横跨了不同的父容器。"
+                "合法终点是起点同级某个列表项的最后后代，或那个列表项本身；"
+                "想大范围重建列表时，选中整个列表块走整表替换，不要横跨容器选范围。")
+
+    @staticmethod
+    def _expand_list_item_subtree(
+        blocks: list[DisplayBlock],
+        anchor: DisplayBlock,
+    ) -> list[DisplayBlock]:
+        """default_block_replace 选中单个列表项时，把目标扩展到它的整棵子树（方案 5.1）。"""
+        start_pos = next((pos for pos, block in enumerate(blocks) if block.id == anchor.id), None)
+        if start_pos is None:
+            return [anchor]
+        scan = start_pos + 1
+        while scan < len(blocks) and blocks[scan].indent > anchor.indent:
+            scan += 1
+        return blocks[start_pos:scan]
+
+    @staticmethod
+    def _dedupe_list_delete_targets(target: list[DisplayBlock]) -> list[DisplayBlock]:
+        """删除去重：范围内已被祖先删除覆盖的后代块跳过（思源删列表项连带整棵子树）。"""
+        deduped: list[DisplayBlock] = []
+        skip_indent: int | None = None
+        for block in target:
+            if skip_indent is not None and block.indent > skip_indent:
+                continue
+            skip_indent = None
+            deduped.append(block)
+            if block.type == "i":
+                skip_indent = block.indent
+        return deduped
+
+    @staticmethod
+    def _execute_list_item_single_replace(
+        client: Any,
+        target: DisplayBlock,
+        item: dict[str, Any],
+    ) -> None:
+        """single_block_replace 单选列表项的执行细则（docs/列表块编辑方案-2026-11-13.md 5.2-5.4）。
+
+        普通项只改首段落，子项和子列表完全不动，列表项 ID 保留。
+        提交首行带任务标记时走列表项整体更新：思源勾选状态在列表项节点上，
+        子树行原样保留让思源 pin 住子列表 ID。
+        """
+        item_id = target.id
+        task_update = bool(re.match(r"^\[( |x|X)\]", item["text"]))
+        if task_update:
+            rest_lines = target.source_markdown.splitlines()[1:]
+            new_md = "- " + item["text"]
+            if rest_lines:
+                new_md += "\n" + "\n".join(rest_lines)
+            client.update_block(item_id, new_md)
+        else:
+            children = client.get_child_blocks(item_id)
+            first_paragraph = next((c for c in children if c.get("type") == "p"), None)
+            if first_paragraph is None:
+                raise tool_error(_ERR_WRONG_TARGET,
+                    "列表项内没有可定位的首段落块，无法只改文字。"
+                    "请改用 default_block_replace 并把范围选到最后一个子项做整棵替换。")
+            client.update_block(first_paragraph["id"], item["text"])
+            # 5.3：原有全部文字段落整体替换，子列表保留
+            for child in children:
+                if child.get("type") == "p" and child.get("id") != first_paragraph.get("id"):
+                    client.delete_block(child.get("id"))
+        if item["follow_lines"] or item["child_lines"]:
+            children = client.get_child_blocks(item_id)
+            first_paragraph = next((c for c in children if c.get("type") == "p"), None)
+            if first_paragraph is None:
+                raise tool_error(_ERR_WRONG_TARGET, "列表项内没有可定位的首段落块。")
+            if item["follow_lines"]:
+                client.insert_block_after(first_paragraph["id"], "\n\n".join(item["follow_lines"]))
+            if item["child_lines"]:
+                child_md = dedent_list_lines(item["child_lines"])
+                sub_list = next((c for c in children if c.get("type") == "l"), None)
+                if sub_list is not None:
+                    sub_children = client.get_child_blocks(sub_list["id"])
+                    if sub_children:
+                        client.insert_block_before(sub_children[0]["id"], child_md)
+                    else:
+                        client.append_block(sub_list["id"], child_md)
+                else:
+                    # 5.4 特例：原子项没有子列表，思源按 parentID 自动包裹子列表容器
+                    client.append_block(item_id, child_md)
+
     def siyuan_edit(self, args: dict[str, Any]) -> str:
         confirmed = bool(args.get("confirmed"))
         if not confirmed:
@@ -4650,6 +4819,73 @@ class McpServer:
                     ensure_ascii=False,
                     indent=2,
                 )
+
+        # 列表块单位处理（docs/列表块编辑方案-2026-11-13.md 第4-5节）
+        # single 单选列表项时走细则（5.2-5.4），提交解析结果暂存供执行段使用。
+        list_single_item: dict[str, Any] | None = None
+        list_single_item_id: str = ""
+        if action == "append" and display_blocks and display_blocks[-1].type in ("l", "i"):
+            raise tool_error(_ERR_WRONG_TARGET,
+                "文档末尾是列表，append 不适用于列表。"
+                "请用 insert_after 选中最后一个列表项，提交以 - 或 1. 开头的列表项。")
+        if target_blocks and target_blocks[0].type == "l":
+            if action == "single_block_replace":
+                raise tool_error(_ERR_WRONG_SHAPE,
+                    "选中列表块时不能用 single_block_replace：它只会改列表块本身，"
+                    "全部子块 ID 失效且反链检查覆盖不到子块。请改用 default_block_replace 整表替换。")
+            if action in {"table_edit", "insert_assets"}:
+                raise tool_error(_ERR_WRONG_TARGET,
+                    f"action={action} 不适用于列表块。如需在列表附近插入内容，"
+                    "用 insert_before / insert_after；如需重建整个列表，用 default_block_replace。")
+            if action in {"default_block_replace", "delete", "insert_after", "insert_before"} and len(target_blocks) > 1:
+                raise tool_error(_ERR_OPERATION_ORDER,
+                    "范围包含列表块本身和其他块。整表替换只选中列表块一个目标；"
+                    "删除整个列表直接选中列表块本身。")
+            if action in {"default_block_replace", "insert_after", "insert_before"}:
+                submitted = parse_submitted_list_items(markdown)
+                if submitted is None:
+                    raise tool_error(_ERR_WRONG_SHAPE,
+                        "目标锚点是列表，提交内容必须解析为 Markdown 列表项（以 - 或 1. 开头）。")
+        elif target_blocks and target_blocks[0].type == "i":
+            if action in {"table_edit", "insert_assets"}:
+                raise tool_error(_ERR_WRONG_TARGET,
+                    f"action={action} 不适用于列表项。")
+            if action in {"insert_after", "insert_before"}:
+                submitted = parse_submitted_list_items(markdown)
+                if submitted is None:
+                    raise tool_error(_ERR_WRONG_SHAPE,
+                        "插入列表项时提交内容必须解析为 Markdown 列表项（以 - 或 1. 开头）。")
+            if action in {"default_block_replace", "single_block_replace"}:
+                self._validate_list_range(display_blocks, target_blocks)
+                if action == "single_block_replace" and len(target_blocks) == 1:
+                    # 5.1 细则：single 单选列表项进入 5.2-5.4，不走多块检查
+                    submitted = parse_submitted_list_items(markdown)
+                    if submitted is None:
+                        raise tool_error(_ERR_WRONG_SHAPE,
+                            "提交内容必须解析为 Markdown 列表项（以 - 或 1. 开头），"
+                            "因为 read 展示的列表项正文不带标记，写入思源时需要它来保持列表结构。")
+                    if len(submitted) > 1:
+                        raise tool_error(_ERR_WRONG_SHAPE,
+                            "选中单个列表项时提交了多个同级项，无法确定原有子项归属。\\n"
+                            "请改用其中一种：\\n"
+                            "1. 只提交一个列表项，原有子项会保留，例如 `- 文字`\\n"
+                            "2. 把范围选到最后一个子项，整棵替换\\n"
+                            "3. 分两次调用：先改文字，再在目标项后面插入新项")
+                    list_single_item = submitted[0]
+                    list_single_item_id = target_blocks[0].id
+                else:
+                    # default（含 single 范围）按整棵替换执行：提交必须是列表项
+                    submitted = parse_submitted_list_items(markdown)
+                    if submitted is None:
+                        raise tool_error(_ERR_WRONG_SHAPE,
+                            "整棵替换的提交内容必须解析为 Markdown 列表项（以 - 或 1. 开头）。")
+                    if action == "single_block_replace":
+                        # single 范围按 default_block_replace 语义执行（方案 5.5）
+                        action = "default_block_replace"
+                    if len(target_blocks) == 1:
+                        target_blocks = self._expand_list_item_subtree(display_blocks, target_blocks[0])
+            if action == "delete" and len(target_blocks) > 1:
+                self._validate_list_range(display_blocks, target_blocks)
 
         if action in {"single_block_replace", "default_block_replace"}:
             refused = [
@@ -4858,15 +5094,20 @@ class McpServer:
             elif action == "insert_before":
                 client.insert_block_before(target_blocks[0].id, markdown)
             elif action == "delete":
-                for block in reversed(target_blocks):
+                for block in reversed(self._dedupe_list_delete_targets(target_blocks)):
                     client.delete_block(block.id)
             elif action == "table_edit":
                 self._update_block_preserving_attrs(client, target_blocks[0].id, new_table)
             elif action == "single_block_replace":
-                self._update_block_preserving_attrs(client, target_blocks[0].id, markdown)
+                if list_single_item is not None:
+                    self._execute_list_item_single_replace(
+                        client, target_blocks[0], list_single_item
+                    )
+                else:
+                    self._update_block_preserving_attrs(client, target_blocks[0].id, markdown)
             elif action == "default_block_replace":
                 client.insert_block_before(target_blocks[0].id, markdown)
-                for block in reversed(target_blocks):
+                for block in reversed(self._dedupe_list_delete_targets(target_blocks)):
                     client.delete_block(block.id)
 
             new_display_blocks = wait_for_display_blocks(client, doc_id)
