@@ -1,5 +1,13 @@
 # SiYuan Bridge 项目工程文档
 
+## 2026-11-13：能力库验证通道改为 DSH 优先
+
+- 用户在审查列表块 read/edit 改动时指出，我在 DSH 会话里用 `caplib.cmd` 做第二层实际调用，跳过了 DSH 插件自带的能力库。用户确认的规则是：DSH 内必须使用 DSH 自己的能力库插件（`mcp_register` / `mcp_load` / `mcp_call`）；只有 Codex、Hermes、WorkBuddy 等非 DSH 平台才走旧 CLI 通道。旧 CLI 已停止维护，有已知 bug 但能用，不作为本项目验证依据。
+- 本轮调用确实指向本仓库源码而非用户版，结论真实性未受影响；问题在通道选择。以后不再需要用户重复提醒。
+- 同步修改：`AGENTS.md` 分层验证改为 DSH 优先；`docs/DEVELOPMENT_GUIDE.md` 新增「能力库验证通道：DSH 优先」，原「公司电脑 caplib CLI 验证入口」改名并降为「旧 CLI 通道（仅非 DSH 平台）」，顺手把其中过期的工作树路径改为当前注册表指向 `D:\Github\siyuan-agent-bridge`；`docs/DEVELOPMENT_GUIDE.md` 第二层与第三层路由改为只走 DSH 能力库。
+- 项目外同步：`D:\HermesSync\capability-library\capability-entry\SKILL.md` 的「如何使用能力库」第 4 步和「MCP 能力与使用方法」按平台分流；同目录 `references/能力库维护指南.md` 的加载与最小调用验证步骤补上 DSH 方式。
+- 未完成：本次未改 `caplib.cmd` 自身实现，已知 bug 保持现状。
+
 ## 2026-11-13：反馈结案与待办清理
 
 - 反馈 #27「复制完整路径」：v1.14.0 已随集市更新到用户版（2026-11-13 08:30），用户完成真实界面验收并确认可用，台账标 done。

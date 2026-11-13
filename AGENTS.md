@@ -180,7 +180,7 @@ python -m pytest tests -q
 
 ## 分层验证
 
-公司电脑当前使用 `caplib.cmd`，验证路由见 `docs/DEVELOPMENT_GUIDE.md` 的「公司电脑 caplib CLI 验证入口」；下述 `mcp_load` 方式仅适用于旧 DSH 环境。
+当前 AI 平台是 DSH。在 DSH 内做能力库验证，一律使用 DSH 插件自带的能力库，用 `mcp_register` / `mcp_load` / `mcp_call` 调用，不得改用 `D:\HermesSync\capability-library\caplib.cmd`。只有 Codex、Hermes、WorkBuddy 等非 DSH 平台才走旧 CLI 通道；该通道已停止维护，仍有 bug，能用但不是本项目的验证依据。完整路由见 `docs/DEVELOPMENT_GUIDE.md` 的「能力库验证通道：DSH 优先」。
 
 普通 MCP 代码改动默认运行单元测试后，把能力库里已经注册的 `siyuan-bridge-dev` 从 `disabled` 改为 `on-demand` 再 `mcp_load`，实际调用受影响工具验证。禁止新建思源桥 MCP，禁止使用用户版做开发验证；用完把 `siyuan-bridge-dev` 改回 `disabled`。只验证代码能运行或只看 `tools/list` 不算行为验证。只有必须在思源本体 UI 中观察的功能（例如插件前端）才把当前源码导入 `D:\Siyuan2test`，并把已注册的 `siyuan-bridge-test` 改为 `on-demand`，由人类手动打开思源查看；不要为普通 MCP 行为测试启动或部署测试工作空间。大型修改或用户明确要求时，再增加子代理独立调用验证。名字、档位切换和禁止新建注册项见 `docs/DEVELOPMENT_GUIDE.md` 的「DSH 能力库中的三个思源桥」。
 

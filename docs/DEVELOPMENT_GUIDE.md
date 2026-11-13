@@ -546,21 +546,16 @@ python scripts\import_siyuan_plugin.py --workspace %SIYUAN_TEST_WORKSPACE%
 
 旧版升级必须验证：在插件程序目录准备旧配置、遥测、隐私缓存与 `stats/`（旧 `system_state.json` 不迁移），插件数据区为空时普通导入会完整复制；插件数据区预置不同内容时保持目标不变；插件启用后 Python Bridge 读到插件数据区内容。跨设备 Token 合并改动还必须验证：在插件数据区准备一个已有其他设备 Token 的 `config.local.json`，启用插件后当前设备 Token 会追加到 profiles，原有 profile 的名称、Token 和顺序保持不变；重复启用不产生重复项；打开设置页同样合并当前 Token，改动任意配置项后随 500ms 防抖自动保存写入。MCP 会话连接改动必须验证：未调用 `siyuan_start` 时普通工具明确要求先 start；一次成功 start 后多个工具不重复探测 profiles；连接或 401/403 鉴权失效后缓存被清空并要求重新 start。
 
-### 公司电脑 caplib CLI 验证入口
+### 能力库验证通道：DSH 优先
 
-2026-11-12 已按用户明确授权在 `D:\HermesSync\capability-library\mcps\registry.json` 注册 `siyuan-bridge-dev`。本机使用能力库 CLI，不依赖平台暴露 `mcp_load/mcp_use`；下方 DSH 方式仅适用于实际存在旧 DSH 注册表的环境。
+第二层和第三层验证必须走当前 AI 平台自己的能力库，平台决定通道：
 
-- 开发版直接指向本次工作树 `C:\Users\Zinger\.codex\worktrees\read-token-estimation\siyuan-agent-bridge`，运行 `python -m source_code.mcp_server`；不是主仓库或用户安装副本。移动或归档工作树前应先处理该注册项。
-- 修改能力库前先读 `D:\HermesSync\capability-library\capability-entry\references\能力库维护指南.md`。以后复用已有条目，只切换 `enabled`，不要重复注册；确需更换源码路径时先核对本次验证的分支和工作树。
-- 平时 `enabled=false`；验证前临时启用，`load --keep-alive` 后先调用 `siyuan_start`，再逐次 `use` 调用受影响工具。结束时先 `close`，再恢复停用并刷新、检查能力库索引。
-- 工作树使用自身被 Git 忽略的连接配置与关闭的遥测配置；验证使用「测试思源桥专用」现有夹具。注册表只保存启动配置，不复制 Token。
+| 平台 | 通道 | 状态 |
+|---|---|---|
+| DSH | DSH 插件自带能力库，用 `mcp_register` / `mcp_load` / `mcp_call` | 本项目唯一验证路径 |
+| Codex、Hermes、WorkBuddy 等非 DSH 平台 | 旧 CLI `D:\HermesSync\capability-library\caplib.cmd` | 已停止维护，仍有 bug，能用但不作为本项目验证依据 |
 
-```powershell
-cmd.exe /d /c D:\HermesSync\capability-library\caplib.cmd load --name siyuan-bridge-dev --keep-alive
-cmd.exe /d /c D:\HermesSync\capability-library\caplib.cmd use --mcp siyuan-bridge-dev --tool siyuan_start
-cmd.exe /d /c D:\HermesSync\capability-library\caplib.cmd use --mcp siyuan-bridge-dev --tool siyuan_read --params-file <参数文件绝对路径>
-cmd.exe /d /c D:\HermesSync\capability-library\caplib.cmd close --name siyuan-bridge-dev
-```
+在 DSH 会话内，包括子代理、包括调用 CodeGraph 等其他 MCP，一律使用 DSH 能力库。不要因为旧文档里写着 `caplib.cmd` 命令就切到 CLI；旧 CLI 通道只留给非 DSH 平台，它的已知 bug 不影响项目结论，但用它得出的验证结果不算数。
 
 ### DSH 能力库中的三个思源桥
 
@@ -589,13 +584,29 @@ mcp_register name=siyuan-bridge-dev tier=disabled
 
 测试版把名字换成 `siyuan-bridge-test`，步骤相同。不要注册 `siyuan-bridge-dev-test` 或其他带 dev/test 的新名字；验完只改回 `disabled`，不要删注册项。
 
+### 旧 CLI 通道（仅非 DSH 平台）
+
+`D:\HermesSync\capability-library\caplib.cmd` 只在 Codex、Hermes、WorkBuddy 等没有 DSH 能力库插件的平台使用。该通道已停止维护，存在已知 bug，能用但不再修复，也不能作为本项目验证结论的依据。DSH 会话内不要使用。
+
+- 开发版条目指向本仓库 `D:\Github\siyuan-agent-bridge`，运行 `python -m source_code.mcp_server`，以 `D:\HermesSync\capability-library\mcps\registry.json` 条目为准；不是额外的代码副本或用户安装版。
+- 修改能力库前先读 `D:\HermesSync\capability-library\capability-entry\references\能力库维护指南.md`。以后复用已有条目，只切换 `enabled`，不要重复注册。
+- 平时 `enabled=false`；验证前临时启用，`load --keep-alive` 后先调用 `siyuan_start`，再逐次 `use` 调用受影响工具。结束时先 `close`，再恢复停用并刷新、检查能力库索引。
+- 仓库使用自身被 Git 忽略的连接配置与关闭的遥测配置；验证使用「测试思源桥专用」现有夹具。注册表只保存启动配置，不复制 Token。
+
+```powershell
+cmd.exe /d /c D:\HermesSync\capability-library\caplib.cmd load --name siyuan-bridge-dev --keep-alive
+cmd.exe /d /c D:\HermesSync\capability-library\caplib.cmd use --mcp siyuan-bridge-dev --tool siyuan_start
+cmd.exe /d /c D:\HermesSync\capability-library\caplib.cmd use --mcp siyuan-bridge-dev --tool siyuan_read --params-file <参数文件绝对路径>
+cmd.exe /d /c D:\HermesSync\capability-library\caplib.cmd close --name siyuan-bridge-dev
+```
+
 ### 第一层：测试代码
 
 运行单元测试，覆盖修改后的代码分支和回归场景。需要写入的单元测试使用 Fake Client，不接触思源工作空间。
 
 ### 第二层：能力库开发版 MCP
 
-使用已经注册的 `siyuan-bridge-dev`。按上一节把它从 `disabled` 改成 `on-demand`，再 `mcp_load`。每次修改后重新 `load`，再通过 DSH 能力库实际调用受影响工具并检查结果。能力库承担通用 MCP 客户端和进程加载职责，不依赖任何 AI 会话重载。
+DSH 内使用 DSH 能力库里已经注册的 `siyuan-bridge-dev`：按「DSH 能力库中的三个思源桥」把它从 `disabled` 改成 `on-demand`，再 `mcp_load`。每次修改后重新 `load`，再实际调用受影响工具并检查结果。能力库承担通用 MCP 客户端和进程加载职责，不依赖任何 AI 会话重载。非 DSH 平台改走「旧 CLI 通道（仅非 DSH 平台）」。
 
 写入工具只能操作明确的临时测试文档，并在测试后清理；读取、搜索场景优先使用固定夹具。不要使用用户版思源桥做开发验证。
 
@@ -608,7 +619,7 @@ mcp_register name=siyuan-bridge-dev tier=disabled
 子代理的 MCP 路由顺序固定为：
 
 1. 优先使用当前环境直接暴露、且已确认指向当前开发版源码和测试配置的内置 MCP。
-2. 如果没有可用的开发版内置 MCP，读取能力库入口，把已注册的 `siyuan-bridge-dev` 改为 `on-demand` 后 `mcp_load` 再调用。不要新建注册项。
+2. 如果没有可用的开发版内置 MCP，把 DSH 能力库里已注册的 `siyuan-bridge-dev` 改为 `on-demand` 后 `mcp_load` 再调用。不要新建注册项，也不要改用 `caplib.cmd`。
 3. 禁止使用用户版、生产版或无法确认代码来源的思源桥 MCP 做开发验证；无法确认时应报告阻塞，不得猜测。
 
 写入类验证只能操作明确的临时测试文档；测试结束后清理。如果调用 `siyuan_start`，注意它会清理 `ai_workspace/` 中除 README 外的内容。
