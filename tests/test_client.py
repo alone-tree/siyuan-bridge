@@ -683,6 +683,42 @@ class NativeTransportTests(unittest.TestCase):
         with self.assertRaises(SiYuanApiError):
             client.insert_local_assets("doc", ["file"])
 
+    def test_new_local_asset_result_is_not_retried_but_legacy_transport_still_retries(self):
+        calls = []
+
+        def transport(req, timeout):
+            calls.append(req.full_url)
+            raise OSError("connection dropped")
+
+        client = SiYuanClient("http://unused", transport=transport)
+        with self.assertRaises(SiYuanConnectionError):
+            client.insert_local_assets_result("doc", ["file"], is_upload=True)
+        self.assertEqual(len(calls), 1)
+        calls.clear()
+        with patch("time.sleep"), self.assertRaises(SiYuanConnectionError):
+            client.version()
+        self.assertEqual(len(calls), 2)
+
+    def test_upload_preparation_failure_closes_already_opened_files_without_request(self):
+        streams = []
+        original_open = Path.open
+        calls = []
+
+        def tracked_open(path, *args, **kwargs):
+            stream = original_open(path, *args, **kwargs)
+            streams.append(stream)
+            return stream
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "one.bin"
+            path.write_bytes(b"one")
+            with patch.object(Path, "open", tracked_open):
+                client = SiYuanClient("http://unused", transport=lambda req, timeout: calls.append(req))
+                with self.assertRaises(FileNotFoundError):
+                    client.upload_assets("doc", [str(path), str(path.parent / "missing.bin")])
+            self.assertTrue(all(stream.closed for stream in streams))
+            self.assertEqual(calls, [])
+
     def test_include_envelope_does_not_allow_business_errors_on_other_apis(self):
         client = SiYuanClient("http://unused", transport=lambda req, timeout:
                               FakeResponse({"code": -1, "msg": "denied", "data": {}}))

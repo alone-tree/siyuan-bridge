@@ -162,6 +162,7 @@ class SiYuanClient:
             {"id": document_id, "assetPaths": asset_paths, "isUpload": is_upload},
             include_envelope=True,
             allow_asset_errors=True,
+            retry=False,
         )
 
     def upload_assets(self, document_id: str, file_paths: list[str]) -> dict[str, Any]:
