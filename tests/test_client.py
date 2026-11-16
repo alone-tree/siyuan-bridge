@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import io
 import json
+import tempfile
+import threading
 import unittest
+from email import policy
+from email.parser import BytesParser
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+from unittest.mock import patch
+from urllib import error
 
 from source_code.client import SiYuanApiError, SiYuanClient, SiYuanConnectionError, SiYuanTimeoutError
 
@@ -560,6 +569,253 @@ class ClientTests(unittest.TestCase):
             client.create_notebook("思源桥"),
             {"id": "nb-1", "name": "思源桥"},
         )
+
+
+class NativeTransportTests(unittest.TestCase):
+    def test_get_conf_unwraps_native_conf_field(self):
+        seen = []
+        conf = {"readonly": False, "sync": {"enabled": True, "mode": 3}, "repo": {"key": "masked"}}
+
+        def transport(req, timeout):
+            seen.append((req.full_url, json.loads(req.data)))
+            return FakeResponse({"code": 0, "data": {"conf": conf, "start": False}})
+
+        client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
+        self.assertEqual(client.get_conf(), conf)
+        self.assertEqual(seen, [("http://127.0.0.1:6806/api/system/getConf", {})])
+
+    def test_get_conf_rejects_wrong_native_shape(self):
+        for data in (None, [], {}, {"conf": None}, {"conf": []}, {"sync": {}}):
+            with self.subTest(data=data):
+                client = SiYuanClient("http://unused", transport=lambda req, timeout:
+                                      FakeResponse({"code": 0, "data": data}))
+                with self.assertRaises(SiYuanApiError):
+                    client.get_conf()
+
+    def test_sync_source_state_returns_unmodified_native_state(self):
+        seen = []
+        state = {"source": "source-hash", "localID": "local", "cloudID": "", "pending": True}
+
+        def transport(req, timeout):
+            seen.append((req.full_url, json.loads(req.data)))
+            return FakeResponse({"code": 0, "data": state})
+
+        client = SiYuanClient("http://unused", transport=transport)
+        self.assertEqual(client.get_sync_source_state(), state)
+        self.assertEqual(seen, [("http://unused/api/sync/getSyncSourceState", {})])
+
+    def test_sync_source_missing_endpoint_preserves_http_status_without_retry(self):
+        for status in (404, 405, 401, 500):
+            calls = []
+
+            def transport(req, timeout):
+                calls.append(req.full_url)
+                raise error.HTTPError(req.full_url, status, "missing", {}, io.BytesIO(b"native error"))
+
+            with self.subTest(status=status):
+                client = SiYuanClient("http://unused", transport=transport)
+                with self.assertRaises(SiYuanApiError) as ctx:
+                    client.get_sync_source_state()
+                self.assertEqual(ctx.exception.status, status)
+                self.assertEqual(str(ctx.exception), "native error")
+                self.assertEqual(len(calls), 1)
+
+    def test_sync_source_invalid_data_and_business_errors_are_not_swallowed(self):
+        for envelope in ({"code": 0, "data": None}, {"code": 0, "data": []},
+                         {"code": -1, "msg": "source failed", "data": {}}):
+            with self.subTest(envelope=envelope):
+                client = SiYuanClient("http://unused", transport=lambda req, timeout: FakeResponse(envelope))
+                with self.assertRaises(SiYuanApiError):
+                    client.get_sync_source_state()
+
+    def test_perform_sync_only_sends_explicit_direction_and_source_identifiers(self):
+        cases = [({}, {}), ({"upload": False}, {"upload": False}),
+                 ({"upload": True}, {"upload": True})]
+        source = {"source": "hash", "localID": "local", "cloudID": "", "pending": True, "mode": 3}
+        binding = {key: source[key] for key in ("source", "localID", "cloudID")}
+        cases.extend([({"source_state": source}, binding),
+                      ({"upload": False, "source_state": source}, {"upload": False, **binding}),
+                      ({"upload": True, "source_state": source}, {"upload": True, **binding})])
+        for kwargs, expected in cases:
+            seen = []
+
+            def transport(req, timeout):
+                seen.append((json.loads(req.data), timeout))
+                return FakeResponse({"code": 0, "data": {"native": "result"}})
+
+            with self.subTest(kwargs=kwargs):
+                client = SiYuanClient("http://unused", transport=transport)
+                self.assertEqual(client.perform_sync(timeout=23, **kwargs), {"native": "result"})
+                self.assertEqual(seen, [(expected, 23)])
+        self.assertEqual(source["pending"], True)
+
+    def test_perform_sync_connection_failure_and_timeout_are_never_retried(self):
+        for failure in (OSError("dropped"), TimeoutError("slow"), error.URLError("network")):
+            calls = []
+
+            def transport(req, timeout):
+                calls.append(req.full_url)
+                raise failure
+
+            with self.subTest(failure=failure):
+                client = SiYuanClient("http://unused", transport=transport)
+                with self.assertRaises(SiYuanConnectionError):
+                    client.perform_sync(upload=False)
+                self.assertEqual(len(calls), 1)
+
+    def test_insert_local_assets_result_preserves_partial_error_and_directory_payload(self):
+        seen = []
+        envelope = {"code": -1, "msg": "one failed", "data": {
+            "succMap": {"目录": "file://native-path"},
+            "succFiles": [{"index": 0, "name": "目录", "path": "file://native-path"}],
+            "failedFiles": [{"index": 1, "name": "missing", "error": "missing"}]}}
+
+        def transport(req, timeout):
+            seen.append((req.full_url, json.loads(req.data)))
+            return FakeResponse(envelope)
+
+        client = SiYuanClient("http://unused", transport=transport)
+        self.assertEqual(client.insert_local_assets_result("doc", ["目录", "missing"]), envelope)
+        self.assertEqual(seen, [("http://unused/api/asset/insertLocalAssets", {
+            "id": "doc", "assetPaths": ["目录", "missing"], "isUpload": False})])
+        client.insert_local_assets_result("doc", ["file"], is_upload=True)
+        self.assertTrue(seen[-1][1]["isUpload"])
+        with self.assertRaises(SiYuanApiError):
+            client.insert_local_assets("doc", ["file"])
+
+    def test_include_envelope_does_not_allow_business_errors_on_other_apis(self):
+        client = SiYuanClient("http://unused", transport=lambda req, timeout:
+                              FakeResponse({"code": -1, "msg": "denied", "data": {}}))
+        for path, allow in (("/api/query/sql", False), ("/api/query/sql", True),
+                            ("/api/asset/insertLocalAssets", False)):
+            with self.subTest(path=path, allow=allow):
+                with self.assertRaisesRegex(SiYuanApiError, "denied"):
+                    client._post(path, {}, include_envelope=True, allow_asset_errors=allow)
+
+    def test_upload_assets_real_http_bytes_unicode_same_names_and_content_length(self):
+        seen = {}
+        envelope = {"code": 0, "msg": "native", "data": {"succMap": {"同名.bin": "assets/b"},
+                    "succFiles": [{"index": 0, "path": "assets/a"},
+                                  {"index": 1, "path": "assets/b"},
+                                  {"index": 2, "path": "assets/empty"}], "errFiles": []}}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                seen["path"] = self.path
+                seen["headers"] = self.headers
+                seen["body"] = self.rfile.read(int(self.headers["Content-Length"]))
+                payload = json.dumps(envelope).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        with tempfile.TemporaryDirectory() as directory, HTTPServer(("127.0.0.1", 0), Handler) as server:
+            root = Path(directory)
+            (root / "one").mkdir()
+            (root / "two").mkdir()
+            files = [root / "one" / "同名.bin", root / "two" / "同名.bin", root / "空 文件.txt"]
+            payloads = [b"\x00\xffnative\r\n", "中文内容".encode("utf-8"), b""]
+            for path, data in zip(files, payloads):
+                path.write_bytes(data)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                client = SiYuanClient(f"http://127.0.0.1:{server.server_port}", token="fake-test-token")
+                self.assertEqual(client.upload_assets("doc-target", [str(path) for path in files]), envelope)
+            finally:
+                server.shutdown()
+                thread.join(timeout=5)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(seen["path"], "/api/asset/upload")
+            headers = seen["headers"]
+            self.assertEqual(headers["Authorization"], "Token fake-test-token")
+            self.assertEqual(headers["Connection"], "close")
+            self.assertIsNone(headers["Transfer-Encoding"])
+            self.assertEqual(int(headers["Content-Length"]), len(seen["body"]))
+            message = BytesParser(policy=policy.default).parsebytes(
+                ("Content-Type: " + headers["Content-Type"] + "\r\n\r\n").encode() + seen["body"])
+            parts = list(message.iter_parts())
+            self.assertEqual(parts[0].get_param("name", header="Content-Disposition"), "id")
+            self.assertEqual(parts[0].get_payload(decode=True), b"doc-target")
+            self.assertEqual([part.get_param("name", header="Content-Disposition") for part in parts[1:]],
+                             ["file[]"] * 3)
+            self.assertEqual([part.get_filename() for part in parts[1:]], [path.name for path in files])
+            self.assertEqual([part.get_payload(decode=True) for part in parts[1:]], payloads)
+            self.assertNotIn(str(root).encode(), seen["body"])
+
+    def test_upload_stream_is_bounded_and_keeps_native_error_envelopes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "small.bin"
+            data = b"a" * (140 * 1024)
+            path.write_bytes(data)
+            envelopes = [
+                {"code": 0, "data": {"succMap": {}, "errFiles": ["small.bin"]}},
+                {"code": -1, "msg": "partial", "data": {"succFiles": [{"index": 0, "path": "assets/a"}],
+                                                          "failedFiles": [{"index": 1, "error": "denied"}]}}]
+            for envelope in envelopes:
+                seen = []
+
+                def transport(req, timeout):
+                    self.assertFalse(isinstance(req.data, bytes))
+                    chunks = list(req.data)
+                    self.assertLessEqual(max(map(len, chunks)), 64 * 1024)
+                    body = b"".join(chunks)
+                    self.assertIn(data, body)
+                    self.assertEqual(int(req.get_header("Content-length")), len(body))
+                    seen.append(timeout)
+                    return FakeResponse(envelope)
+
+                with self.subTest(envelope=envelope), patch.object(Path, "read_bytes", side_effect=AssertionError):
+                    client = SiYuanClient("http://unused", timeout=17, transport=transport)
+                    self.assertEqual(client.upload_assets("doc", [str(path)]), envelope)
+                    self.assertEqual(seen, [17])
+
+    def test_upload_failure_never_retries_and_closes_streams(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "small.bin"
+            path.write_bytes(b"small")
+            for failure in (OSError("dropped"), TimeoutError("slow"), error.URLError("network")):
+                calls = []
+                streams = []
+                original_open = Path.open
+
+                def tracked_open(path, *args, **kwargs):
+                    stream = original_open(path, *args, **kwargs)
+                    streams.append(stream)
+                    return stream
+
+                def transport(req, timeout):
+                    calls.append(req.full_url)
+                    next(iter(req.data))
+                    raise failure
+
+                with self.subTest(failure=failure), patch.object(Path, "open", tracked_open):
+                    client = SiYuanClient("http://unused", transport=transport)
+                    with self.assertRaises(SiYuanConnectionError):
+                        client.upload_assets("doc", [str(path)])
+                    self.assertEqual(len(calls), 1)
+                    self.assertTrue(all(stream.closed for stream in streams))
+
+    def test_upload_http_errors_still_raise_status_and_invalid_json_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "small.bin"
+            path.write_bytes(b"small")
+
+            def transport(req, timeout):
+                raise error.HTTPError(req.full_url, 403, "denied", {}, io.BytesIO(b"forbidden"))
+
+            client = SiYuanClient("http://unused", transport=transport)
+            with self.assertRaises(SiYuanApiError) as ctx:
+                client.upload_assets("doc", [str(path)])
+            self.assertEqual(ctx.exception.status, 403)
+            for envelope in ([], None, "bad"):
+                client = SiYuanClient("http://unused", transport=lambda req, timeout: FakeResponse(envelope))
+                with self.assertRaises(SiYuanApiError):
+                    client.upload_assets("doc", [str(path)])
 
 
 if __name__ == "__main__":

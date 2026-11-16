@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import uuid
+from contextlib import ExitStack
 from dataclasses import dataclass
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any, Callable, Iterable
 from urllib import error, parse, request
 
 
@@ -144,6 +148,71 @@ class SiYuanClient:
             for source, resolved in succ_map.items()
             if str(source) and str(resolved)
         }
+
+    def insert_local_assets_result(
+        self,
+        document_id: str,
+        asset_paths: list[str],
+        *,
+        is_upload: bool = False,
+    ) -> dict[str, Any]:
+        """保留原生逐项结果，包括业务失败时已成功的资源。"""
+        return self._post(
+            "/api/asset/insertLocalAssets",
+            {"id": document_id, "assetPaths": asset_paths, "isUpload": is_upload},
+            include_envelope=True,
+            allow_asset_errors=True,
+        )
+
+    def upload_assets(self, document_id: str, file_paths: list[str]) -> dict[str, Any]:
+        """发送文件内容；资源目录、命名和去重均由思源处理，不重试上传。"""
+        boundary = "siyuan-bridge-" + uuid.uuid4().hex
+        prefix = (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="id"\r\n\r\n'
+            f'{document_id}\r\n'
+        ).encode("utf-8")
+        suffix = f"--{boundary}--\r\n".encode("ascii")
+        with ExitStack() as stack:
+            files = []
+            content_length = len(prefix) + len(suffix)
+            for file_path in file_paths:
+                path = Path(file_path)
+                stream = stack.enter_context(path.open("rb"))
+                size = os.fstat(stream.fileno()).st_size
+                filename = (path.name.replace("\\", "\\\\").replace('"', '\\"')
+                            .replace("\r", "%0D").replace("\n", "%0A"))
+                header = (
+                    f'--{boundary}\r\nContent-Disposition: form-data; name="file[]"; '
+                    f'filename="{filename}"\r\nContent-Type: application/octet-stream\r\n\r\n'
+                ).encode("utf-8")
+                files.append((header, stream, size))
+                content_length += len(header) + size + 2
+
+            def chunks() -> Iterable[bytes]:
+                yield prefix
+                for header, stream, size in files:
+                    yield header
+                    remaining = size
+                    while remaining:
+                        chunk = stream.read(min(64 * 1024, remaining))
+                        if not chunk:
+                            raise OSError("上传期间文件被截短")
+                        remaining -= len(chunk)
+                        yield chunk
+                    yield b"\r\n"
+                yield suffix
+
+            headers = {
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "Content-Length": str(content_length),
+                "Connection": "close",
+            }
+            if self.token:
+                headers["Authorization"] = f"Token {self.token}"
+            return self._post_once(
+                "/api/asset/upload", chunks(), headers,
+                include_envelope=True, allow_asset_errors=True,
+            )
 
     def search_full_text(
         self,
@@ -325,8 +394,31 @@ class SiYuanClient:
             raise SiYuanApiError("Unexpected repo snapshots response shape")
         return data
 
-    def perform_sync(self, *, timeout: float = 10.0) -> dict[str, Any]:
-        data = self._post("/api/sync/performSync", {}, timeout=timeout)
+    def get_conf(self) -> dict[str, Any]:
+        data = self._post("/api/system/getConf", {})
+        if not isinstance(data, dict) or not isinstance(data.get("conf"), dict):
+            raise SiYuanApiError("Unexpected getConf response shape")
+        return data["conf"]
+
+    def get_sync_source_state(self) -> dict[str, Any]:
+        data = self._post("/api/sync/getSyncSourceState", {})
+        if not isinstance(data, dict):
+            raise SiYuanApiError("Unexpected sync source state response shape")
+        return data
+
+    def perform_sync(
+        self,
+        *,
+        timeout: float = 10.0,
+        upload: bool | None = None,
+        source_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if upload is not None:
+            payload["upload"] = upload
+        if source_state is not None:
+            payload.update({key: source_state[key] for key in ("source", "localID", "cloudID")})
+        data = self._post("/api/sync/performSync", payload, timeout=timeout, retry=False)
         if data is None:
             return {}
         if not isinstance(data, dict):
@@ -490,7 +582,7 @@ class SiYuanClient:
     def push_err_msg(self, msg: str, timeout: int = 7000) -> None:
         self._post("/api/notification/pushErrMsg", {"msg": msg, "timeout": timeout})
 
-    def _post(self, path: str, payload: dict[str, Any], *, timeout: float | None = None, include_envelope: bool = False) -> Any:
+    def _post(self, path: str, payload: dict[str, Any], *, timeout: float | None = None, include_envelope: bool = False, allow_asset_errors: bool = False, retry: bool = True) -> Any:
         body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json", "Connection": "close"}
         if self.token:
@@ -498,19 +590,20 @@ class SiYuanClient:
         request_timeout = self.timeout if timeout is None else timeout
 
         last_error: Exception | None = None
-        for attempt in range(2):
+        attempts = 2 if retry else 1
+        for attempt in range(attempts):
             try:
-                return self._post_once(path, body, headers, timeout=request_timeout, include_envelope=include_envelope)
+                return self._post_once(path, body, headers, timeout=request_timeout, include_envelope=include_envelope, allow_asset_errors=allow_asset_errors)
             except SiYuanConnectionError as exc:
                 last_error = exc
-                if attempt < 1:
+                if attempt + 1 < attempts:
                     import time
                     time.sleep(0.3)
             else:
                 break
         raise last_error  # type: ignore[misc]
 
-    def _post_once(self, path: str, body: bytes, headers: dict[str, str], *, timeout: float | None = None, include_envelope: bool = False) -> Any:
+    def _post_once(self, path: str, body: bytes | Iterable[bytes], headers: dict[str, str], *, timeout: float | None = None, include_envelope: bool = False, allow_asset_errors: bool = False) -> Any:
         req = request.Request(
             f"{self.base_url}{path}",
             data=body,
@@ -541,7 +634,8 @@ class SiYuanClient:
             raise SiYuanApiError("SiYuan returned unexpected response shape")
 
         code = envelope.get("code", 0)
-        if code != 0:
+        preserve_asset_error = allow_asset_errors and path in {"/api/asset/upload", "/api/asset/insertLocalAssets"}
+        if code != 0 and not preserve_asset_error:
             msg = envelope.get("msg") or envelope.get("message") or f"API returned code {code}"
             raise SiYuanApiError(str(msg), code=int(code) if isinstance(code, int) else None)
 
