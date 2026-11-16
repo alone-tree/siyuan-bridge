@@ -3738,6 +3738,28 @@ class McpServerWriteTests(unittest.TestCase):
         finally:
             mcp_server.detect_active_profile = original
 
+    def test_native_exported_directory_link_normalization_is_verified(self):
+        folder = self.asset_dir / "source files(1)"
+        folder.mkdir()
+        blocks = {"doc1": [{"id": "block1", "type": "p", "markdown": "Anchor."}]}
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        native_insert = client.insert_block_after
+        destination = f"file://{folder}"
+        def normalize_before_insert(anchor, markdown):
+            markdown = markdown.replace(f"<{destination}>", destination.replace(" ", "%20"))
+            native_insert(anchor, markdown)
+        try:
+            with mock.patch.object(client, "insert_block_after", side_effect=normalize_before_insert):
+                result = json.loads(server.siyuan_edit({
+                    "document_id": "doc1", "action": "insert_assets", "start_index": 1, "start_id": "block1",
+                    "assets": [{"local_path": str(folder), "name": "native-folder"}], "confirmed": True,
+                }))
+            self.assertEqual(result["status"], "success")
+            self.assertTrue(result["inserted"][0]["verified"])
+            self.assertFalse(result["failed"])
+        finally:
+            mcp_server.detect_active_profile = original
+
     def test_native_asset_verification_counts_complete_references_not_substrings(self):
         for same_path in (False, True):
             with self.subTest(same_path=same_path):

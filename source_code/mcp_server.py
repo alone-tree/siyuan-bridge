@@ -600,6 +600,34 @@ def render_asset_markdown(item: AssetInsertionItem, resolved_path: str) -> str:
     return f"{prefix}[{label}]({destination}{title})"
 
 
+def asset_reference_signatures(markdown: str) -> list[tuple[str, str, str]]:
+    """核验原生Markdown引用：保留类型/显示名，解析完整目标并还原URL编码。"""
+    signatures: list[tuple[str, str, str]] = []
+    for match in _MARKDOWN_LINK_RE.finditer(_blank_inline_code(markdown)):
+        destination = match.group("angled")
+        if destination is None:
+            # 思源会把尖括号目标规范化成编码空格、保留成对括号的bare目标。
+            position = match.start("bare")
+            depth = 0
+            characters: list[str] = []
+            while position < len(markdown):
+                char = markdown[position]
+                if char.isspace() or (char == ")" and depth == 0):
+                    break
+                if char == "(" :
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                if char == chr(92) and position + 1 < len(markdown) and markdown[position + 1] in "()":
+                    position += 1
+                    char = markdown[position]
+                characters.append(char)
+                position += 1
+            destination = "".join(characters)
+        signatures.append((match.group("bang"), match.group("label"), unquote(destination)))
+    return signatures
+
+
 def preflight_asset_items(raw_assets: Any) -> list[AssetInsertionItem]:
     if not isinstance(raw_assets, list) or not raw_assets:
         raise tool_error(_ERR_WRONG_SHAPE, "action=insert_assets 需要非空 assets 数组。")
@@ -5215,10 +5243,10 @@ class McpServer:
                     except Exception as exc:
                         actual = ""
                         outcome.warnings.append(f"写后读取失败：{exc}；文档可能已包含部分或全部引用，请先读取确认。")
-                    references = Counter(match.group(0) for match in _MARKDOWN_LINK_RE.finditer(_blank_inline_code(actual)))
+                    references = Counter(asset_reference_signatures(actual))
                     for i, resolved in sorted(outcome.paths.items()):
                         item = asset_items[i]
-                        token = render_asset_markdown(item, resolved)
+                        token = asset_reference_signatures(render_asset_markdown(item, resolved))[0]
                         entry = {"index": i, "local_path": item.local_path, "kind": item.kind,
                                  "resolved_path": resolved, "name": item.name, "title": item.title,
                                  "verified": references[token] > 0}
