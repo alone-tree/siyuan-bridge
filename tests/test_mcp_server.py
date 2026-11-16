@@ -6619,7 +6619,7 @@ class McpServerListEditTests(McpServerWriteTests):
             })
             self.assertEqual(
                 client._updated_blocks,
-                [("itemT", "- [x] 买牛奶")],
+                [("itemT", '- [x] 买牛奶\n  {: id="pT"}')],
             )
         finally:
             mcp_server.detect_active_profile = original
@@ -6663,6 +6663,19 @@ class McpServerListEditTests(McpServerWriteTests):
                 })
             self.assertEqual(ctx.exception.error_code, "validation:operation_order")
             self.assertFalse(client._snapshots)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_paragraph_endpoints_cannot_hide_list_in_range(self):
+        blocks = self._list_blocks()
+        blocks["doc1"].append({"id": "tail", "type": "p", "markdown": "Tail", "sort": 2})
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                self._edit(server, action="delete", start_index=1, start_id="para1", end_index=7, end_id="tail")
+            self.assertEqual(ctx.exception.error_code, "validation:operation_order")
+            self.assertFalse(client._snapshots)
+            self.assertFalse(client._deleted_blocks)
         finally:
             mcp_server.detect_active_profile = original
 
@@ -6779,13 +6792,12 @@ class McpServerListEditTests(McpServerWriteTests):
                 start_id="itemT",
                 markdown="- [x] New task\n  new continuation",
             )
-            # 新续行并入列表项整体更新内容，旧续行不再带回（思源 updateBlock 替换子树）
             self.assertEqual(
                 client._updated_blocks,
-                [("itemT", "- [x] New task\n  new continuation")],
+                [("itemT", '- [x] New task\n  {: id="pT"}')],
             )
             self.assertNotIn("old continuation", client._updated_blocks[0][1])
-            self.assertEqual(client._inserted_after, [])
+            self.assertEqual(client._inserted_after, [("pT", "new continuation")])
         finally:
             mcp_server.detect_active_profile = original
 
@@ -6808,10 +6820,11 @@ class McpServerListEditTests(McpServerWriteTests):
             "itemT": [
                 {"id": "pT", "type": "p", "markdown": "Task", "sort": 0},
                 {"id": "pT2", "type": "p", "markdown": "old continuation", "sort": 1},
-                {"id": "subListT", "type": "l", "subtype": "t", "markdown": '- {: id="itemC"}Child', "sort": 2},
+                {"id": "subListT", "type": "l", "subtype": "t", "markdown": '- Child', "sort": 2},
             ],
         }
         server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        client.get_block_kramdown = mock.Mock(return_value='- {: id="itemC"}Child\n{: id="subListT"}')
         try:
             self._edit(
                 server,
@@ -6819,6 +6832,7 @@ class McpServerListEditTests(McpServerWriteTests):
                 start_id="itemT",
                 markdown="- [x] New task\n  new continuation",
             )
+            client.get_block_kramdown.assert_called_once_with("subListT")
             updated_md = client._updated_blocks[0][1]
             self.assertIn("- [x] New task", updated_md)
             self.assertIn('  - {: id="itemC"}Child', updated_md)
@@ -6831,7 +6845,8 @@ class McpServerListEditTests(McpServerWriteTests):
 
         def query_sql_with_ial(stmt):
             if "SELECT ial" in str(stmt):
-                return [{"ial": ial}]
+                match = re.search(r'id="([^"]+)"', ial)
+                return [{"ial": ial}] if match and f"'{match.group(1)}'" in str(stmt) else []
             return original_query_sql(stmt)
 
         client.query_sql = query_sql_with_ial
@@ -6899,6 +6914,42 @@ class McpServerListEditTests(McpServerWriteTests):
             self._edit(server, markdown="- 层级1，项2改\n\n  第二段")
             self.assertIn(("pB", "层级1，项2改"), client._updated_blocks)
             self.assertEqual(client._inserted_after, [("pB", "第二段")])
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_child_paragraph_and_fence_blank_lines_preserved(self):
+        for body in ["- C\n\n  next paragraph", "- C\n  ```text\n  a\n\n  b\n  ```"]:
+            markdown = "- P\n" + "\n".join("  " + line if line else "" for line in body.splitlines())
+            submitted = mcp_server.parse_submitted_list_items(markdown)
+            self.assertEqual(mcp_server.dedent_list_lines(submitted[0]["child_lines"]), body)
+
+    def test_parent_fence_keeps_literal_list_and_blank_lines(self):
+        server, client, original = self._server_and_client(query_sql_blocks=self._list_blocks())
+        try:
+            self._edit(server, markdown="- P\n  ```text\n  - literal\n\n  b\n  ```")
+            self.assertEqual(client._inserted_after, [("pB", "```text\n- literal\n\nb\n```")])
+            self.assertFalse(client._inserted_before)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_task_keeps_first_paragraph_attrs_and_code_kramdown(self):
+        blocks = self._list_blocks()
+        blocks["itemB"].insert(1, {"id": "codeB", "type": "c", "markdown": "```text\nkeep\n```"})
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        self._patch_ial(client, 'id="pB" custom-p-mark="keep"')
+        kramdown = {
+            "codeB": '```text\nkeep\n```\n{: id="codeB"}',
+            "subList": '- {: id="itemB1"}Child\n{: id="subList"}',
+        }
+        client.get_block_kramdown = mock.Mock(side_effect=kramdown.__getitem__)
+        try:
+            self._edit(server, markdown="- [x] Updated")
+            updated = client._updated_blocks[0][1]
+            self.assertIn('{: id="pB"}', updated)
+            self.assertIn('  ```text\n  keep\n  ```\n  {: id="codeB"}', updated)
+            self.assertIn('{: id="itemB1"}', updated)
+            self.assertIn(("pB", {"custom-p-mark": "keep"}), client._set_attrs_calls)
+            self.assertEqual(client.get_block_kramdown.call_count, 2)
         finally:
             mcp_server.detect_active_profile = original
 

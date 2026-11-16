@@ -1021,8 +1021,21 @@ def parse_submitted_list_items(markdown: str) -> list[dict[str, Any]] | None:
     items: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
     in_child_lines = False
+    parent_fence: str = ""
+    parent_fence_lines: list[str] = []
+    content_indent = 0
     for raw_line in markdown.splitlines():
+        if parent_fence:
+            line = raw_line[content_indent:] if raw_line.strip() else ""
+            parent_fence_lines.append(line)
+            if re.fullmatch(re.escape(parent_fence[0]) + "{" + str(len(parent_fence)) + r",}\s*", line):
+                current["follow_lines"].append("\n".join(parent_fence_lines))
+                parent_fence = ""
+                parent_fence_lines = []
+            continue
         if not raw_line.strip():
+            if current is not None and in_child_lines:
+                current["child_lines"].append("")
             continue
         top_match = re.match(r"^([-*+]|\d+\.)[ \t]+(.+)$", raw_line)
         if top_match:
@@ -1032,6 +1045,7 @@ def parse_submitted_list_items(markdown: str) -> list[dict[str, Any]] | None:
                 "child_lines": [],
             }
             in_child_lines = False
+            content_indent = top_match.start(2)
             items.append(current)
             continue
         if current is None:
@@ -1045,7 +1059,14 @@ def parse_submitted_list_items(markdown: str) -> list[dict[str, Any]] | None:
             current["child_lines"].append(raw_line)
             in_child_lines = True
         else:
-            current["follow_lines"].append(stripped)
+            fence_match = re.match(r"^(`{3,}|\x7e{3,})", stripped)
+            if fence_match:
+                parent_fence = fence_match.group(1)
+                parent_fence_lines = [raw_line[content_indent:]]
+            else:
+                current["follow_lines"].append(stripped)
+    if parent_fence:
+        current["follow_lines"].append("\n".join(parent_fence_lines))
     return items or None
 
 
@@ -4616,6 +4637,10 @@ class McpServer:
         start = target[0]
         end = target[-1]
         list_types = {"l", "i"}
+        if len(target) > 1 and any(block.type == "l" for block in target):
+            raise tool_error(_ERR_OPERATION_ORDER,
+                "范围不能把列表块本身和其他块组合在一起。"
+                "整表替换或删除整表请只选中列表块一个目标。")
         if start.type not in list_types and end.type not in list_types:
             return
         if start.type == "l" or end.type == "l":
@@ -4701,28 +4726,27 @@ class McpServer:
                 "列表项内没有可定位的首段落块，无法只改文字。"
                 "请改用 default_block_replace 并把范围选到最后一个子项做整棵替换。")
         if task_update:
-            # 任务勾选状态在列表项节点上，按整体更新（方案 3.5/5.2）。
-            # updateBlock 会替换列表项整个子树，必须带回子列表内容
-            # （子项 markdown 自带 IAL，子项 ID 因此保留）；
-            # 旧续行段落不带回，实现 5.3 的整体替换（审计 D4）。
-            update_lines = ["- " + item["text"]]
-            update_lines.extend(
-                ("  " + line) if line.strip() else line
-                for line in item["follow_lines"]
-            )
+            # 依据方案5.2-5.4更新勾选状态。整体更新时显式保留首段落ID，
+            # 非文字子块使用Kramdown带回完整IAL，不能依赖getChildBlocks的markdown。
+            paragraph_id = first_paragraph["id"]
+            ial_rows = client.query_sql(f"SELECT ial FROM blocks WHERE id = '{paragraph_id}'")
+            paragraph_attrs = _parse_ial_attrs(str(ial_rows[0].get("ial", ""))) if ial_rows else {}
+            update_parts = ["- " + item["text"] + f'\n  {{: id="{paragraph_id}"}}']
             for child in children:
-                if child.get("type") == "l":
-                    for md_line in str(child.get("markdown") or "").splitlines():
-                        update_lines.append(("  " + md_line) if md_line.strip() else md_line)
-            McpServer._update_block_preserving_attrs(client, item_id, "\n".join(update_lines))
+                if child.get("type") != "p":
+                    child_md = client.get_block_kramdown(child["id"])
+                    update_parts.append("\n".join("  " + line if line else "" for line in child_md.splitlines()))
+            McpServer._update_block_preserving_attrs(client, item_id, "\n\n".join(update_parts))
+            if paragraph_attrs:
+                client.set_block_attrs(paragraph_id, paragraph_attrs)
         else:
             McpServer._update_block_preserving_attrs(client, first_paragraph["id"], item["text"])
             # 5.3：原有全部文字段落整体替换，子列表保留
             for child in children:
                 if child.get("type") == "p" and child.get("id") != first_paragraph.get("id"):
                     client.delete_block(child.get("id"))
-            if item["follow_lines"]:
-                client.insert_block_after(first_paragraph["id"], "\n\n".join(item["follow_lines"]))
+        if item["follow_lines"]:
+            client.insert_block_after(first_paragraph["id"], "\n\n".join(item["follow_lines"]))
         if item["child_lines"]:
             children = client.get_child_blocks(item_id)
             first_paragraph = next((c for c in children if c.get("type") == "p"), None)
