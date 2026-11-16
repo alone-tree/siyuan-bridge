@@ -7,6 +7,7 @@ import shutil
 import sys
 import time
 import unicodedata
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -1024,7 +1025,11 @@ def process_imported_markdown_links(
                     f"[{_escape_markdown_label(path.name)}]({_markdown_destination(resolved)})",
                 ))
             else:
-                replacements.append((dest_start, dest_end, resolved))
+                # 替换整个目标，避免空格/括号失效，也不在原有尖括号里嵌套尖括号。
+                if dest_start > 0 and original[dest_start - 1] == '<' and original[dest_end:dest_end + 1] == '>':
+                    dest_start -= 1
+                    dest_end += 1
+                replacements.append((dest_start, dest_end, _markdown_destination(resolved)))
             result.uploaded.append(f"{display_path} -> {resolved}")
 
         if not replacements:
@@ -2898,11 +2903,15 @@ class McpServer:
         try:
             result = self._native_sync.run(client, upload=upload, timeout=float(timeout_seconds))
         except SiYuanTimeoutError as exc:
+            if getattr(exc, 'sync_phase', None) != 'perform':
+                raise
             raise tool_error(
                 _ERR_SYNC_TIMEOUT,
                 f"思源同步超过 {timeout_seconds} 秒仍未完成。请稍后检查同步状态；如果长期超时，请手动延长 timeout_seconds 或检查网络/同步服务。",
             ) from exc
         except SiYuanConnectionError as exc:
+            if getattr(exc, 'sync_phase', None) != 'perform':
+                raise
             raise tool_error(
                 _ERR_SYNC_CONNECTION,
                 f"思源同步连接失败：{exc}。请检查网络、代理或同步服务状态。",
@@ -4462,16 +4471,20 @@ class McpServer:
         link_result = MarkdownLinkProcessResult()
         if markdown_file_path:
             if doc_id:
-                with ensure_notebooks_open(client, [target.notebook_id]):
-                    all_blocks = wait_for_display_blocks(client, doc_id)
-                    link_result = process_imported_markdown_links(
-                        client,
-                        document_id=doc_id,
-                        markdown_file=markdown_file_path,
-                        affected_blocks=all_blocks,
-                        all_blocks=all_blocks,
-                        upload_large_files=bool(args.get('upload_large_files')),
-                    )
+                try:
+                    with ensure_notebooks_open(client, [target.notebook_id]):
+                        all_blocks = wait_for_display_blocks(client, doc_id)
+                        link_result = process_imported_markdown_links(
+                            client,
+                            document_id=doc_id,
+                            markdown_file=markdown_file_path,
+                            affected_blocks=all_blocks,
+                            all_blocks=all_blocks,
+                            upload_large_files=bool(args.get('upload_large_files')),
+                        )
+                except Exception as exc:
+                    link_result.block_update_failed.append(f"正文已写入，但写后读取或引用处理失败：{exc}")
+
             else:
                 link_result.skipped_no_doc_id = True
 
@@ -5167,12 +5180,15 @@ class McpServer:
                     except Exception as exc:
                         actual = ""
                         outcome.warnings.append(f"写后读取失败：{exc}；文档可能已包含部分或全部引用，请先读取确认。")
+                    references = Counter(match.group(0) for match in _MARKDOWN_LINK_RE.finditer(_blank_inline_code(actual)))
                     for i, resolved in sorted(outcome.paths.items()):
                         item = asset_items[i]
+                        token = render_asset_markdown(item, resolved)
                         entry = {"index": i, "local_path": item.local_path, "kind": item.kind,
                                  "resolved_path": resolved, "name": item.name, "title": item.title,
-                                 "verified": resolved in actual}
+                                 "verified": references[token] > 0}
                         if entry["verified"]:
+                            references[token] -= 1
                             inserted.append(entry)
                         else:
                             unverified.append(entry)
@@ -5219,60 +5235,69 @@ class McpServer:
                 for block in reversed(self._dedupe_list_delete_targets(target_blocks)):
                     client.delete_block(block.id)
 
-            new_display_blocks = wait_for_display_blocks(client, doc_id)
-            markdown_file_path = str(args.get("markdown_file") or "").strip()
-            link_result = MarkdownLinkProcessResult()
-            if markdown_file_path and action in {
-                "single_block_replace",
-                "default_block_replace",
-                "insert_after",
-                "insert_before",
-                "append",
-            }:
-                deadline = time.monotonic() + POST_WRITE_SYNC_TIMEOUT
-                affected: list[DisplayBlock] = []
-                while True:
-                    if action == "single_block_replace":
-                        affected = [block for block in new_display_blocks if block.id == target_blocks[0].id]
-                    elif action == "default_block_replace":
-                        affected = blocks_between_anchors(
-                            new_display_blocks,
-                            previous_anchor.id if previous_anchor else None,
-                            next_anchor.id if next_anchor else None,
-                        )
-                        deleted_ids = {block.id for block in target_blocks}
-                        affected = [block for block in affected if block.id not in deleted_ids]
-                    elif action == "insert_after":
-                        affected = blocks_between_anchors(
-                            new_display_blocks,
-                            insert_after_span_end.id,
-                            next_anchor.id if next_anchor else None,
-                        )
-                    elif action == "insert_before":
-                        affected = blocks_between_anchors(
-                            new_display_blocks,
-                            previous_anchor.id if previous_anchor else None,
-                            target_blocks[0].id,
-                        )
-                    else:
-                        affected = blocks_between_anchors(
-                            new_display_blocks,
-                            last_before_append.id if last_before_append else None,
-                            None,
-                        )
-                    if affected or time.monotonic() >= deadline:
-                        break
-                    time.sleep(POST_WRITE_SYNC_INTERVAL)
+            try:
+                new_display_blocks = wait_for_display_blocks(client, doc_id)
+                markdown_file_path = str(args.get("markdown_file") or "").strip()
+                link_result = MarkdownLinkProcessResult()
+                if markdown_file_path and action in {
+                    "single_block_replace",
+                    "default_block_replace",
+                    "insert_after",
+                    "insert_before",
+                    "append",
+                }:
+                    deadline = time.monotonic() + POST_WRITE_SYNC_TIMEOUT
+                    affected: list[DisplayBlock] = []
+                    while True:
+                        if action == "single_block_replace":
+                            affected = [block for block in new_display_blocks if block.id == target_blocks[0].id]
+                        elif action == "default_block_replace":
+                            affected = blocks_between_anchors(
+                                new_display_blocks,
+                                previous_anchor.id if previous_anchor else None,
+                                next_anchor.id if next_anchor else None,
+                            )
+                            deleted_ids = {block.id for block in target_blocks}
+                            affected = [block for block in affected if block.id not in deleted_ids]
+                        elif action == "insert_after":
+                            affected = blocks_between_anchors(
+                                new_display_blocks,
+                                insert_after_span_end.id,
+                                next_anchor.id if next_anchor else None,
+                            )
+                        elif action == "insert_before":
+                            affected = blocks_between_anchors(
+                                new_display_blocks,
+                                previous_anchor.id if previous_anchor else None,
+                                target_blocks[0].id,
+                            )
+                        else:
+                            affected = blocks_between_anchors(
+                                new_display_blocks,
+                                last_before_append.id if last_before_append else None,
+                                None,
+                            )
+                        if affected or time.monotonic() >= deadline:
+                            break
+                        time.sleep(POST_WRITE_SYNC_INTERVAL)
+                        new_display_blocks = build_display_blocks(client, doc_id, include_block_ids=True)
+                    link_result = process_imported_markdown_links(
+                        client,
+                        document_id=doc_id,
+                        markdown_file=markdown_file_path,
+                        affected_blocks=affected,
+                        all_blocks=new_display_blocks,
+                        upload_large_files=bool(args.get('upload_large_files')),
+                    )
                     new_display_blocks = build_display_blocks(client, doc_id, include_block_ids=True)
-                link_result = process_imported_markdown_links(
-                    client,
-                    document_id=doc_id,
-                    markdown_file=markdown_file_path,
-                    affected_blocks=affected,
-                    all_blocks=new_display_blocks,
-                    upload_large_files=bool(args.get('upload_large_files')),
-                )
-                new_display_blocks = build_display_blocks(client, doc_id, include_block_ids=True)
+
+            except Exception as exc:
+                return "\n".join([
+                    "# 文档编辑部分完成", "", f"文档ID：{doc_id}", f"action：{action}",
+                    "正文写入已提交，写后读取或引用处理失败；已成功项保留，不要重复整批写入。",
+                    f"错误：{exc}", "请先读取文档核对；如需整体恢复，请在思源中手动恢复本次写前快照。",
+                ])
+
 
         try:
             client.push_msg(f"思源桥：已编辑「{doc_title}」")
