@@ -3673,6 +3673,129 @@ class McpServerWriteTests(unittest.TestCase):
         finally:
             mcp_server.detect_active_profile = original
 
+    def test_markdown_list_links_update_text_blocks_once_and_keep_nested_ids(self):
+        folder = self._write_import_assets()
+        md = self.root / "list-assets.md"
+        md.write_text("- ![parent](./import-assets/pic.png)", encoding="utf-8")
+        image = "![parent](./import-assets/pic.png)"
+        tree = {
+            "doc1": [{"id": "list1", "type": "l", "markdown": "- " + image}],
+            "list1": [{"id": "item1", "type": "i", "markdown": "- " + image}],
+            "item1": [{"id": "text1", "type": "p", "markdown": image}, {"id": "nested", "type": "l", "markdown": "- old child"}],
+            "nested": [{"id": "child1", "type": "i", "markdown": "- old child"}],
+            "child1": [{"id": "childtext", "type": "p", "markdown": "old child"}],
+        }
+        client = FakeSearchClient([])
+        client._blocks = tree
+        affected = [
+            mcp_server.DisplayBlock(1, "list1", "l", "", "- " + image, 1, source_markdown="- " + image),
+            mcp_server.DisplayBlock(2, "item1", "i", "", image, 1, source_markdown="- " + image),
+        ]
+        result = mcp_server.process_imported_markdown_links(client, document_id="doc1", markdown_file=str(md), affected_blocks=affected, all_blocks=affected)
+        self.assertEqual(len(client._inserted_assets), 1)
+        self.assertEqual([block_id for block_id, _ in client._updated_blocks], ["text1"])
+        self.assertIn("assets/pic.png", client._blocks["item1"][0]["markdown"])
+        self.assertEqual(client._blocks["nested"][0]["id"], "child1")
+        self.assertEqual(client._blocks["child1"][0]["id"], "childtext")
+        self.assertFalse(result.block_update_failed)
+        self.assertFalse(client._deleted_blocks)
+        # 单选父项导入时，旧子列表中的本地引用不属于本次替换。
+        client._inserted_assets.clear()
+        client._updated_blocks.clear()
+        client._blocks['item1'][0]['markdown'] = image
+        client._blocks['child1'][0]['markdown'] = '![old](./import-assets/note.pdf)'
+        result = mcp_server.process_imported_markdown_links(client, document_id='doc1', markdown_file=str(md), affected_blocks=[affected[1]], all_blocks=affected)
+        self.assertEqual(len(client._inserted_assets), 1)
+        self.assertEqual([block_id for block_id, _ in client._updated_blocks], ['text1'])
+        self.assertEqual(client._blocks['child1'][0]['markdown'], '![old](./import-assets/note.pdf)')
+
+    def test_create_markdown_postwrite_read_failure_keeps_document_identity(self):
+        md = self.root / "read-failure.md"
+        md.write_text("正文已经提交。", encoding="utf-8")
+        server, client, original = self._server_and_client()
+        try:
+            with mock.patch.object(mcp_server, "wait_for_display_blocks", side_effect=SiYuanApiError("readback offline")):
+                result = server.siyuan_create({"notebook_id": "nb1", "title": "Read failure", "markdown_file": str(md), "confirmed": True})
+            self.assertEqual(len(client._created_docs), 1)
+            self.assertTrue(result.startswith("# 文档部分完成"))
+            self.assertIn("new-doc-0", result)
+            self.assertIn("readback offline", result)
+            self.assertIn("不要重复创建", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_edit_postwrite_read_failure_is_explicit_and_does_not_undo_body(self):
+        blocks = {"doc1": [{"id": "block1", "type": "p", "markdown": "Anchor."}]}
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            with mock.patch.object(mcp_server, "wait_for_display_blocks", side_effect=SiYuanApiError("readback failed")):
+                result = server.siyuan_edit({"document_id": "doc1", "action": "append", "markdown": "New body.", "confirmed": True})
+            self.assertTrue(result.startswith("# 文档编辑部分完成"))
+            self.assertIn("doc1", result)
+            self.assertIn("readback failed", result)
+            self.assertEqual(client._appended_blocks, [("doc1", "New body.")])
+            self.assertFalse(client._deleted_blocks)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_native_asset_verification_counts_complete_references_not_substrings(self):
+        for same_path in (False, True):
+            with self.subTest(same_path=same_path):
+                first = self.asset_dir / "a.txt"
+                first.write_text("one", encoding="utf-8")
+                second = first if same_path else self.asset_dir / "a.txt.bak"
+                if not same_path:
+                    second.write_text("two", encoding="utf-8")
+                blocks = {"doc1": [{"id": "block1", "type": "p", "markdown": "Anchor."}]}
+                server, client, original = self._server_and_client(query_sql_blocks=blocks)
+                actual_insert = client.insert_block_after
+                def truncate_insert(anchor, markdown):
+                    actual_insert(anchor, markdown.split("\n\n")[-1])
+                try:
+                    with mock.patch.object(client, "insert_block_after", side_effect=truncate_insert):
+                        result = json.loads(server.siyuan_edit({
+                            "document_id": "doc1", "action": "insert_assets", "start_index": 1, "start_id": "block1",
+                            "assets": [{"local_path": str(first), "name": "First"}, {"local_path": str(second), "name": "Second"}],
+                            "confirmed": True,
+                        }))
+                    self.assertEqual(result["status"], "partial")
+                    self.assertEqual([entry["index"] for entry in result["inserted"]], [1])
+                    self.assertEqual([entry["index"] for entry in result["unverified"]], [0])
+                    self.assertFalse(client._deleted_blocks)
+                finally:
+                    mcp_server.detect_active_profile = original
+
+    def test_markdown_directory_with_spaces_and_parentheses_keeps_valid_destination(self):
+        folder = self.root / "source files(1)"
+        folder.mkdir()
+        for number, reference in enumerate(("[folder](./source%20files%281%29)", "[folder](<./source files(1)>)")):
+            with self.subTest(reference=reference):
+                md = self.root / f"folder-{number}.md"
+                md.write_text(reference, encoding="utf-8")
+                server, client, original = self._server_and_client()
+                try:
+                    result = server.siyuan_create({"notebook_id": "nb1", "title": f"Folder {number}", "markdown_file": str(md), "confirmed": True})
+                    updated = "\n".join(text for _, text in client._updated_blocks)
+                    self.assertIn(f"[folder](<file://{folder}>)", updated)
+                    self.assertNotIn("<<", updated)
+                    self.assertIn("# 文档写入成功", result)
+                    self.assertEqual(client._inserted_assets[0][2], False)
+                finally:
+                    mcp_server.detect_active_profile = original
+
+    def test_sync_preflight_connection_failure_clears_active_connection(self):
+        server, client, original = self._server_and_client()
+        server._active_profile = Profile(name="test", token="test")
+        server._active_client = client
+        try:
+            with mock.patch.object(client, "get_conf", side_effect=SiYuanConnectionError("offline")):
+                result = server.call_tool("siyuan_operate", {"action": "sync"})
+            self.assertTrue(result["isError"])
+            self.assertIsNone(server._active_client)
+            self.assertIn("siyuan_start", json.dumps(result, ensure_ascii=False))
+        finally:
+            mcp_server.detect_active_profile = original
+
     def test_native_asset_upload_keeps_partial_success_for_both_api_codes(self):
         for code in (0, -1):
             with self.subTest(code=code):

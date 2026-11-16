@@ -969,6 +969,41 @@ def _unique_heading_id(fragment: str, all_blocks: list[DisplayBlock]) -> tuple[s
     return "missing", ""
 
 
+def markdown_reference_blocks(client: Any, affected: list[DisplayBlock]) -> list[DisplayBlock]:
+    """列表只改具体正文块；列表容器和列表项整树不能作为链接替换目标。"""
+    targets: list[DisplayBlock] = []
+    seen: set[str] = set()
+
+    def add_children(parent: DisplayBlock, include_lists: bool = False) -> None:
+        for child in client.get_child_blocks(parent.id):
+            child_id = block_field(child, "id")
+            child_type = block_field(child, "type")
+            if not child_id:
+                continue
+            concrete = replace(parent, id=child_id, type=child_type,
+                               subtype=block_field(child, "subtype", "subType"),
+                               markdown=block_field(child, "markdown"), source_markdown=block_field(child, "markdown"))
+            if child_type in {"l", "i"}:
+                # 整个列表是本次内容时遍历；单选父项时不触碰旧子列表。
+                if include_lists:
+                    add_children(concrete, True)
+            elif child_type in {"b", "s"}:
+                add_children(concrete, include_lists)
+            elif child_id not in seen:
+                seen.add(child_id)
+                targets.append(concrete)
+
+    for block in affected:
+        if block.type == "l":
+            add_children(block, True)
+        elif block.type == "i":
+            add_children(block)
+        elif block.id not in seen:
+            seen.add(block.id)
+            targets.append(block)
+    return targets
+
+
 def process_imported_markdown_links(
     client: Any,
     *,
@@ -980,7 +1015,7 @@ def process_imported_markdown_links(
 ) -> MarkdownLinkProcessResult:
     result = MarkdownLinkProcessResult()
     base_dir = Path(markdown_file).expanduser().resolve().parent
-    for block in affected_blocks:
+    for block in markdown_reference_blocks(client, affected_blocks):
         if display_block_semantic_type(block) == "code":
             continue
         original = display_block_source(block)
