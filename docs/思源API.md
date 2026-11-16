@@ -38,12 +38,12 @@
 | SQL | `/api/query/sql` | 结构化读取 blocks 表、块搜索和定位 | `siyuan_find(mode=sql)` 使用 `mode=readonly`，保留 `limit/truncated`；只输出真实可见块，不回显任意列或聚合报表 |
 | 引用关系 | `/api/query/sql` 查询 `refs`、`spans` 并关联 `blocks` | 正向查询文档引用哪些块，反向查询文档被哪些块引用；写前检查即将消失的 ID 是否仍被引用 | 只读查询通过 `siyuan_operate` 的 `check_forward_references` / `check_backward_references` 暴露；写入保护仍内部执行 |
 | 导出 | `/api/export/exportMdContent` 等 | 读取文档 Markdown、导出资源 | 已用于阅读；不作为写入主路径 |
-| 资源 | `/api/asset/insertLocalAssets` | 按目标文档处理本地文件/文件夹并返回资源路径 | 仅由 `siyuan_edit(action=insert_assets)` 内部使用 |
+| 资源 | `/api/asset/upload`、`/api/asset/insertLocalAssets` | 普通文件/图片上传multipart内容；目录返回原生本地链接 | 由`insert_assets`和create/edit的`markdown_file`附件后处理内部使用 |
 | 仓库快照 | `/api/repo/createSnapshot`, `/api/repo/getRepoSnapshots` | 写入前备份；必要时帮助用户找到恢复点 | `createSnapshot` 内部强制使用；查询可后续做只读诊断 |
 | 仓库恢复 | `/api/repo/checkoutRepo` | 恢复整个工作空间到某个快照 | 不暴露给 AI |
 | 历史 | history rollback 类端点 | 文档/资源历史恢复 | 第一阶段不使用；只作为人工恢复参考 |
 | 通知 | `/api/notification/pushMsg`, `/api/notification/pushErrMsg` | 写入完成或失败时通知用户 | 内部使用 |
-| 同步 | `/api/sync/performSync`, `/api/sync/getSyncInfo` | 触发思源内置默认同步、读取状态 | 仅通过 `siyuan_operate(action=sync)` 暴露默认同步，不修改同步配置 |
+| 同步 | `/api/system/getConf`、`/api/sync/getSyncSourceState`、`/api/sync/performSync`、`/api/sync/getSyncInfo` | 配置与同步源预检、原生同步和结果读取 | 仅通过`siyuan_operate(action=sync)`协调，不修改同步配置；`upload`只承接当次原生方向选择 |
 | 账号/设置/插件/集市 | account、setting、bazaar、plugin 类端点 | 思源应用状态管理 | 不属于本项目范围 |
 
 ## 当前写入 API 组合
@@ -52,8 +52,8 @@
 
 | MCP 工具 | 用户语义 | 内部 API 组合 |
 |----------|----------|---------------|
-| `siyuan_edit` | 在已有可见文档中替换、追加、删除、插入文本、编辑普通 Markdown 表格或插入本地附件 | 隐私检查；引用阅读定位校验；delete/multi 写前查询 `refs`；`repo/createSnapshot`；`asset/insertLocalAssets`；`block/updateBlock` / `appendBlock` / `insertBlock` / `deleteBlock`；`notification/pushMsg` |
-| `siyuan_create` | 通过完整可读路径创建、覆盖或新增同名文档；`markdown_file` 可将本地 `.md` 文件导入为新文档（与 `markdown` 互斥，复用同一写入链；写入后再用 `insertLocalAssets` 处理标准本地引用） | 隐私和路径检查；overwrite 写前查询旧正文块反链；`repo/createSnapshot`；`filetree/createDocWithMd` 或 `block/deleteBlock` + `block/appendBlock`；`asset/insertLocalAssets`；`block/updateBlock`；`notification/pushMsg`；`filetree/getHPathByID` 等待路径同步 |
+| `siyuan_edit` | 在已有可见文档中替换、追加、删除、插入文本、编辑普通 Markdown 表格或插入本地附件 | 隐私检查；引用阅读定位校验；delete/multi 写前查询 `refs`；`repo/createSnapshot`；`asset/upload`或目录用`asset/insertLocalAssets(isUpload=false)`；`block/updateBlock` / `appendBlock` / `insertBlock` / `deleteBlock`；`notification/pushMsg` |
+| `siyuan_create` | 通过完整可读路径创建、覆盖或新增同名文档；`markdown_file`导入已有本地`.md`（与`markdown`互斥），写后处理标准本地引用 | 隐私和路径检查；overwrite写前查反链；`repo/createSnapshot`；`filetree/createDocWithMd`或块删除/追加；`asset/upload`或目录用`asset/insertLocalAssets(isUpload=false)`；`block/updateBlock`；通知与路径同步 |
 | `siyuan_doc_manage` | 管理文档树：改名、移动、删除、复制、导出；设置文档标签 | 权限检查；`copy/export` 允许只读源文档；`rename/move/delete/set_tags` 需可写；`delete` 写前扫描子孙权限和整棵子树反链；`move` 写前检查源文档祖先链和目标父路径权限；写操作调用 `repo/createSnapshot`；内部使用 `renameDocByID` / `moveDocsByID` / `removeDocByID` / `duplicateDoc` / `exportMdContent` / `attr/setBlockAttrs`（set_tags）；写后用 `getHPathByID` 确认路径同步 |
 
 AI 不需要知道这些底层端点。它只提供：
@@ -70,20 +70,30 @@ confirmed
 
 ## 本地资源插入
 
-经思源 3.7.3 源码和真实探针确认，思源官方 MCP 的本地资源动作可直接通过 HTTP 调用：
+普通文件和图片由Bridge打开，向内核发送文件内容；内核不需要能读取Bridge宿主的绝对路径。
 
 ```text
-POST /api/asset/insertLocalAssets
+POST /api/asset/upload
+Content-Type: multipart/form-data; boundary=...
+id=<目标文档ID>
+file[]=<文件名与实际字节，可多项>
+```
+
+目录仍用原生本地链接分支，不读取目录内容、不递归、不打包，也不自行转换路径。
+
+```json
 {
-  "id": "<目标文档 ID>",
-  "assetPaths": ["<本地绝对路径>"],
-  "isUpload": true
+  "id": "<目标文档ID>",
+  "assetPaths": ["<目录绝对路径>"],
+  "isUpload": false
 }
 ```
 
-返回 `data.succMap`，键为输入项目的基础名称，值为思源处理后的路径。普通文件进入目标文档资源目录并复用思源的文件名规范化、哈希去重逻辑；目录不递归复制，返回本机 `file://` 链接。该端点只处理资源，不修改文档，Bridge 必须再调用 `block/insertBlock` 写入 Markdown。
+该JSON发送至`POST /api/asset/insertLocalAssets`，直接使用内核返回的本地链接。目标assets目录、命名和哈希去重交给思源[上传模型](https://github.com/siyuan-note/siyuan/blob/v3.8.10/kernel/model/upload.go)。两种端点只处理资源，文档插入或链接更新仍由块API完成；Bridge不经官方MCP中转。
 
-Bridge 不经思源官方 MCP 中转。由于 `succMap` 以基础名称为键，同批基础文件名重名时必须在调用前拒绝。上传后的资源可能是已存在附件的去重结果；无法证明是本批新建且无人使用时，不得为补偿而自动删除。
+内部`upload_assets(document_id, file_paths)`与`insert_local_assets_result(document_id, paths, is_upload=False)`均返回完整原生envelope，保留非零code下的成功项，不自动重试。对照[原生上传结果](https://github.com/siyuan-note/siyuan/blob/v3.8.10/app/src/protyle/upload/uploadResult.ts#L58-L85)，按逐项列表识别`success/partial/failed`，优先用`succFiles.index`映射输入；旧内核只有`succMap`且存在同名风险时逐文件调用，不整批拒绝。
+
+256MiB及以上普通文件遵循[原生提示阈值](https://github.com/siyuan-note/siyuan/blob/v3.8.10/app/src/constants.ts#L115)，高层`upload_large_files`承接用户同意，适用于`insert_assets`和create/edit的`markdown_file`；提示不作为硬限制。已成功附件不因别项失败撤销。块插入/更新失败报告已写内容和可能残留，不自动删资源或整批补偿，恢复由用户手动使用快照。
 
 或：
 
@@ -174,17 +184,20 @@ timestamp
 
 ## 思源内置同步
 
-思源内核源码确认提供：
+原生流程依据思源v3.8.10的[同步前端](https://github.com/siyuan-note/siyuan/blob/v3.8.10/app/src/sync/syncGuide.ts#L228-L328)和[同步源模型](https://github.com/siyuan-note/siyuan/blob/v3.8.10/kernel/model/sync_source.go#L75-L151)。
 
 ```text
-POST /api/sync/performSync
-{}
-
-POST /api/sync/getSyncInfo
-{}
+POST /api/system/getConf {}
+POST /api/sync/getSyncSourceState {}
+POST /api/sync/performSync {} 或原生upload与预览标识
+POST /api/sync/getSyncInfo {}
 ```
 
-`siyuan_operate(action=sync)` 只按空请求体调用 `performSync`，保持与用户点击思源同步按钮一致。默认等待 10 秒；AI 可通过 `timeout_seconds` 手动调整到 5-120 秒，该参数只改变 MCP 等待时间，不改变思源同步行为。超时返回 `api:sync_timeout`，同步调用中的网络连接失败返回 `api:sync_connection`，都不等同于思源未启动。项目不暴露上传、下载、同步模式、同步提供方或云目录配置。
+`get_conf()`返回配置字典，`get_sync_source_state()`返回原生state。先检查只读、数据仓库密钥和同步启用状态，返回原生设置指引而不改配置。仅`getSyncSourceState`端点404/405时走已核对旧版流程；其他错误不吞掉。预览可能触发索引，不能当作绝对只读探针。
+
+内部`perform_sync(timeout=10, upload=None, source_state=None)`保留旧调用兼容，执行不自动重试。普通同步为空请求；source非空且cloudID空时原生自动上传并绑定预览；pending或mode=3先返回`requires_choice`而不执行。公开可选`upload:boolean`无默认值，只承接用户当次上传/下载选择。source/localID/cloudID只保存在当前连接，由NativeSync传递，连接重置清空；不开放AI手填state、不自动替换预览、不新增过期秒数。
+
+`timeout_seconds`默认10、范围5-120，只调整等待时间。超时为`api:sync_timeout`，执行中网络失败为`api:sync_connection`；此时同步可能已开始，不自动重发。返回原生结果和状态，不把HTTP成功视为同步完成。同步模式、提供方或云目录配置不向AI开放修改。
 
 ## 不直接暴露的高风险 API
 

@@ -1,6 +1,6 @@
 # `siyuan_edit(insert_assets)` 附件插入设计与实现
 
-> 状态：已按本文契约实现。本文保留 2026-07-28 的讨论、实测和安全边界；后续修改仍必须先重新核对思源当前源码/API。
+> 当前契约于2026-11-16按思源v3.8.10原生行为对齐，验证结果另行记录。第5节和第9节保留2026-07-28的调查与实测，不代表本轮multipart、部分成功或Linux/Docker已验收；后续修改仍须核对思源当前源码/API。
 
 ## 1. 目标与产品边界
 
@@ -12,9 +12,9 @@
 action="insert_assets"
 ```
 
-用户可在一次调用中把多个本地项目插入同一位置；需要插入多个位置时分多次调用。一次调用对用户表现为一个完整操作：只有资源处理、文档插入和最终验证全部成功，才报告成功。
+用户可在一次调用中把多个本地项目插入同一位置；多位置分次调用。结果按原生逐项列表区分`success/partial/failed`；失败项不会撤销其他已成功附件或已插入内容。
 
-不修改 `siyuan_create`。新建含附件文档的推荐调用链固定为：
+独立插入附件仍通过`insert_assets`。已有Markdown文件的引用导入由create/edit的`markdown_file`处理，共用资源通道与`upload_large_files`。新建后再独立插入附件的调用链为：
 
 ```text
 siyuan_create
@@ -45,7 +45,7 @@ Bridge 不自行实现 Windows、macOS、Linux 路径转换规则，不自行拼
 
 普通文件（包括图片）交给思源原生附件接口处理。应复用思源对目标文档资源目录、文件名规范化、哈希去重和返回路径的既有逻辑，不在 Bridge 重复实现这些规则。
 
-图片与其他文件使用同一上传通道；展示 Markdown 可以根据思源返回结果或必要的媒体类型生成图片嵌入或普通附件链接，但不能为此拆分上传事务。
+图片与普通文件由Bridge打开，向`/api/asset/upload`发送multipart内容，携带目标文档`id`和`file[]`；不要求内核能读取Bridge宿主路径。目录显式调用`insertLocalAssets(isUpload=false)`，直接使用原生返回链接。两种入口复用内核资源逻辑，见[官方上传模型](https://github.com/siyuan-note/siyuan/blob/v3.8.10/kernel/model/upload.go)。展示Markdown按下文扩展名规则生成。
 
 ### 2.4 一次调用只支持一个位置
 
@@ -56,14 +56,13 @@ Bridge 不自行实现 Windows、macOS、Linux 路径转换规则，不自行拼
 
 本批次所有资产按 `assets` 数组顺序插在该锚点块之后，不增加 `before/after` 参数。需要插入多个位置时，由 AI 在每次写入后重新引用阅读，再分多次调用；不在一次调用中维护多组会漂移的块坐标。
 
-### 2.5 大文件阈值为 20 MB
+### 2.5 原生256MiB大文件提示
 
-- 仅实际要上传的普通文件参与 20 MB 检查。
-- 文件夹只插入本地超链接，不统计目录大小、不递归扫描，因此不参与阈值判断。
-- 批次内任一普通文件超过 20 MB，整批暂停：不上传任何文件、不插入任何链接、不创建快照。
-- 返回 `requires_confirmation: true`，列出超限文件、实际大小和阈值。
-- 用户明确要求上传大文件后，使用相同参数并增加 `upload_large_files=true` 重试整个批次。
-- `confirmed=true` 表示同意修改思源；`upload_large_files=true` 是是否允许上传超限文件的动作开关，默认 false，不称为第二个确认参数。
+- 按[原生阈值](https://github.com/siyuan-note/siyuan/blob/v3.8.10/app/src/constants.ts#L115)，普通文件256MiB及以上先提示，阈值为268435456字节；取消旧20MiB规则，提示不作为硬限制。
+- 目录只插入本地链接，不统计大小、不递归扫描。
+- `insert_assets`未获同意时先暂停，不上传、不插入、不创建快照；返回`requires_confirmation: true`、文件实际大小和提示阈值。
+- 用户明确同意后用`upload_large_files=true`承接同意；它同样用于create/edit的`markdown_file`。后者正文已写入时保留原引用并报告待处理附件，不要求重建整篇文档。
+- `confirmed=true`仍表示用户同意写入，`upload_large_files`默认false，专门承接大文件提示后的同意。
 
 ### 2.6 图片识别与 Markdown 字段
 
@@ -83,7 +82,7 @@ Bridge 直接复用思源前端的图片扩展名清单，按原始文件名后�
 
 工具描述和 schema 必须明确说明这一区别，避免 AI 把图片下方标题误填到 `name`，或把正文锚文本误填到 `title`。未传 `name` 时与思源官方前端一致：图片使用原文件名去掉扩展名，普通文件使用完整文件名，文件夹使用目录名。未传 `title` 时不生成空 title。
 
-同一批次如存在相同基础文件名，整批预检报错并提示分开调用。思源 `succMap` 以基础文件名为键，重名时无法可靠建立输入项与返回路径的对应关系。
+优先按原生`succFiles.index`建立输入与结果映射，同批同名可保留。旧内核只有以基础文件名为键的`succMap`时，存在同名风险则逐文件调用，避免错配，不因同名整批拒绝。完整envelope和非零code中的成功项必须保留，见[原生上传结果](https://github.com/siyuan-note/siyuan/blob/v3.8.10/app/src/protyle/upload/uploadResult.ts#L58-L85)。
 
 ## 3. 已实现的 MCP 参数
 
@@ -119,17 +118,17 @@ Bridge 直接复用思源前端的图片扩展名清单，按原始文件名后�
 | `start_index` | integer | 是 | 写入前引用阅读中的块序号；本批次全部插在该块之后 |
 | `start_id` | string | 是 | 与 `start_index` 配对的块 ID |
 | `assets` | array | 是 | 本次要插入的本地文件/文件夹；至少一项 |
-| `assets[].local_path` | string | 是 | 交给思源处理的本地路径，不由 Bridge 改写为另一操作系统格式 |
+| `assets[].local_path` | string | 是 | Bridge可访问的本地路径；文件读取内容后上传，目录原路径交给原生链接分支，不映射操作系统路径 |
 | `assets[].name` | string | 否 | 图片 alt 或文件/文件夹锚文本；缺省时按思源官方文件名逻辑生成 |
 | `assets[].title` | string | 否 | Markdown 附加标题；图片中显示为下方标题，文件/文件夹通常用于悬停提示 |
-| `upload_large_files` | boolean | 否 | 是否允许上传本批次中超过 20 MB 的普通文件，默认 false |
+| `upload_large_files` | boolean | 否 | 承接用户同意上传256MiB及以上普通文件，默认false；也用于create/edit的`markdown_file` |
 | `confirmed` | boolean | 是 | 是否确认写入思源，必须 true |
 
 当前决定不增加显式 `type=image/file/directory`：路径类型可在预检阶段判断，图片和普通文件又共用思源上传通道。若后续实测发现 MCP 进程看不到调用端本地路径，则该问题属于部署边界，需要重新设计，不能靠调用者声明类型解决。
 
 ## 4. 事务与安全流程
 
-目标语义是“整批成功或整批失败”。实际流程：
+遵循原生逐项成功语义，报告资源处理、块写入和验证各阶段的实际结果。
 
 ### 阶段 A：只读预检
 
@@ -139,31 +138,31 @@ Bridge 直接复用思源前端的图片扩展名清单，按原始文件名后�
 4. 重新读取目标文档展示块列表。
 5. 校验调用级 `start_index/start_id` 双重锚点。
 6. 检查每个 `local_path` 是否存在，并识别普通文件或目录；其他类型整批拒绝。
-7. 检查同批次基础文件名是否重名；重名则整批拒绝并提示拆分调用。
-8. 获取普通文件大小；任一超过 20 MB 且未提供 `upload_large_files=true` 时，整批暂停并返回要求。
-9. 使用已经实测确认的 `/api/asset/insertLocalAssets` 契约；思源版本变化时重新验证参数、返回值和回滚能力。
+7. 保留原始顺序，准备`succFiles.index`映射及旧`succMap`同名逐文件兼容，不整批拒绝同名。
+8. 获取普通文件大小；256MiB及以上且未获`upload_large_files=true`同意时，先返回原生大文件提示。
+9. 使用普通文件multipart、目录`isUpload=false`的原生分支；思源版本变化时重新核对参数与逐项返回。
 
 阶段 A 任何失败均不得创建快照、上传资源或插入链接。
 
 ### 阶段 B：快照与执行
 
 1. 创建思源工作空间快照；快照失败则停止。
-2. 按已确认的思源原生 API 处理所有输入路径：文件进入思源附件通道，目录得到思源生成的 `file://` 链接。
-3. 保存每项源路径、思源返回路径、目标锚点和准备插入的 Markdown。
-4. 按预先计算的稳定顺序，把所有引用插入指定位置。
-5. 不因第一项成功就提前报告；必须继续到整批完成和验证。
+2. 文件/图片上传multipart内容，目录调用`insertLocalAssets(isUpload=false)`取得原生链接；执行不自动重试。
+3. 保留完整原生envelope，按逐项列表记录源路径、返回路径与失败原因，非零code也不丢弃成功项。
+4. 按输入顺序为成功项生成Markdown，插入同一锚点后。
+5. 继续读回并分别报告成功和失败项目，不因单项失败撤销已成功附件。
 
-### 阶段 C：验证与失败补偿
+### 阶段C读回与部分失败报告
 
-1. 重新读取目标文档，确认每个资产项均在目标文档中形成对应链接/引用。
-2. 普通文件还应确认思源返回的附件路径有效；文件夹只验证链接已插入，不验证目标目录跨设备可访问。
-3. 全部通过后才返回 `ok: true`。
-4. 任一步失败，只删除能通过本批精确 Markdown 明确识别的已插入块，并验证这些块已消失。附件可能是思源哈希去重后的共享资源，当前无法证明是本批新建且无人使用，因此不自动删除，只报告可能残留和快照恢复方式。
-5. 如果思源 API 不支持可靠清理，必须如实返回部分失败、残留项和思源快照恢复提示；不得把“已创建快照”假装成程序自动回滚。
+1. 重新读取目标文档，确认成功项已形成对应链接/引用，保留未成功项的原生原因。
+2. 普通文件检查返回路径；目录只验证链接，不要求跨设备可访问。
+3. 按原生逐项结果报告`success/partial/failed`，全部完成才报告全部成功。
+4. 块插入或读回失败时报告实际已写内容、失败阶段和可能残留资源，不自动删除资源、不撤销其他成功项、不整批补偿。
+5. 需要恢复时提示用户手动使用思源快照，不调用自动恢复/checkout接口。
 
-注意：当前项目明确不调用高风险自动恢复/checkout 接口。文档块通过可验证的补偿操作恢复；快照是用户手动恢复的最后保险。思源资源端不提供足够信息区分“本批新建”和“哈希去重复用”，因此当前契约明确允许失败时报告可能残留，不能伪装成严格附件回滚。
+## 5. 2026-07-28历史API调研与探针
 
-## 5. 思源原生 API 调研结果与待确认点
+本节保留当时依据。2026-11-16的当前HTTP协议见[思源API的本地资源插入](<思源API.md#本地资源插入>)；普通文件不再使用内核读取宿主路径，失败不再触发整批补偿。
 
 ### 5.1 已确认事实
 
@@ -242,6 +241,7 @@ POST /api/asset/insertLocalAssets
 {
   "ok": true,
   "action": "insert_assets",
+  "status": "success",
   "document": "/笔记本/目标文档",
   "document_id": "...",
   "inserted": [
@@ -272,15 +272,15 @@ POST /api/asset/insertLocalAssets
 {
   "ok": false,
   "requires_confirmation": true,
-  "threshold_bytes": 20971520,
+  "threshold_bytes": 268435456,
   "large_files": [
-    {"local_path": "...", "size_bytes": 26214400}
+    {"local_path": "...", "size_bytes": 268435456}
   ],
   "message": "整批尚未写入。如需上传这些大文件，请以相同参数增加 upload_large_files=true 重试。"
 }
 ```
 
-失败结果必须区分：预检失败（无写入）、快照失败（无写入）、资源处理失败、块插入失败、验证失败、补偿失败。不得只返回模糊异常。
+结果须区分预检失败（无写入）、快照失败（无写入）、资源逐项失败、块插入失败和验证失败，保留各项原生原因与文档ID。部分成功在开头明确说明已写内容及未完成附件；块写入失败可能残留资源，不做自动整批补偿。
 
 ## 7. 实际代码与文档改动范围
 
@@ -291,13 +291,13 @@ POST /api/asset/insertLocalAssets
 - `source_code/client.py`：仅增加经实测确认的思源原生资源 API 封装。
 - `source_code/mcp_server.py`：`siyuan_edit` schema、参数校验、预检、事务协调、插入和验证。
 - `tests/test_client.py`：API 请求和返回解析测试。
-- `tests/test_mcp_server.py`：schema、权限、单组锚点、同位置多项目、name/title、官方图片清单、重名拒绝、20 MB 开关、文件夹链接、整批失败和补偿测试。
+- `tests/test_mcp_server.py`：schema、权限、单组锚点、同位置多项目、name/title、官方图片清单、同名index映射与旧版逐文件、256MiB提示与同意、目录原生链接、部分成功保留及残留报告测试。
 - `docs/ARCHITECTURE.md`：功能定案并实现后，把真实工具契约并入 `siyuan_edit` 章节。
 - `docs/DEVELOPMENT_GUIDE.md`：补充附件写入必须验证的安全清单。
 - `docs/思源API.md`：记录经源码和探针确认的 API。
 - `plugins/siyuan-bridge/skills/siyuan-bridge/SKILL.md`、`README.md` 和对应同步副本：更新用户工作流和参数说明。
 
-不应修改 `siyuan_create`，也不应新增第 10 个 MCP 工具。
+不新增第10个MCP工具；`siyuan_create`仅在已有`markdown_file`流程中共用资源处理与`upload_large_files`同意开关。
 
 ## 8. 验证要求
 
@@ -305,9 +305,10 @@ POST /api/asset/insertLocalAssets
 
 ### 第一层：测试代码与真实 MCP 探针
 
-- 单元测试全量通过（附件相关 187 passed，完整测试 299 passed）。
-- 直接启动当前源码，通过 JSON-RPC 调用真实 `siyuan_edit(insert_assets)`。
-- 至少覆盖：单文件、官方图片扩展名与普通文件降级、文件夹、同位置多个项目、name/title 各种缺省组合、重名拒绝、超 20 MB 拒绝与开关重试、无效锚点整批不写、处理中途失败的补偿和最终读回验证。
+- 单元测试覆盖multipart真实字节与Unicode、Content-Length、鉴权、同名index、旧`succMap`逐文件、code与逐项结果不一致、256MiB边界及用户同意。
+- 通过当前开发版JSON-RPC或能力库验证`insert_assets`及create/edit的`markdown_file`，不使用用户版。
+- 场景包含单文件、原生图片扩展名、目录`isUpload=false`、同位置多项、name/title缺省、无效锚点无写入、部分成功保留和插入失败的残留报告。
+- 本轮测试数字另行记录，不能把第9节历史结果当成本轮验收。没有Linux/Docker实机时保留未验证项。
 
 ### 第二层：能力库开发版 MCP
 

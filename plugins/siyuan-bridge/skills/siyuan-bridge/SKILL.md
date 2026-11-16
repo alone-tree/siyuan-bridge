@@ -42,7 +42,7 @@ description: Use when the user wants to read, search, or write their private SiY
 - `siyuan_create` 优先传完整可读路径 `path=/Notebook/Folder/Doc`；只有笔记本名称重名或使用内部路径时才补充 `notebook_id`。目标已存在时默认 `if_exists=reject`，可显式用 `overwrite` 清空块后重写并保留文档 ID，或用 `create_new` 新增同名文档。
 - 如果 `siyuan_create` 提示目标笔记本不存在，先取得用户明确同意，再调用 `siyuan_doc_manage(action="create_notebook", notebook_name="<笔记本名称>", confirmed=true)`；创建成功后重试文档写入。不得根据文档路径隐式创建笔记本。
 - `siyuan_create`成功后会等待思源路径同步并自动刷新安全索引；普通新建可使用返回路径，同名新建必须按返回提醒使用新文档ID定位，不能仅复用同名路径。
-- 新写或直接编辑正文时传 `markdown`，不要先写一个本地 `.md` 再导入。只有需要把已有本地 md 导入或插入思源时才用 `markdown_file`（绝对路径）；插入后图片和附件会上传，相对引用会尽可能改写为 `siyuan://` 块链接。独立附件仍用 `insert_assets`。
+- 新写或直接编辑正文时传`markdown`，不要先写本地`.md`再导入。已有本地md才用`markdown_file`绝对路径；文件/图片上传multipart内容，目录保留原生本地链接且不递归，唯一文内标题锚点尽可能转为`siyuan://`块链接。独立附件用`insert_assets`。create/edit的`markdown_file`同样用`upload_large_files`承接256MiB及以上普通文件提示后的用户同意。
 - 面向用户说“第 N 块”前，必须先用 `siyuan_read(include_block_ids=true)` 读取当前文档。用户在思源页面看到的是同一套实时序号；文档被你或用户改过之后，旧序号立即失效，再次引用前必须重新读取。
 - 编辑已有文档前，先用 `siyuan_read(include_block_ids=true)` 进行引用阅读，并把返回的块序号和块 ID 作为 `siyuan_edit` 定位参数。面向用户用“第 25 块”即可，不要要求用户识别块 ID。
 - 不必为了块 ID 本身改变编辑方案；只有被其他块引用的 ID 消失时才会影响用户。
@@ -53,8 +53,11 @@ description: Use when the user wants to read, search, or write their private SiY
 - `siyuan_doc_manage` 的 rename/move/copy/delete 成功后会等待路径同步并自动刷新安全索引；如果返回提示路径同步超时，临时改用 `document_id` 或显式调用 `siyuan_operate(action="refresh")`。
 - 编辑普通Markdown表格时，使用引用阅读返回的网格坐标：`row=0`是表头，`row>=1`是数据行，`column_index`从1开始。坐标视图不可原样写回；整体替换需提供标准Markdown表格。源表格裸换行导致边界不明时先在思源中修正，不要忽略拒绝提示继续重写；写后出现结构变化警告时核对是否符合用户意图。
 - 读取图片/附件时，本地副本路径只供查看；复用到思源文档应使用返回的原始`assets/...`引用，不要再次上传副本。
-- 插入本地图片、文件或文件夹时使用 `siyuan_edit(action="insert_assets")`：一次调用只用一个锚点，但可在该位置按顺序插入多个项目。`name` 是图片 alt 或正文链接名；`title` 才是图片下方标题（文件/文件夹通常仅悬停显示）。超过 20 MB 的普通文件只有在用户明确同意后才传 `upload_large_files=true`。
-- `siyuan_operate` —— `action=refresh` 会话中途刷新安全索引并统计字数、块数，不清理 `ai_workspace/`；`action=sync` 调用思源内置默认同步，相当于点击思源同步按钮，并返回当前同步状态。同步默认等待 10 秒；慢同步可设置 `timeout_seconds` 到 5-120 秒，该参数只改变 MCP 等待时间，不改变思源同步行为。超时说明同步尚未在等待窗口内完成，不等同于思源未启动。只有 `siyuan_start` 会在新会话启动时清理 workspace。
+- 插入本地图片、文件或目录时用`siyuan_edit(action="insert_assets")`，一次一个锚点，可按顺序插入多项。`name`是图片alt或链接名，`title`是图片下方标题或链接悬停提示。256MiB及以上普通文件先提示，用户明确同意后才用`upload_large_files=true`；这是提示后的同意开关，不是硬限制。目录走原生`isUpload=false`链接，不递归。
+- 上传结果按`success/partial/failed`逐项阅读，同名可由原生index映射，旧内核仅succMap时由Bridge逐文件处理，不要求用户拆批。其他项失败不会撤销成功附件；块插入/更新失败可能残留资源，不自动删资源或整批补偿。Markdown部分成功时正文已经写入，按返回文档ID核对失败项，不重建整篇文档；需要恢复时提示用户手动使用快照。
+- `siyuan_operate(action=refresh)`刷新安全索引及字数/块数，不清理`ai_workspace/`；只有`siyuan_start`在新会话启动时清理。
+- `siyuan_operate(action=sync)`遵循原生配置和同步源预检；原生提示要求选择时先把预览交给用户，当次同意上传才传`upload=true`、下载传`upload=false`，无默认方向。普通同步省略`upload`，source非空而cloudID空的原生空云端分支自动上传。不要自行猜方向或手填内部state；重新连接后旧选择清空。只读、未配置密钥或未启用同步时按原生指引让用户设置，不自动修改。
+- 同步默认等待10秒，可用`timeout_seconds`调整到5-120秒。超时或连接失败时同步可能已经开始，不自动重试；先核对原生状态，HTTP成功也不能直接宣称同步完成。
 - 想知道“本文档引用了哪些块”，使用 `siyuan_operate(action="check_forward_references", document="/Notebook/Folder/Doc")`；想知道“哪些块引用了本文档”，改用 `action="check_backward_references"`。路径歧义时改传 `document_id`，不要传 `direction`。两者覆盖文档 ID、全部真实正文块 ID、块引用、可识别嵌入块和 `siyuan://` 块链接，也计入本篇内部引用。正向按目标文档展示目标块，反向按来源文档展示来源块；子文档递归汇总次数，不展开块详情。默认各展示 10 篇可见对端/子文档，`limit="none"` 查看全部，展示限制不影响关系总数。隐藏对端只计关系次数，不披露文档数、路径、ID 或内容。两个 action 均只读，不需要 `confirmed`。
 - `siyuan_bridge_feedback` —— 通过对话提交对思源桥 MCP 的反馈。type 为 bug/feature/idea，title 和 description 必填，contact 可选。不修改思源内容，不需要 confirmed=true，即使思源未启动也可使用（只要配置了遥测端点）。
 - 系统笔记本 `思源桥` / `SiYuan Bridge` 只维护用户个性化要求、工作空间索引、关于思源桥、隐私规则四篇文档。MCP 使用指南和索引创建指南来自 `templates/guides/` 代码资产，随插件版本更新；笔记本里的历史同名文档不作为指南读取。

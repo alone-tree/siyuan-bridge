@@ -12,6 +12,12 @@ This guide only supplements principles that tool descriptions do not explain cle
 - Operations that remove block IDs automatically check backlinks. When backlinks exist, the tool refuses the operation and explains when the referenced ID should be preserved and when the user may be asked to allow the reference to break.
 - Re-plan the edit from that conflict guidance. Use `reference_policy=break` only after the user explicitly accepts breaking the references reported for that operation; it is not standing permission for later changes.
 
+## Attachments and sync
+
+- Local files and images are uploaded as content. Directories use native local links without recursion. Files of 256MiB or more prompt first; pass `upload_large_files=true` only after user consent. This applies to `insert_assets` and create/edit with `markdown_file`.
+- Check per-item `success/partial/failed` results. Failed attachments do not undo successful items. Do not recreate a document whose Markdown body was already written. Block insertion/update failures may leave resources; do not automatically delete them or compensate the whole batch. The user can restore a snapshot manually.
+- Ask for a sync direction only when the native prompt requires it, then pass that choice as `upload=true/false`, with no default direction. Omit it for ordinary sync; the native empty-cloud exception uploads automatically. Do not guess or fill internal preview state. New connections clear prior choices. A timeout or connection failure may occur after sync started; do not retry automatically or infer completion from HTTP success.
+
 ## System notebook
 
 The system notebook maintains exactly four documents:

@@ -98,13 +98,14 @@ flowchart LR
 - 不让 AI 读取、搜索、编辑 Privacy Rules 文档。
 - 不提供 AI 自动 `checkoutRepo` 或工作空间回滚工具。
 - 不把系统笔记本内容当作用户原始知识资料。
-- 不直接管理思源账号、同步、设置、插件、集市等应用级状态。
+- 不直接修改思源账号、同步配置、设置、插件或集市状态；同步仅复用原生预检、方向选择和执行流程。
 
 ## 代码结构
 
 ```text
 source_code/
   client.py          思源 HTTP API 封装
+  sync.py            NativeSync原生同步协调与当前连接的选择状态
   config.py          config.local.json / 环境变量 / profile 探测
   runtime_data.py    安装态插件数据区定位与旧数据只复制迁移
   telemetry.py       遥测与反馈：事件收集、本地存储、代理上传、反馈提交
@@ -554,7 +555,7 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 
 ## `siyuan_operate`
 
-用途：执行只读查询和维护操作。当前支持刷新安全索引、触发思源内置默认同步、读取内置指南和主动检查文档引用。导入本地 Markdown 文件请使用 `siyuan_create` / `siyuan_edit` 的 `markdown_file` 参数，不使用本工具。
+用途：执行只读查询和维护操作。当前支持刷新安全索引、按思源原生流程同步、读取内置指南和主动检查文档引用。导入本地 Markdown 文件请使用 `siyuan_create` / `siyuan_edit` 的 `markdown_file` 参数，不使用本工具。
 
 参数：
 
@@ -563,6 +564,7 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 | `action` | string | 必填 | `refresh` / `sync` / `read_guide` / `check_forward_references` / `check_backward_references` |
 | `guide` | enum | read_guide 必填 | `mcp_usage`（使用原则）/ `workspace_index`（创建与更新索引）；其他 action 不使用 |
 | `timeout_seconds` | integer | 10 | 仅 `action=sync` 使用，等待思源内置同步返回的秒数，范围 5-120 |
+| `upload` | boolean | 不设默认值 | 仅原生同步提示要求当次选择时传入；true上传，false下载；省略不代表选择任一方向 |
 | `document` | string | 空 | 仅两个引用查询 action 使用；优先传包含笔记本名称的文档路径 |
 | `document_id` | string | 空 | 仅两个引用查询 action 使用；路径歧义或不可用时的文档 ID 兜底 |
 | `limit` | integer / `"none"` | 10 | 仅两个引用查询 action 使用；分别限制可见对端文档和有引用关系的可见子文档的展示数量，不限制关系总数；整数最小 1、无最大值 |
@@ -579,12 +581,16 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 
 `action=sync` 数据流：
 
-1. 加载配置并探测当前在线工作空间。
-2. 调用思源内置 `POST /api/sync/performSync`，请求体为空，保持与思源同步按钮一致，默认等待 10 秒，可通过 `timeout_seconds` 调整到 5-120 秒。
-3. 调用 `POST /api/sync/getSyncInfo` 获取当前同步状态。
-4. 返回同步调用结果和状态文本。
+1. 复用成功start的当前连接，由内部`NativeSync.run(client, upload=None, timeout=10)`协调；不修改同步配置。
+2. 读取原生配置；只读、数据仓库密钥未配置或同步未启用时返回原生设置指引，不执行同步。
+3. 支持`getSyncSourceState`的内核先取得原生预览；仅端点返回404/405时使用已核对的旧版原生流程，其他错误原样报告。预览可能触发索引，不能宣称绝对只读。
+4. `source`非空且`cloudID`为空时，按原生空云端例外自动发起`upload=true`，绑定原生预览标识；无pending且mode不为3时，以空请求体执行普通同步。
+5. pending或mode=3时，首次返回`requires_choice`及原生预览信息，不调用`performSync`。只在用户当次选择后传`upload=true/false`，使用当前MCP实例保存的source/localID/cloudID；不开放手填state、不设置额外过期秒数，也不自动替换用户已看过的预览。原生源发生变化时按原生结果重新提示。
+6. 执行后读取`getSyncInfo`并报告原生结果和状态，HTTP成功不等于同步已完成。执行不自动重试；连接重置或重新start时调用`reset()`清空待选择状态。
 
-如果 `performSync` 超过等待时间未返回，工具返回 `api:sync_timeout` 错误，提示用户稍后检查同步状态、手动延长 `timeout_seconds` 或检查网络/同步服务。如果同步调用已经开始但网络连接失败，工具返回 `api:sync_connection`。连接探测阶段失败仍按普通思源未启动/API 不可达处理。
+默认等待10秒，`timeout_seconds`只调整等待时间，范围5-120秒。超过等待窗口返回`api:sync_timeout`；执行中的连接失败返回`api:sync_connection`。此时同步可能已经开始，应先检查原生状态，不自动重发。建连阶段失败仍提示用户手动打开思源或重新start。
+
+流程依据思源v3.8.10的[同步前端](https://github.com/siyuan-note/siyuan/blob/v3.8.10/app/src/sync/syncGuide.ts#L228-L328)与[同步源模型](https://github.com/siyuan-note/siyuan/blob/v3.8.10/kernel/model/sync_source.go#L75-L151)；本节描述对齐契约，不表示Linux/Docker或真实同步已完成验收。
 
 引用查询公开入口：
 
@@ -752,6 +758,7 @@ scope：
 | `title`       | string  | 必填       | 文档标题                                    |
 | `markdown`    | string  | 二选一必填 | 默认写入正文；与 `markdown_file` 互斥           |
 | `markdown_file` | string | 二选一必填 | 仅导入已有本地 `.md` 文件；不要为导入先写临时文件 |
+| `upload_large_files` | boolean | false | 仅`markdown_file`附件后处理，承接用户同意上传256MiB及以上普通文件 |
 | `path`        | string  | 可选       | 首选完整可读路径 `/Notebook/Folder/Doc`   |
 | `notebook_id` | string  | 可选       | 笔记本重名或使用内部路径时消歧              |
 | `if_exists`   | enum    | `reject` | `reject` / `overwrite` / `create_new` |
@@ -780,7 +787,9 @@ scope：
 - `markdown_file` 传入本地 `.md` 文件绝对路径，内容按 UTF-8 → GBK → GB18030 顺序解码，换行统一为 `\n`，之后作为 `markdown` 走同一写入流程（含去重首 H1）。
 - 与 `markdown` 互斥：同时传入或都不传都会在写入前报错。
 - 读取失败（路径不存在、无法解码、内容为空）在快照之前拒绝，不写思源、不创建快照。
-- 正文写入后自动处理本次内容中的标准 Markdown 图片和链接：本地文件/目录交给 `/api/asset/insertLocalAssets`，只替换链接目标；网络地址、`assets/...` 和其他 URI scheme 保持不变。唯一匹配的文内标题锚点改写为 `siyuan://blocks/<ID>`。直接传入 `markdown` 时不扫描调用端文件系统。HTML / Wiki 嵌入不处理。超过 20 MB 的本地文件保留原引用并警告。附件失败不影响正文成功。
+- 正文写入后自动处理本次内容中的标准Markdown图片和链接。普通文件/图片由Bridge读取内容，走`/api/asset/upload`的multipart，传目标文档`id`和`file[]`；目录走`insertLocalAssets(isUpload=false)`并直接使用原生本地链接，不递归。只替换链接目标；网络地址、`assets/...`和其他URI scheme保持不变。唯一匹配的文内标题锚点改写为`siyuan://blocks/<ID>`。直接传入`markdown`时不扫描调用端文件系统，HTML/Wiki嵌入不处理。
+- 256MiB及以上普通文件先提示；用户明确同意后用`upload_large_files=true`承接同意，阈值是原生提示而非硬限制。未获同意、文件缺失或上传失败时保留原引用，正文已写入的结果不撤销。
+- 附件结果按原生逐项列表区分`success/partial/failed`，保留成功项及各项失败原因；部分成功必须在返回开头说明正文已写入、附件未全部完成，并保留文档ID，避免重建整篇文档。链接块更新失败时报告实际已写内容和可能残留资源，不自动删资源或整批补偿；需要恢复时由用户手动使用快照。
 
 数据流：
 
@@ -831,7 +840,7 @@ scope：
 | `markdown_file` | string | 部分 action 二选一可选  | 仅导入已有本地 `.md`；不要为导入先写临时文件 |
 | `table_edit`  | object  | table_edit 必填         | 表格编辑对象           |
 | `assets`      | array   | insert_assets 必填      | 同一锚点后插入的本地文件/文件夹 |
-| `upload_large_files` | boolean | false | 是否允许上传超过 20 MB 的普通文件 |
+| `upload_large_files` | boolean | false | 用于`insert_assets`或`markdown_file`，承接用户同意上传256MiB及以上普通文件 |
 | `reference_policy` | enum | `reject` | 删除旧块时的引用策略：`reject` / `break` |
 | `confirmed`   | boolean | 必填                    | 必须为 true            |
 
@@ -857,10 +866,10 @@ scope：
 5. 校验 `start_index/start_id` 是否匹配当前文档。
 6. 范围操作校验 `end_index/end_id` 和连续范围。
 7. 根据 action 做类型和参数校验。
-8. `insert_assets` 在快照前检查全部本地路径、类型、同批重名和 20 MB 阈值。
+8. `insert_assets`在快照前检查全部本地路径、类型、锚点和256MiB大文件提示；同名按原生逐项结果处理，不整批拒绝。
 9. 对`delete`、`default_block_replace`及列表项`single_block_replace`计算会消失的块ID并检查外部反链；列表项单选替换检查首段落以外将删除的旧文字段落。
 10. 创建快照。
-11. 执行块操作；`insert_assets` 先调用 `/api/asset/insertLocalAssets`，再用返回路径生成 Markdown 插在锚点后。
+11. 执行块操作；`insert_assets`的普通文件/图片通过multipart上传内容，目录通过`insertLocalAssets(isUpload=false)`取得链接，再按成功项原顺序生成Markdown插在锚点后。
 12. 重新读取展示块；写后若思源短暂返回 `block not found or its encrypted notebook is locked`，按 250ms 间隔重试至多 5 秒；若使用 `markdown_file`，先处理本次新写入块中的本地引用和文内锚点，再读回用于返回摘要。
 13. 返回原内容、新内容或上下文；`default_block_replace` 的“新内容”会排除本轮已删除的旧块 ID，避免思源块树短暂滞后时误报旧块仍存在。
 14. 尝试 pushMsg。
@@ -878,8 +887,10 @@ scope：
 - `insert_assets` 一次只接受一个锚点，可按数组顺序插入多个项目；多位置必须分次调用并重新引用阅读。
 - 图片扩展名直接使用思源前端清单；其他普通文件按附件链接处理，文件夹由思源返回 `file://` 链接且不递归上传。
 - `name` 是图片 alt 或链接正文；`title` 是图片下方标题或文件/文件夹悬停提示。空值按思源官方文件名规则生成且不输出空 title。
-- 同批基础文件名重名时整批拒绝；普通文件超过 20 MB 且 `upload_large_files=false` 时，在快照和上传前暂停整批。
-- 上传后的插入或验证失败时，只删除能明确识别为本批插入的文档块。附件可能经过哈希去重，无法证明是新建且无人共用时不自动删除，返回残留路径和快照恢复提示。
+- 资源接口保留完整原生envelope，非零`code`也可能有成功项；不能只看`code`。优先按`succFiles.index`对应输入，旧内核只有`succMap`且有同名风险时逐文件调用，避免错配，不整批拒绝。
+- 普通文件256MiB及以上且未获`upload_large_files=true`同意时，在快照和上传前提示；目录不递归统计大小。
+- 按逐项列表报告`success/partial/failed`；一项失败不撤销其他成功附件或已插入内容。块插入、替换或验证失败时报告已写内容、失败项及可能残留资源，不自动删资源或整批补偿，提示用户手动快照恢复。
+- 资源命名、目标assets目录和哈希去重均交给内核；HTTP不发送内核无法读取的宿主文件路径。原生依据见[上传模型](https://github.com/siyuan-note/siyuan/blob/v3.8.10/kernel/model/upload.go)、[逐项上传结果](https://github.com/siyuan-note/siyuan/blob/v3.8.10/app/src/protyle/upload/uploadResult.ts#L58-L85)和[256MiB提示](https://github.com/siyuan-note/siyuan/blob/v3.8.10/app/src/constants.ts#L115)。
 
 块属性保留：
 
@@ -1075,6 +1086,8 @@ Worker 统计边界：
 - 数据库读取：getAttributeView
 - 快照：createSnapshot / getRepoSnapshots
 - 资源读取：get_asset
+- 资源写入：upload_assets（multipart内容）；insert_local_assets_result（目录本地链接，完整envelope）
+- 同步：get_conf / get_sync_source_state / perform_sync / get_sync_info；由NativeSync协调，执行不自动重试
 - 通知：pushMsg / pushErrMsg
 
 API 设计原则：

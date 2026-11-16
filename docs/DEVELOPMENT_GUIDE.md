@@ -375,7 +375,8 @@ Error: invalid parameter
 - `reference_policy=break` 只能在用户已看到冲突报告并明确允许破坏引用后使用；同一删除集合内部的引用不应阻止操作。
 - 返回信息必须让 AI 确认改了什么。
 - `markdown_file` 与 `markdown` 互斥：需要 markdown 的 action 同时传入或都不传，必须在快照前报错；文件按 UTF-8 → GBK → GB18030 解码并统一换行，读取失败或内容为空在快照前拒绝且不写思源、不创建快照。
-- `markdown_file` 写入成功后必须处理本次受影响块中的标准 Markdown 图片/链接：本地文件和目录走 `insertLocalAssets`，只替换链接目标；网络地址保持不变；唯一标题锚点转为 `siyuan://blocks/<ID>`；超过 20 MB、缺失或上传失败时保留原引用并报告，正文仍成功。直接传入 `markdown` 不得扫描调用端文件系统。
+- `markdown_file`写入后只处理本次受影响块中的标准Markdown图片/链接。普通文件/图片走`/api/asset/upload` multipart内容，目录显式`insertLocalAssets(isUpload=false)`取得原生本地链接，不递归；只替换链接目标并保留块ID/属性。网络地址不变，唯一标题锚点转为`siyuan://blocks/<ID>`；直接`markdown`不扫描文件系统。
+- create/edit的`markdown_file`和`insert_assets`均验证`upload_large_files`，256MiB及以上普通文件提示与用户同意分支，覆盖阈值前1字节、恰好阈值和阈值后1字节；取消旧20MiB规则，提示不作为硬限制。Markdown未获同意、缺失或上传失败项保留原引用，返回开头说明正文已写入但附件未全部完成，并包含文档ID与原因。
 
 `siyuan_edit` 特别要求：
 
@@ -391,18 +392,30 @@ Error: invalid parameter
 - 公开 schema 不暴露旧名 `multi_block_replace`；后端别名仍可执行，但错误信息和工具描述不得再出现该旧名。
 - 表格编辑必须使用`row`和`column_index`坐标；引用视图必须提示不可直接回写。替换后表格数量减少时输出结构变化警告。
 - 表格源内容含裸换行或列边界异常时，table_edit在快照和写入前拒绝，不静默补齐/截断后写回；新输入单元格LF/CRLF/CR规范化为`<br>`，保留相邻列及行数。
-- `insert_assets` 必须在快照和上传前完成路径存在性、普通文件/目录识别、同批基础文件名重名、锚点和大文件阈值检查。
+- `insert_assets`必须在快照和上传前完成路径存在性、普通文件/目录识别、锚点和原生大文件提示检查；同名用`succFiles.index`映射，旧内核只有`succMap`时逐文件调用，不能错配或仅因同名整批拒绝。
+- multipart验证目标文档`id`、`file[]`真实字节、Unicode文件名、Content-Length和鉴权头；不把宿主绝对路径作为普通文件的内核读取参数。目录验证`isUpload=false`和原生返回链接，不递归、不打包、不映射路径。
+- 上传保留完整原生envelope，覆盖`code=0`但全部失败、`code`非零仍有成功项、混合`success/partial/failed`；成功附件不因别项失败撤销，执行不自动重试。
 - 图片判断必须直接使用思源前端扩展名清单并做大小写不敏感比较；未知图片格式按普通文件处理，不做 MIME 推断。
 - `name` / `title` 缺省和显示语义必须分别测试；空 title 不得生成 `""`。
 - 一个调用只允许一个 `start_index/start_id` 锚点，但允许同位置按顺序插入多个项目。
-- 超过 20 MB 的普通文件在 `upload_large_files=false` 时整批暂停，不得创建快照或调用资源 API；文件夹不递归统计大小。
-- 上传成功后的插入/读回失败必须测试文档块补偿。不能证明附件是本批新建且无人引用时不得自动删除，必须报告可能残留和手动快照恢复方式。
+- `insert_assets`中256MiB及以上普通文件未获同意时，提示前不得创建快照或调用资源API；目录不递归统计大小。
+- 上传成功后的块插入、替换或读回失败须验证实际已写内容与可能残留报告；不得自动删资源或整批补偿。保留各项原生错误及成功结果，恢复由用户手动使用思源快照。
 
 已知真实问题：
 
 - `single_block_replace` 误传多块 Markdown 会导致内容丢失，所以当前代码已拒绝。
 - `updateBlock` 会清空块样式属性，所以必须保留 IAL custom attrs。
 - `siyuan_edit` 成功后当前不会自动刷新字数/块数索引。
+
+## 修改原生同步时必须验证
+
+同步契约见[架构文档的siyuan_operate章节](<ARCHITECTURE.md#siyuan_operate>)。危险方向分支仅用隔离Fake验证，不在真实用户库运行同步或修改同步配置。
+
+- 配置预检覆盖只读、无数据仓库密钥、同步未启用；不自动改设置。
+- 新版`getSyncSourceState`与仅404/405回退旧版均覆盖；其他错误不吞掉。预览有索引副作用，不标成绝对只读。
+- 分别验证普通空请求同步、source非空且cloudID空的原生自动上传、pending/mode=3的当次用户选择；首次未选或取消不得执行。
+- 公开`upload:boolean`无默认值，仅承接原生提示后的当次选择；source/localID/cloudID仅保存在当前MCP实例，源变化遵循原生校验，重新start、鉴权或连接重置后清空，不开放手填state或增加过期秒数。
+- 执行、超时和连接失败均不自动重试；HTTP成功不标成同步完成，保留原生状态与错误。
 
 ## 修改主动引用检测时必须验证
 
