@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import unittest
 from pathlib import Path
@@ -6620,6 +6621,308 @@ class McpServerListEditTests(McpServerWriteTests):
                 client._updated_blocks,
                 [("itemT", "- [x] 买牛奶")],
             )
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_delete_range_starting_at_paragraph_through_list_rejected(self):
+        # 审计 D1：起点是普通段落、终点落在列表内部的范围必须拒绝，不建快照不删块
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_edit({
+                    "document": "/Main/Projects/Doc One",
+                    "action": "delete",
+                    "start_index": 1,
+                    "start_id": "para1",
+                    "end_index": 4,
+                    "end_id": "itemB",
+                    "confirmed": True,
+                })
+            self.assertEqual(ctx.exception.error_code, "validation:operation_order")
+            self.assertFalse(client._snapshots)
+            self.assertFalse(client._deleted_blocks)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_default_replace_range_starting_at_paragraph_through_list_rejected(self):
+        # 审计 D1：default_block_replace 同样不得横跨普通块与列表项
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                server.siyuan_edit({
+                    "document": "/Main/Projects/Doc One",
+                    "action": "default_block_replace",
+                    "start_index": 1,
+                    "start_id": "para1",
+                    "end_index": 4,
+                    "end_id": "itemB",
+                    "markdown": "- X",
+                    "confirmed": True,
+                })
+            self.assertEqual(ctx.exception.error_code, "validation:operation_order")
+            self.assertFalse(client._snapshots)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_single_replace_rejects_referenced_extra_paragraph(self):
+        # 审计 D2：列表项第二段被外部引用时，单选替换默认拒绝且不建快照
+        blocks = self._list_blocks()
+        blocks["itemB"] = [
+            {"id": "pB", "type": "p", "markdown": "项2", "sort": 0},
+            {"id": "pB2", "type": "p", "markdown": "Extra protected paragraph", "sort": 1},
+            {"id": "subList", "type": "l", "subtype": "u", "markdown": "- 子项2.1", "sort": 2},
+        ]
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        client._refs = [
+            {
+                "block_id": "ref-source",
+                "root_id": "doc1",
+                "def_block_id": "pB2",
+                "markdown": "siyuan://blocks/pB2",
+                "content": "引用文字",
+            }
+        ]
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                self._edit(server, markdown="- 层级1，项2改")
+            self.assertEqual(ctx.exception.error_code, "conflict:referenced_blocks")
+            self.assertFalse(client._snapshots)
+            self.assertNotIn("pB2", client._deleted_blocks)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_single_replace_break_policy_deletes_referenced_extra_paragraph(self):
+        # 审计 D2：用户明确允许后 reference_policy=break 才能删除被引用段落
+        blocks = self._list_blocks()
+        blocks["itemB"] = [
+            {"id": "pB", "type": "p", "markdown": "项2", "sort": 0},
+            {"id": "pB2", "type": "p", "markdown": "Extra protected paragraph", "sort": 1},
+            {"id": "subList", "type": "l", "subtype": "u", "markdown": "- 子项2.1", "sort": 2},
+        ]
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        client._refs = [
+            {
+                "block_id": "ref-source",
+                "root_id": "doc1",
+                "def_block_id": "pB2",
+                "markdown": "siyuan://blocks/pB2",
+                "content": "引用文字",
+            }
+        ]
+        try:
+            result = self._edit(
+                server, markdown="- 层级1，项2改", reference_policy="break"
+            )
+            self.assertIn("pB2", client._deleted_blocks)
+            self.assertIn("引用保护", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_single_replace_nested_children_keep_levels(self):
+        # 审计 D3：二级以上新子项不再被压平成同级
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            self._edit(
+                server, markdown="- 层级1，项2改\n  - 新子项\n    - 新孙项"
+            )
+            self.assertEqual(
+                client._inserted_before,
+                [("itemB1", "- 新子项\n  - 新孙项")],
+            )
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_single_replace_child_continuation_stays_with_child(self):
+        # 审计 D3：子项续行不再被挪到父项正文
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            self._edit(
+                server, markdown="- 层级1，项2改\n  - 新子项\n    child continuation"
+            )
+            self.assertEqual(
+                client._inserted_before,
+                [("itemB1", "- 新子项\n  child continuation")],
+            )
+            self.assertEqual(client._inserted_after, [])
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_task_submission_replaces_old_continuation(self):
+        # 审计 D4：任务项提交带续行时旧续行不再残留
+        blocks = {
+            "doc1": [
+                {"id": "list1", "type": "l", "subtype": "t", "markdown": "- [ ] Task", "sort": 0},
+            ],
+            "list1": [
+                {
+                    "id": "itemT",
+                    "type": "i",
+                    "subtype": "t",
+                    "markdown": "- [ ] Task\n  old continuation",
+                    "sort": 0,
+                },
+            ],
+            "itemT": [
+                {"id": "pT", "type": "p", "markdown": "Task", "sort": 0},
+                {"id": "pT2", "type": "p", "markdown": "old continuation", "sort": 1},
+            ],
+        }
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            self._edit(
+                server,
+                start_index=2,
+                start_id="itemT",
+                markdown="- [x] New task\n  new continuation",
+            )
+            # 新续行并入列表项整体更新内容，旧续行不再带回（思源 updateBlock 替换子树）
+            self.assertEqual(
+                client._updated_blocks,
+                [("itemT", "- [x] New task\n  new continuation")],
+            )
+            self.assertNotIn("old continuation", client._updated_blocks[0][1])
+            self.assertEqual(client._inserted_after, [])
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_task_submission_keeps_sublist_in_update_content(self):
+        # 思源 updateBlock 会替换列表项整个子树：任务提交内容必须带回子列表，
+        # 子项 IAL 随内容原样返回，子项 ID 不会丢。
+        blocks = {
+            "doc1": [
+                {"id": "list1", "type": "l", "subtype": "t", "markdown": "- [ ] Task", "sort": 0},
+            ],
+            "list1": [
+                {
+                    "id": "itemT",
+                    "type": "i",
+                    "subtype": "t",
+                    "markdown": "- [ ] Task\n  old continuation",
+                    "sort": 0,
+                },
+            ],
+            "itemT": [
+                {"id": "pT", "type": "p", "markdown": "Task", "sort": 0},
+                {"id": "pT2", "type": "p", "markdown": "old continuation", "sort": 1},
+                {"id": "subListT", "type": "l", "subtype": "t", "markdown": '- {: id="itemC"}Child', "sort": 2},
+            ],
+        }
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            self._edit(
+                server,
+                start_index=2,
+                start_id="itemT",
+                markdown="- [x] New task\n  new continuation",
+            )
+            updated_md = client._updated_blocks[0][1]
+            self.assertIn("- [x] New task", updated_md)
+            self.assertIn('  - {: id="itemC"}Child', updated_md)
+            self.assertNotIn("old continuation", updated_md)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def _patch_ial(self, client, ial: str) -> None:
+        original_query_sql = client.query_sql
+
+        def query_sql_with_ial(stmt):
+            if "SELECT ial" in str(stmt):
+                return [{"ial": ial}]
+            return original_query_sql(stmt)
+
+        client.query_sql = query_sql_with_ial
+
+    def test_single_replace_preserves_paragraph_attrs(self):
+        # 审计 D5：首段落替换必须走属性保留更新
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        self._patch_ial(client, 'id="pB" updated="20260101" custom-p-mark="keep"')
+        try:
+            self._edit(server)
+            self.assertEqual(
+                client._set_attrs_calls,
+                [("pB", {"custom-p-mark": "keep"})],
+            )
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_task_submission_preserves_item_attrs(self):
+        # 审计 D5：任务项整体更新同样保留列表项块属性
+        blocks = {
+            "doc1": [
+                {"id": "list1", "type": "l", "subtype": "t", "markdown": "- [ ] 买牛奶", "sort": 0},
+            ],
+            "list1": [
+                {"id": "itemT", "type": "i", "subtype": "t", "markdown": "- [ ] 买牛奶", "sort": 0},
+            ],
+            "itemT": [
+                {"id": "pT", "type": "p", "markdown": "买牛奶", "sort": 0},
+            ],
+        }
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        self._patch_ial(client, 'id="itemT" updated="20260101" custom-test-mark="keep"')
+        try:
+            self._edit(
+                server,
+                start_index=2,
+                start_id="itemT",
+                markdown="- [x] 买牛奶改",
+            )
+            self.assertEqual(
+                client._set_attrs_calls,
+                [("itemT", {"custom-test-mark": "keep"})],
+            )
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_explicit_same_point_end_uses_subtree_replace(self):
+        # 审计 D6：显式传同起终点时按整棵替换执行，引用检查与子树扩展都要生效
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            result = self._edit(server, end_index=4, end_id="itemB", markdown="- 项2重建")
+            self.assertEqual(client._inserted_before, [("itemB", "- 项2重建")])
+            self.assertEqual(client._deleted_blocks, ["itemB"])
+            self.assertIn("default_block_replace", result)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_item_submission_with_blank_line_paragraph_accepted(self):
+        # 审计 D7：项内空行分段是合法提交，不再被旧多块检查拒绝
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        try:
+            self._edit(server, markdown="- 层级1，项2改\n\n  第二段")
+            self.assertIn(("pB", "层级1，项2改"), client._updated_blocks)
+            self.assertEqual(client._inserted_after, [("pB", "第二段")])
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_insert_after_item_with_children_reports_inserted_content(self):
+        # 审计 D9：带子项的列表项 insert_after，返回摘要必须显示实际插入内容
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        # 真实思源在列表项后插入 "- xxx" 会生成列表项块；Fake 默认生成段落块，
+        # 这里按列表标记补齐类型判断，保持读回结构一致。
+        original_block_type = client._block_type
+
+        def block_type_with_list(markdown):
+            text = str(markdown or "").strip()
+            if re.match(r"^([-*+]|\d+\.)[ \t]+", text):
+                return "i"
+            return original_block_type(markdown)
+
+        client._block_type = block_type_with_list
+        try:
+            result = self._edit(server, action="insert_after", markdown="- 项2.5")
+            self.assertEqual(client._inserted_after, [("itemB", "- 项2.5")])
+            inserted_section = result.split("## 插入内容", 1)[1]
+            self.assertNotIn("(无)", inserted_section)
+            self.assertIn("项2.5", inserted_section)
         finally:
             mcp_server.detect_active_profile = original
 

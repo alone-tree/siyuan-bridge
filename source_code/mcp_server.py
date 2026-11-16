@@ -1013,11 +1013,14 @@ _LIST_MARKER_PATTERN = re.compile(r"^([-*+]|\d+\.)[ \t]+(.*)$")
 def parse_submitted_list_items(markdown: str) -> list[dict[str, Any]] | None:
     """解析编辑提交的 Markdown 顶层列表项（docs/列表块编辑方案-2026-11-13.md 5.1）。
 
-    返回顶层项列表：每项含 text（首行文字）、follow_lines（后续段落行）、
-    child_lines（子列表行，保留相对缩进）。无顶层项或出现顶层散行返回 None。
+    返回顶层项列表：每项含 text（首行文字）、follow_lines（顶层项自己的续行）、
+    child_lines（子内容原始行，保留缩进）。一旦出现子项，其后的缩进续行也归入
+    child_lines，由思源按 Markdown 懒续行挂到最近的子项下（审计 D3）。
+    无顶层项或出现顶层散行返回 None。
     """
     items: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
+    in_child_lines = False
     for raw_line in markdown.splitlines():
         if not raw_line.strip():
             continue
@@ -1028,18 +1031,21 @@ def parse_submitted_list_items(markdown: str) -> list[dict[str, Any]] | None:
                 "follow_lines": [],
                 "child_lines": [],
             }
+            in_child_lines = False
             items.append(current)
             continue
         if current is None:
             return None
-        stripped = raw_line.strip()
-        child_match = re.match(r"^([-*+]|\d+\.)[ \t]+", stripped)
-        if child_match and raw_line.lstrip() == stripped and raw_line[:1].isspace():
-            current["child_lines"].append(stripped)
-        elif raw_line[:1].isspace():
-            current["follow_lines"].append(stripped)
-        else:
+        if not raw_line[:1].isspace():
             return None
+        stripped = raw_line.lstrip()
+        if in_child_lines or re.match(r"^([-*+]|\d+\.)[ \t]+", stripped):
+            # 子列表行保留原始缩进，dedent_list_lines 只去公共前缀，
+            # 嵌套层级因此完整保留（审计 D3）。
+            current["child_lines"].append(raw_line)
+            in_child_lines = True
+        else:
+            current["follow_lines"].append(stripped)
     return items or None
 
 
@@ -1985,10 +1991,12 @@ def build_display_blocks(
         subtype = block_field(block, "subtype", "subType")
         block_md = block_field(block, "markdown")
 
-        # 含嵌入标记的列表块回退整树路径：嵌入展开契约（测试
+        # 含完整嵌入标记（{{...}}）的列表块回退整树路径：嵌入展开契约（测试
         # test_quote_and_list_embeds_expand_without_changing_numbering_or_type_names）
         # 优先于列表展开，嵌入方案行为零改动。
-        if list_expansion and block_type in ("l", "i") and "{{" not in block_md:
+        # 判断与插件 hasEmbedMarker 一致：必须同时含 {{ 与 }}（审计 D8）。
+        # 只有单边标记的列表按普通列表展开，两端编号保持一致。
+        if list_expansion and block_type in ("l", "i") and not ("{{" in block_md and "}}" in block_md):
             if block_type == "l":
                 append_list_container_display(block, block_id, 0, "", display_self=True)
             else:
@@ -4679,48 +4687,58 @@ class McpServer:
         """single_block_replace 单选列表项的执行细则（docs/列表块编辑方案-2026-11-13.md 5.2-5.4）。
 
         普通项只改首段落，子项和子列表完全不动，列表项 ID 保留。
-        提交首行带任务标记时走列表项整体更新：思源勾选状态在列表项节点上，
-        子树行原样保留让思源 pin 住子列表 ID。
+        提交首行带任务标记时按列表项整体更新以同步勾选状态（方案 3.5）。
+        原有全部文字段落被本次提交替换，只保留子列表（方案 5.3）；
+        任务项旧续行不再残留（审计 D4）。所有 updateBlock 统一走
+        _update_block_preserving_attrs，不清空块属性（审计 D5）。
         """
         item_id = target.id
         task_update = bool(re.match(r"^\[( |x|X)\]", item["text"]))
+        children = client.get_child_blocks(item_id)
+        first_paragraph = next((c for c in children if c.get("type") == "p"), None)
+        if first_paragraph is None:
+            raise tool_error(_ERR_WRONG_TARGET,
+                "列表项内没有可定位的首段落块，无法只改文字。"
+                "请改用 default_block_replace 并把范围选到最后一个子项做整棵替换。")
         if task_update:
-            rest_lines = target.source_markdown.splitlines()[1:]
-            new_md = "- " + item["text"]
-            if rest_lines:
-                new_md += "\n" + "\n".join(rest_lines)
-            client.update_block(item_id, new_md)
+            # 任务勾选状态在列表项节点上，按整体更新（方案 3.5/5.2）。
+            # updateBlock 会替换列表项整个子树，必须带回子列表内容
+            # （子项 markdown 自带 IAL，子项 ID 因此保留）；
+            # 旧续行段落不带回，实现 5.3 的整体替换（审计 D4）。
+            update_lines = ["- " + item["text"]]
+            update_lines.extend(
+                ("  " + line) if line.strip() else line
+                for line in item["follow_lines"]
+            )
+            for child in children:
+                if child.get("type") == "l":
+                    for md_line in str(child.get("markdown") or "").splitlines():
+                        update_lines.append(("  " + md_line) if md_line.strip() else md_line)
+            McpServer._update_block_preserving_attrs(client, item_id, "\n".join(update_lines))
         else:
-            children = client.get_child_blocks(item_id)
-            first_paragraph = next((c for c in children if c.get("type") == "p"), None)
-            if first_paragraph is None:
-                raise tool_error(_ERR_WRONG_TARGET,
-                    "列表项内没有可定位的首段落块，无法只改文字。"
-                    "请改用 default_block_replace 并把范围选到最后一个子项做整棵替换。")
-            client.update_block(first_paragraph["id"], item["text"])
+            McpServer._update_block_preserving_attrs(client, first_paragraph["id"], item["text"])
             # 5.3：原有全部文字段落整体替换，子列表保留
             for child in children:
                 if child.get("type") == "p" and child.get("id") != first_paragraph.get("id"):
                     client.delete_block(child.get("id"))
-        if item["follow_lines"] or item["child_lines"]:
+            if item["follow_lines"]:
+                client.insert_block_after(first_paragraph["id"], "\n\n".join(item["follow_lines"]))
+        if item["child_lines"]:
             children = client.get_child_blocks(item_id)
             first_paragraph = next((c for c in children if c.get("type") == "p"), None)
             if first_paragraph is None:
                 raise tool_error(_ERR_WRONG_TARGET, "列表项内没有可定位的首段落块。")
-            if item["follow_lines"]:
-                client.insert_block_after(first_paragraph["id"], "\n\n".join(item["follow_lines"]))
-            if item["child_lines"]:
-                child_md = dedent_list_lines(item["child_lines"])
-                sub_list = next((c for c in children if c.get("type") == "l"), None)
-                if sub_list is not None:
-                    sub_children = client.get_child_blocks(sub_list["id"])
-                    if sub_children:
-                        client.insert_block_before(sub_children[0]["id"], child_md)
-                    else:
-                        client.append_block(sub_list["id"], child_md)
+            child_md = dedent_list_lines(item["child_lines"])
+            sub_list = next((c for c in children if c.get("type") == "l"), None)
+            if sub_list is not None:
+                sub_children = client.get_child_blocks(sub_list["id"])
+                if sub_children:
+                    client.insert_block_before(sub_children[0]["id"], child_md)
                 else:
-                    # 5.4 特例：原子项没有子列表，思源按 parentID 自动包裹子列表容器
-                    client.append_block(item_id, child_md)
+                    client.append_block(sub_list["id"], child_md)
+            else:
+                # 5.4 特例：原子项没有子列表，思源按 parentID 自动包裹子列表容器
+                client.append_block(item_id, child_md)
 
     def siyuan_edit(self, args: dict[str, Any]) -> str:
         confirmed = bool(args.get("confirmed"))
@@ -4857,7 +4875,13 @@ class McpServer:
                         "插入列表项时提交内容必须解析为 Markdown 列表项（以 - 或 1. 开头）。")
             if action in {"default_block_replace", "single_block_replace"}:
                 self._validate_list_range(display_blocks, target_blocks)
-                if action == "single_block_replace" and len(target_blocks) == 1:
+                # 方案 5.1 第4条：显式传了 end_index/end_id 时即使与起点相同，
+                # 也按 5.5 整棵替换执行，不能退化成只改文字（审计 D6）。
+                explicit_end = (
+                    args.get("end_index") is not None
+                    or bool(str(args.get("end_id") or "").strip())
+                )
+                if action == "single_block_replace" and len(target_blocks) == 1 and not explicit_end:
                     # 5.1 细则：single 单选列表项进入 5.2-5.4，不走多块检查
                     submitted = parse_submitted_list_items(markdown)
                     if submitted is None:
@@ -4886,6 +4910,11 @@ class McpServer:
                         target_blocks = self._expand_list_item_subtree(display_blocks, target_blocks[0])
             if action == "delete" and len(target_blocks) > 1:
                 self._validate_list_range(display_blocks, target_blocks)
+        else:
+            # 审计 D1：起点是普通块的范围同样必须校验，防止终点落进列表内部，
+            # 执行时带走未选中的列表项。普通块之间的纯范围不受影响。
+            if len(target_blocks) > 1:
+                self._validate_list_range(display_blocks, target_blocks)
 
         if action in {"single_block_replace", "default_block_replace"}:
             refused = [
@@ -4908,7 +4937,9 @@ class McpServer:
                     "当前目标是多个块；请改用 default_block_replace。"
                     "仅当目标是一个块、新 markdown 也只生成一个展示块、且 default_block_replace 会破坏该块引用时，才使用 single_block_replace。"
                 )
-            if markdown_has_multiple_blocks(markdown):
+            # 列表项细则（5.2-5.4）已在上面的解析里校验形状；
+            # 项内多段（含空行分隔）是合法提交，不再走旧多块检查（方案 5.1、审计 D7）。
+            if list_single_item is None and markdown_has_multiple_blocks(markdown):
                 raise tool_error(_ERR_WRONG_SHAPE,
                     "single_block_replace 的 markdown 必须只生成一个展示块，因为它会复用原块 ID 和块属性。"
                     "当前 markdown 会被思源拆成多个块；请改用 default_block_replace。"
@@ -4944,6 +4975,20 @@ class McpServer:
             if target_end_pos is not None and target_end_pos + 1 < len(display_blocks)
             else None
         )
+        # 审计 D9：insert_after 锚点是列表块/列表项时，新内容落在整棵子树之后。
+        # 下一锚点与插入区间下边界必须越过子树，否则插入摘要会显示（无）。
+        insert_after_span_end = target_blocks[-1] if target_blocks else None
+        if (
+            action == "insert_after"
+            and target_blocks
+            and target_blocks[-1].type in ("l", "i")
+            and target_end_pos is not None
+        ):
+            scan = target_end_pos + 1
+            while scan < len(display_blocks) and display_blocks[scan].indent > target_blocks[-1].indent:
+                scan += 1
+            insert_after_span_end = display_blocks[scan - 1]
+            next_anchor = display_blocks[scan] if scan < len(display_blocks) else None
         last_before_append = display_blocks[-1] if display_blocks else None
 
         reference_notice = ""
@@ -4955,6 +5000,25 @@ class McpServer:
                 {block.id for block in target_blocks},
             )
             reference_notice = self._protect_referenced_blocks(client, deleting_ids, args)
+        elif action == "single_block_replace" and list_single_item is not None:
+            # 审计 D2：单选替换会把首段落之外的旧文字段落从文档中删除，
+            # 这些块 ID 会消失，必须与其他删除路径走同一反链保护。
+            with ensure_notebooks_open(client, [notebook_id]):
+                item_children = client.get_child_blocks(list_single_item_id)
+            doomed_paragraph_ids = {
+                str(child.get("id"))
+                for child in item_children
+                if child.get("type") == "p"
+            }
+            first_paragraph = next((c for c in item_children if c.get("type") == "p"), None)
+            if first_paragraph is not None:
+                doomed_paragraph_ids.discard(str(first_paragraph.get("id")))
+            doomed_paragraph_ids.discard("")
+            if doomed_paragraph_ids:
+                with ensure_notebooks_open(client, [notebook_id]):
+                    all_block_rows = client.list_document_blocks(doc_id)
+                deleting_ids = expand_deleted_block_ids(all_block_rows, doomed_paragraph_ids)
+                reference_notice = self._protect_referenced_blocks(client, deleting_ids, args)
 
         self._create_snapshot_or_raise(client, "siyuan_edit", doc_title)
 
@@ -5136,7 +5200,7 @@ class McpServer:
                     elif action == "insert_after":
                         affected = blocks_between_anchors(
                             new_display_blocks,
-                            target_blocks[-1].id,
+                            insert_after_span_end.id,
                             next_anchor.id if next_anchor else None,
                         )
                     elif action == "insert_before":
@@ -5212,7 +5276,7 @@ class McpServer:
             if action == "insert_after":
                 inserted = blocks_between_anchors(
                     new_display_blocks,
-                    target_blocks[-1].id,
+                    insert_after_span_end.id,
                     next_anchor.id if next_anchor else None,
                 )
             else:

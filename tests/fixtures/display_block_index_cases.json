@@ -177,6 +177,40 @@
         {"index": 1, "id": "h1", "type": "heading"},
         {"index": 2, "id": "p1", "type": "paragraph"}
       ]
+    },
+    {
+      "name": "list-unclosed-embed-marker-expands-items",
+      "root_id": "doc1",
+      "children": {
+        "doc1": [
+          {"id": "list1", "type": "l", "subtype": "u", "markdown": "- 文字 {{ 无闭合\n- 项2"}
+        ],
+        "list1": [
+          {"id": "item1", "type": "i", "subtype": "u", "markdown": "- 文字 {{ 无闭合"},
+          {"id": "item2", "type": "i", "subtype": "u", "markdown": "- 项2"}
+        ]
+      },
+      "expected": [
+        {"index": 1, "id": "list1", "type": "list", "indent": 0, "text": ""},
+        {"index": 2, "id": "item1", "type": "list_item", "indent": 1, "text": "文字 {{ 无闭合"},
+        {"index": 3, "id": "item2", "type": "list_item", "indent": 1, "text": "项2"}
+      ]
+    },
+    {
+      "name": "list-complete-embed-marker-stays-whole-tree",
+      "root_id": "doc1",
+      "children": {
+        "doc1": [
+          {"id": "list1", "type": "l", "subtype": "u", "markdown": "- {{SELECT id FROM blocks WHERE id='x'}}\n- 项2"}
+        ],
+        "list1": [
+          {"id": "item1", "type": "i", "subtype": "u", "markdown": "- {{SELECT id FROM blocks WHERE id='x'}}"},
+          {"id": "item2", "type": "i", "subtype": "u", "markdown": "- 项2"}
+        ]
+      },
+      "expected": [
+        {"index": 1, "id": "list1", "type": "list"}
+      ]
     }
   ]
 }
