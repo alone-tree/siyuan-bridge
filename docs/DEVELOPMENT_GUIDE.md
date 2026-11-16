@@ -383,7 +383,8 @@ Error: invalid parameter
 - index/id 不匹配时拒绝写入。
 - `single_block_replace` 只允许一块变一块；仅当 `default_block_replace` 会破坏该块引用时使用。
 - 可能产生多块的内容必须用 `default_block_replace`。
-- `single_block_replace` 和 `table_edit` 必须保留块属性。
+- `single_block_replace`和`table_edit`必须保留块属性。列表任务项更新要逐项核对列表项、首段落、子列表、子项及代码块的ID/IAL；不能用不模拟子树重建的Fake断言替代真实读回。
+- 列表审计回归须覆盖普通段落起点跨进列表的拒绝、列表项旧续行反链保护、孙项层级与子项空行/围栏、任务项旧文字清理且保留非文字子块、同起终点显式范围、父项空行分段、单边嵌入标记两端编号，以及带子树锚点的插入摘要。
 - `default_block_replace` 必须明确旧块 ID 会失效。
 - `delete` / `default_block_replace` 必须检查目标块及其随同删除的子孙块 ID。
 - `default_block_replace` 的返回摘要不得把本轮已删除的旧块列入“新内容”，即使思源写后读取短暂返回旧块。

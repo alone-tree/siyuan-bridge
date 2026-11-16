@@ -833,7 +833,10 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("table_edit", properties["action"]["description"])
         self.assertIn("without preserving formatting", properties["action"]["description"])
         self.assertIn("referenced by other blocks", properties["action"]["description"])
-        self.assertIn("those replacements must use default_block_replace", properties["markdown"]["description"])
+        self.assertIn("multiple sibling blocks requires default_block_replace", properties["markdown"]["description"])
+        self.assertIn("continuation paragraphs, blank lines, and nested children", properties["markdown"]["description"])
+        self.assertIn("even if equal to the start", properties["end_index"]["description"])
+        self.assertIn("list-item single_block_replace", properties["reference_policy"]["description"])
 
     def test_create_tool_spec_prefers_markdown_over_markdown_file(self):
         spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_create")
