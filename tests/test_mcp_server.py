@@ -3789,7 +3789,8 @@ class McpServerWriteTests(unittest.TestCase):
         server._active_client = client
         try:
             with mock.patch.object(client, "get_conf", side_effect=SiYuanConnectionError("offline")):
-                result = server.call_tool("siyuan_operate", {"action": "sync"})
+                response = server.call_tool(1, "siyuan_operate", {"action": "sync"})
+                result = response["result"]
             self.assertTrue(result["isError"])
             self.assertIsNone(server._active_client)
             self.assertIn("siyuan_start", json.dumps(result, ensure_ascii=False))
