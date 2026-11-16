@@ -243,6 +243,60 @@ class NativeSyncTests(unittest.TestCase):
         self.assertEqual(sync.run(client, upload=True)["status"], "requires_choice")
         self.assertEqual(client.calls.count("source"), 2)
 
+    def test_perform_connection_errors_mark_original_exception_in_all_sync_branches(self):
+        for branch in ("ordinary", "empty_cloud", "pending"):
+            for error_type in (SiYuanConnectionError, SiYuanTimeoutError):
+                with self.subTest(branch=branch, error_type=error_type):
+                    state = pending_state() if branch != "ordinary" else None
+                    if branch == "empty_cloud":
+                        state.update(pending=False, cloudID="")
+                    client = FakeClient(state=state)
+                    sync = NativeSync()
+                    if branch == "pending":
+                        sync.run(client)
+                    error = error_type("original transport failure")
+                    client.errors["perform"] = error
+                    with self.assertRaises(error_type) as raised:
+                        sync.run(client, upload=False)
+                    self.assertIs(raised.exception, error)
+                    self.assertIs(type(raised.exception), error_type)
+                    self.assertEqual(raised.exception.args, ("original transport failure",))
+                    self.assertEqual(raised.exception.sync_phase, "perform")
+                    self.assertEqual(sum(isinstance(c, tuple) for c in client.calls), 1)
+                    self.assertNotIn("info", client.calls)
+
+    def test_preflight_and_info_connection_errors_remain_unmarked_original_objects(self):
+        for phase in ("conf", "source", "info"):
+            for error_type in (SiYuanConnectionError, SiYuanTimeoutError):
+                with self.subTest(phase=phase, error_type=error_type):
+                    client = FakeClient()
+                    error = error_type("original non-perform failure")
+                    client.errors[phase] = error
+                    with self.assertRaises(error_type) as raised:
+                        NativeSync().run(client)
+                    self.assertIs(raised.exception, error)
+                    self.assertIs(type(raised.exception), error_type)
+                    self.assertEqual(raised.exception.args, ("original non-perform failure",))
+                    self.assertFalse(hasattr(error, "sync_phase"))
+                    expected_calls = {
+                        "conf": ["conf"],
+                        "source": ["conf", "source"],
+                        "info": ["conf", "source", ("perform", 10, None, None), "info"],
+                    }
+                    self.assertEqual(client.calls, expected_calls[phase])
+
+    def test_perform_business_errors_remain_unmarked_original_objects(self):
+        client = FakeClient()
+        error = SiYuanApiError("native rejection", status=409, code=1)
+        client.errors["perform"] = error
+        with self.assertRaises(SiYuanApiError) as raised:
+            NativeSync().run(client)
+        self.assertIs(raised.exception, error)
+        self.assertEqual(error.status, 409)
+        self.assertEqual(error.code, 1)
+        self.assertFalse(hasattr(error, "sync_phase"))
+        self.assertNotIn("info", client.calls)
+
     def test_invalid_upload_does_not_access_client(self):
         for upload in (0, 1, "false", [], {}):
             with self.subTest(upload=upload):

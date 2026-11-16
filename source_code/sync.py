@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from .client import SiYuanApiError, SiYuanClient
+from .client import SiYuanApiError, SiYuanClient, SiYuanConnectionError
 
 
 class NativeSync:
@@ -81,6 +81,10 @@ class NativeSync:
         self, client: SiYuanClient, timeout: float, *, upload: bool | None = None,
         source_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        client.perform_sync(timeout=timeout, upload=upload, source_state=source_state)
+        try:
+            client.perform_sync(timeout=timeout, upload=upload, source_state=source_state)
+        except SiYuanConnectionError as exc:
+            exc.sync_phase = "perform"
+            raise
         self._pending = None
         return {"status": "requested", "sync_info": client.get_sync_info()}
