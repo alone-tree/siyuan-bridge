@@ -19,6 +19,7 @@ from .cli import load_live_docs
 from .client import SiYuanApiError, SiYuanClient, SiYuanConnectionError, SiYuanTimeoutError
 from .config import Profile, detect_active_profile, load_config
 from .image_processing import prepare_image
+from .sync import NativeSync
 from .ignore import (
     PrivacyRules,
     compile_rules,
@@ -75,9 +76,10 @@ MAX_REFERENCE_BLOCKS_PER_DOCUMENT = 3
 MAX_REFERENCE_BLOCK_CHARACTERS = 2000
 POST_WRITE_SYNC_TIMEOUT = 5.0
 POST_WRITE_SYNC_INTERVAL = 0.25
-ASSET_LARGE_FILE_THRESHOLD_BYTES = 20 * 1024 * 1024
+# 思源前端Constants.SIZE_UPLOAD_TIP_SIZE：达到256MiB时提示，由用户决定是否继续。
+ASSET_LARGE_FILE_THRESHOLD_BYTES = 256 * 1024 * 1024
 # 读侧图片预算：处理后的原图完整组累计 Base64 字节，现行契约见 ARCHITECTURE.md「本地图片处理」。
-# 只约束 siyuan_read 的图片内联；写入侧 insert_assets 的 20 MB 阈值与此无关。
+# 只约束siyuan_read的图片内联，与写入侧原生大文件提示无关。
 # MCP SDK 客户端默认单消息读缓冲 10 MB（10,485,760 字节），9 MB 留出文本与协议开销余量。
 # 这是内置默认值；插件设置页「单次读取时总图片体积上限」通过 config.local.json 的
 # inline_image_budget_mb 覆盖（0 表示不返回任何图片，见 Config.inline_image_budget_bytes）。
@@ -602,7 +604,6 @@ def preflight_asset_items(raw_assets: Any) -> list[AssetInsertionItem]:
         raise tool_error(_ERR_WRONG_SHAPE, "action=insert_assets 需要非空 assets 数组。")
 
     items: list[AssetInsertionItem] = []
-    basename_sources: dict[str, list[str]] = {}
     for index, raw_item in enumerate(raw_assets, start=1):
         if not isinstance(raw_item, dict):
             raise tool_error(
@@ -657,38 +658,84 @@ def preflight_asset_items(raw_assets: Any) -> list[AssetInsertionItem]:
             size_bytes=size_bytes,
         )
         items.append(item)
-        basename_sources.setdefault(basename.casefold(), []).append(local_path)
-
-    duplicates = [sources for sources in basename_sources.values() if len(sources) > 1]
-    if duplicates:
-        lines = [
-            "同一批次存在重名文件或文件夹，思源返回的 succMap 无法可靠区分它们。",
-            "请把以下重名项目拆成不同调用：",
-        ]
-        for sources in duplicates:
-            lines.append("- " + "；".join(sources))
-        raise tool_error(_ERR_DUPLICATE_ASSET_NAME, "\n".join(lines))
     return items
 
 
-def resolve_uploaded_asset_paths(
-    items: list[AssetInsertionItem],
-    succ_map: dict[str, str],
-) -> list[str]:
-    casefolded = {str(key).casefold(): str(value) for key, value in succ_map.items()}
-    resolved: list[str] = []
-    for item in items:
-        candidates = (item.basename, item.local_path)
-        value = next((succ_map[key] for key in candidates if key in succ_map), "")
-        if not value:
-            value = next((casefolded[key.casefold()] for key in candidates if key.casefold() in casefolded), "")
-        if not value:
-            raise tool_error(
-                _ERR_ASSET_UPLOAD,
-                f"思源未返回 `{item.basename}` 的资源路径。已返回键：{', '.join(sorted(succ_map)) or '(无)'}",
-            )
-        resolved.append(str(value))
-    return resolved
+@dataclass
+class AssetUploadOutcome:
+    paths: dict[int, str] = field(default_factory=dict)
+    failed: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    def status(self, expected: int) -> str:
+        if len(self.paths) == expected and not self.failed and not self.warnings:
+            return "success"
+        return "partial" if self.paths else "failed"
+
+
+def upload_asset_items(client: Any, document_id: str, items: list[AssetInsertionItem]) -> AssetUploadOutcome:
+    """遵循思源上传结果：保留成功项；目录只让内核生成本地链接。"""
+    outcome = AssetUploadOutcome()
+    for directory in (False, True):
+        indices = [i for i, item in enumerate(items) if (item.kind == "directory") == directory]
+        if not indices:
+            continue
+        names = [items[i].basename for i in indices]
+        # 旧内核只有succMap时同名键会覆盖；首次请求即拆分，不重复已经提交的上传。
+        groups = [[i] for i in indices] if len(set(names)) != len(names) else [indices]
+        for group in groups:
+            paths = [items[i].local_path for i in group]
+            try:
+                envelope = (
+                    client.insert_local_assets_result(document_id, paths, is_upload=False)
+                    if directory else client.upload_assets(document_id, paths)
+                )
+                if not isinstance(envelope, dict) or not isinstance(envelope.get("data"), dict):
+                    raise SiYuanApiError("思源未返回有效的资源处理结果。")
+                data = envelope["data"]
+                message = str(envelope.get("msg") or "")
+                successes = data.get("succFiles")
+                if isinstance(successes, list):
+                    for entry in successes:
+                        if not isinstance(entry, dict):
+                            continue
+                        index = entry.get("index")
+                        resolved = entry.get("path")
+                        if type(index) is int and 0 <= index < len(group) and isinstance(resolved, str) and resolved:
+                            outcome.paths[group[index]] = resolved
+                elif isinstance(data.get("succMap"), dict):
+                    for i in group:
+                        resolved = data["succMap"].get(items[i].basename) or data["succMap"].get(items[i].local_path)
+                        if isinstance(resolved, str) and resolved:
+                            outcome.paths[i] = resolved
+                reported: set[int] = set()
+                failures = data.get("failedFiles")
+                if isinstance(failures, list):
+                    for entry in failures:
+                        if not isinstance(entry, dict):
+                            continue
+                        index = entry.get("index")
+                        if type(index) is int and 0 <= index < len(group):
+                            i = group[index]
+                            reported.add(i)
+                            outcome.failed.append({"index": i, "local_path": items[i].local_path,
+                                                   "error": str(entry.get("error") or message or "上传失败")})
+                error_names = data.get("errFiles")
+                if isinstance(error_names, list):
+                    for i in group:
+                        if items[i].basename in error_names and i not in reported:
+                            reported.add(i)
+                            outcome.failed.append({"index": i, "local_path": items[i].local_path,
+                                                   "error": message or "上传失败"})
+                for i in group:
+                    if i not in outcome.paths and i not in reported:
+                        outcome.failed.append({"index": i, "local_path": items[i].local_path,
+                                               "error": message or "思源未返回此项的资源路径。"})
+                if envelope.get("code", 0) != 0:
+                    outcome.warnings.append(message or f"思源资源接口返回code={envelope.get('code')}")
+            except Exception as exc:
+                outcome.failed.extend({"index": i, "local_path": items[i].local_path, "error": str(exc)} for i in group)
+    return outcome
 
 
 _MARKDOWN_LINK_RE = re.compile(
@@ -706,6 +753,7 @@ class MarkdownLinkProcessResult:
     too_large: list[str] = field(default_factory=list)
     upload_failed: list[str] = field(default_factory=list)
     block_update_failed: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     anchors_converted: list[str] = field(default_factory=list)
     anchors_unmatched: list[str] = field(default_factory=list)
     anchors_ambiguous: list[str] = field(default_factory=list)
@@ -829,8 +877,7 @@ def _resolve_local_markdown_path(dest: str, base_dir: Path) -> Path | None:
     return path
 
 
-def _upload_local_markdown_path(client: Any, document_id: str, path: Path) -> str:
-    succ_map = client.insert_local_assets(document_id, [str(path)], is_upload=True)
+def _upload_local_markdown_path(client: Any, document_id: str, path: Path) -> tuple[str, list[str]]:
     if path.is_dir():
         kind = "directory"
         size_bytes = None
@@ -845,7 +892,66 @@ def _upload_local_markdown_path(client: Any, document_id: str, path: Path) -> st
         title="",
         size_bytes=size_bytes,
     )
-    return resolve_uploaded_asset_paths([item], succ_map)[0]
+    outcome = upload_asset_items(client, document_id, [item])
+    if 0 not in outcome.paths:
+        detail = '；'.join(str(entry['error']) for entry in outcome.failed)
+        raise SiYuanApiError(detail or '思源未返回资源路径。')
+    warnings = outcome.warnings + [str(entry['error']) for entry in outcome.failed]
+    return outcome.paths[0], warnings
+
+
+def markdown_large_files(markdown: str, markdown_file: str) -> list[dict[str, Any]]:
+    """在正文与快照写入前，检查本次标准Markdown实际引用的大文件。"""
+    if not markdown_file:
+        return []
+    base_dir = Path(markdown_file).expanduser().resolve().parent
+    lines: list[str] = []
+    fence: str = ""
+    for line in markdown.splitlines(keepends=True):
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if marker:
+            token = marker.group(1)
+            if not fence:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence) and not line[marker.end():].strip():
+                fence = ""
+            lines.append("\n")
+        elif not fence:
+            lines.append(line)
+    large: list[dict[str, Any]] = []
+    for _, _, dest, _ in _iter_markdown_link_dests("".join(lines)):
+        kind, payload = _classify_markdown_dest(dest)
+        if kind != "local":
+            continue
+        local = _resolve_local_markdown_path(payload, base_dir)
+        try:
+            if local is not None and local.is_file():
+                size = local.stat().st_size
+                if size >= ASSET_LARGE_FILE_THRESHOLD_BYTES:
+                    large.append({"local_path": str(local), "size_bytes": size})
+        except OSError:
+            # 不可访问引用由写后逐项报告，不伪装为大文件。
+            continue
+    return large
+
+
+def large_file_confirmation(args: dict[str, Any], files: list[dict[str, Any]]) -> str | None:
+    allowed = args.get("upload_large_files", False)
+    if not isinstance(allowed, bool):
+        raise tool_error(_ERR_INVALID_TYPE, "upload_large_files必须是boolean。")
+    if allowed or not files:
+        return None
+    return json.dumps({
+        "ok": False, "status": "requires_confirmation", "requires_confirmation": True,
+        "action": str(args.get("action") or "create"),
+        "threshold_bytes": ASSET_LARGE_FILE_THRESHOLD_BYTES, "large_files": files,
+        "message": "达到思源原生256MiB大文件提示阈值。尚未写入、创建快照或上传资源；请取得用户明确同意后，用相同参数加upload_large_files=true重试。",
+    }, ensure_ascii=False, indent=2)
+
+
+def markdown_links_incomplete(result: MarkdownLinkProcessResult) -> bool:
+    return bool(result.missing or result.too_large or result.upload_failed or result.block_update_failed
+                or result.warnings or result.anchors_unmatched or result.anchors_ambiguous or result.skipped_no_doc_id)
 
 
 def _unique_heading_id(fragment: str, all_blocks: list[DisplayBlock]) -> tuple[str, str]:
@@ -869,6 +975,7 @@ def process_imported_markdown_links(
     markdown_file: str,
     affected_blocks: list[DisplayBlock],
     all_blocks: list[DisplayBlock],
+    upload_large_files: bool = False,
 ) -> MarkdownLinkProcessResult:
     result = MarkdownLinkProcessResult()
     base_dir = Path(markdown_file).expanduser().resolve().parent
@@ -898,14 +1005,15 @@ def process_imported_markdown_links(
             if path is None or not path.exists():
                 result.missing.append(display_path)
                 continue
-            if path.is_file() and path.stat().st_size > ASSET_LARGE_FILE_THRESHOLD_BYTES:
+            if path.is_file() and path.stat().st_size >= ASSET_LARGE_FILE_THRESHOLD_BYTES and not upload_large_files:
                 result.too_large.append(display_path)
                 continue
             if not (path.is_file() or path.is_dir()):
                 result.missing.append(display_path)
                 continue
             try:
-                resolved = _upload_local_markdown_path(client, document_id, path)
+                resolved, warnings = _upload_local_markdown_path(client, document_id, path)
+                result.warnings.extend(warnings)
             except Exception as exc:
                 result.upload_failed.append(f"{display_path}（{exc}）")
                 continue
@@ -953,9 +1061,10 @@ def format_markdown_link_report(result: MarkdownLinkProcessResult) -> str:
     sections = [
         ("成功", result.uploaded),
         ("未找到", result.missing),
-        ("超过 20 MB", result.too_large),
+        ("达到256MiB且尚未同意上传", result.too_large),
         ("上传失败", result.upload_failed),
         ("块更新失败", result.block_update_failed),
+        ("原生上传提示", result.warnings),
         ("锚点已转换", result.anchors_converted),
         ("锚点未匹配", result.anchors_unmatched),
         ("锚点重名未转换", result.anchors_ambiguous),
@@ -2311,8 +2420,10 @@ class McpServer:
         self._active_profile: Profile | None = None
         self._active_client: SiYuanClient | None = None
         self._active_language: str | None = None
+        self._native_sync = NativeSync()
 
     def _clear_active_connection(self) -> None:
+        self._native_sync.reset()
         self._active_profile = None
         self._active_client = None
         self._active_language = None
@@ -2780,9 +2891,12 @@ class McpServer:
             return self._check_references(args, forward=action == "check_forward_references")
 
         timeout_seconds = clamp_int(args.get("timeout_seconds"), 10, 5, 120)
+        upload = args.get("upload")
+        if upload is not None and not isinstance(upload, bool):
+            raise tool_error(_ERR_INVALID_TYPE, "upload必须是boolean，且只能使用用户当次明确选择的方向。")
         client = self._require_active_client()
         try:
-            client.perform_sync(timeout=float(timeout_seconds))
+            result = self._native_sync.run(client, upload=upload, timeout=float(timeout_seconds))
         except SiYuanTimeoutError as exc:
             raise tool_error(
                 _ERR_SYNC_TIMEOUT,
@@ -2793,17 +2907,7 @@ class McpServer:
                 _ERR_SYNC_CONNECTION,
                 f"思源同步连接失败：{exc}。请检查网络、代理或同步服务状态。",
             ) from exc
-        status = client.get_sync_info()
-        stat = str(status.get("stat") or "").strip()
-        synced = str(status.get("synced") or "").strip()
-        failed_markers = ("失败", "错误", "failed", "error", "不可用", "未启用")
-        title = "# 同步失败" if any(marker in stat.casefold() for marker in failed_markers) else "# 同步已完成"
-        lines = [title, "", "已调用思源内置同步。"]
-        if stat:
-            lines.append(f"状态：{stat}")
-        if synced:
-            lines.append(f"同步时间：{synced}")
-        return "\n".join(lines)
+        return json.dumps(result, ensure_ascii=False, indent=2)
 
     def _check_references(self, args: dict[str, Any], *, forward: bool = False) -> str:
         reference_verb = "引用" if forward else "被引用"
@@ -4300,6 +4404,10 @@ class McpServer:
                 }
             reference_notice = self._protect_referenced_blocks(client, deleting_ids, args)
 
+        confirmation = large_file_confirmation(args, markdown_large_files(markdown, str(args.get('markdown_file') or '')))
+        if confirmation is not None:
+            return confirmation
+
         # Create snapshot before writing
         snapshot_status = self._create_snapshot_or_raise(client, "siyuan_create", target.display_path)
 
@@ -4362,6 +4470,7 @@ class McpServer:
                         markdown_file=markdown_file_path,
                         affected_blocks=all_blocks,
                         all_blocks=all_blocks,
+                        upload_large_files=bool(args.get('upload_large_files')),
                     )
             else:
                 link_result.skipped_no_doc_id = True
@@ -4375,7 +4484,8 @@ class McpServer:
             pass
 
         parts = [
-            "# 文档写入成功",
+            "# 文档部分完成" if markdown_links_incomplete(link_result) else "# 文档写入成功",
+            "正文已写入，但引用处理未全部完成；请核对失败项，不要重复创建整篇文档。" if markdown_links_incomplete(link_result) else "",
             "",
             f"**动作：**{action_status}",
             f"**标题：**{title}",
@@ -4842,25 +4952,11 @@ class McpServer:
                 }
                 for item in asset_items
                 if item.size_bytes is not None
-                and item.size_bytes > ASSET_LARGE_FILE_THRESHOLD_BYTES
+                and item.size_bytes >= ASSET_LARGE_FILE_THRESHOLD_BYTES
             ]
-            if large_files and not bool(args.get("upload_large_files")):
-                return json.dumps(
-                    {
-                        "ok": False,
-                        "action": "insert_assets",
-                        "requires_confirmation": True,
-                        "threshold_bytes": ASSET_LARGE_FILE_THRESHOLD_BYTES,
-                        "large_files": large_files,
-                        "message": (
-                            "整批尚未写入，也未创建快照或上传资源。"
-                            "如需上传这些大文件，请在用户明确同意后以相同参数增加 "
-                            "upload_large_files=true 重试。"
-                        ),
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
+            confirmation = large_file_confirmation(args, large_files)
+            if confirmation is not None:
+                return confirmation
 
         # 列表块单位处理（docs/列表块编辑方案-2026-11-13.md 第4-5节）
         # single 单选列表项时走细则（5.2-5.4），提交解析结果暂存供执行段使用。
@@ -5044,135 +5140,60 @@ class McpServer:
                 deleting_ids = expand_deleted_block_ids(all_block_rows, doomed_paragraph_ids)
                 reference_notice = self._protect_referenced_blocks(client, deleting_ids, args)
 
+        if args.get('markdown_file'):
+            confirmation = large_file_confirmation(args, markdown_large_files(markdown, str(args['markdown_file'])))
+            if confirmation is not None:
+                return confirmation
+
         self._create_snapshot_or_raise(client, "siyuan_edit", doc_title)
 
         if action == "insert_assets":
-            resolved_paths: list[str] = []
-            rendered_markdowns: list[str] = []
-            insertion_attempted = False
-            try:
-                with ensure_notebooks_open(client, [notebook_id]):
-                    succ_map = client.insert_local_assets(
-                        doc_id,
-                        [item.local_path for item in asset_items],
-                        is_upload=True,
-                    )
-                    resolved_paths = resolve_uploaded_asset_paths(asset_items, succ_map)
-                    rendered_markdowns = [
-                        render_asset_markdown(item, resolved_path)
-                        for item, resolved_path in zip(asset_items, resolved_paths)
-                    ]
-                    asset_markdown = "\n\n".join(rendered_markdowns)
-                    insertion_attempted = True
-                    client.insert_block_after(target_blocks[-1].id, asset_markdown)
-                    new_display_blocks = build_display_blocks(client, doc_id, include_block_ids=True)
-
-                inserted = blocks_between_anchors(
-                    new_display_blocks,
-                    target_blocks[-1].id,
-                    next_anchor.id if next_anchor else None,
-                )
-                inserted_source = "\n".join(display_block_source(block) for block in inserted)
-                missing_paths = [
-                    resolved_path
-                    for resolved_path in resolved_paths
-                    if resolved_path not in inserted_source
-                ]
-                if missing_paths:
-                    raise tool_error(
-                        _ERR_ASSET_INSERT,
-                        "写入后的文档中未找到以下思源资源路径："
-                        + "；".join(missing_paths),
-                    )
-            except Exception as exc:
-                cleanup_detail = "尚未插入文档块，无需清理文档。"
-                if insertion_attempted and resolved_paths:
+            with ensure_notebooks_open(client, [notebook_id]):
+                outcome = upload_asset_items(client, doc_id, asset_items)
+                inserted: list[dict[str, Any]] = []
+                unverified: list[dict[str, Any]] = []
+                if outcome.paths:
+                    rendered = [render_asset_markdown(asset_items[i], outcome.paths[i]) for i in sorted(outcome.paths)]
+                    insert_error = ""
                     try:
-                        with ensure_notebooks_open(client, [notebook_id]):
-                            current_blocks = build_display_blocks(client, doc_id, include_block_ids=True)
-                            candidates = blocks_between_anchors(
-                                current_blocks,
-                                target_blocks[-1].id,
-                                next_anchor.id if next_anchor else None,
-                            )
-                            rendered_markdown_set = {
-                                markdown.strip() for markdown in rendered_markdowns
-                            }
-                            inserted_candidates = [
-                                block
-                                for block in candidates
-                                if display_block_source(block).strip()
-                                in rendered_markdown_set
-                            ]
-                            for block in reversed(inserted_candidates):
-                                client.delete_block(block.id)
-                            after_cleanup = build_display_blocks(client, doc_id, include_block_ids=True)
-                        remaining_candidates = blocks_between_anchors(
-                            after_cleanup,
-                            target_blocks[-1].id,
-                            next_anchor.id if next_anchor else None,
-                        )
-                        remaining_markdown = {
-                            display_block_source(block).strip()
-                            for block in remaining_candidates
-                        }
-                        remaining_paths = [
-                            resolved_path
-                            for resolved_path, markdown in zip(resolved_paths, rendered_markdowns)
-                            if markdown.strip() in remaining_markdown
-                        ]
-                        cleanup_detail = (
-                            f"已删除 {len(inserted_candidates)} 个可明确识别为本批插入的文档块。"
-                            if not remaining_paths
-                            else "文档补偿未完全成功，仍可检测到：" + "；".join(remaining_paths)
-                        )
-                    except Exception as cleanup_exc:
-                        cleanup_detail = f"文档补偿失败：{cleanup_exc}"
-                residual_detail = (
-                    "思源资源目录中可能保留以下资源；为避免删除去重后被其他文档共用的附件，"
-                    "程序未自动删除：" + "；".join(resolved_paths)
-                    if resolved_paths
-                    else "思源接口可能已处理部分资源，但没有返回可安全识别的完整路径，程序未自动删除附件。"
-                )
-                raise tool_error(
-                    _ERR_ASSET_INSERT if insertion_attempted else _ERR_ASSET_UPLOAD,
-                    "附件插入未完成。\n"
-                    f"原始错误：{exc}\n"
-                    f"{cleanup_detail}\n"
-                    f"{residual_detail}\n"
-                    "如需恢复，请在思源中使用本次操作前创建的快照手动恢复。",
-                ) from exc
-
+                        client.insert_block_after(target_blocks[-1].id, "\n\n".join(rendered))
+                    except Exception as exc:
+                        insert_error = str(exc)
+                        outcome.warnings.append(f"文档插入返回错误：{exc}；已上传资源未自动删除。")
+                    try:
+                        current = build_display_blocks(client, doc_id, include_block_ids=True)
+                        added = blocks_between_anchors(current, target_blocks[-1].id, next_anchor.id if next_anchor else None)
+                        actual = "\n".join(display_block_source(block) for block in added)
+                    except Exception as exc:
+                        actual = ""
+                        outcome.warnings.append(f"写后读取失败：{exc}；文档可能已包含部分或全部引用，请先读取确认。")
+                    for i, resolved in sorted(outcome.paths.items()):
+                        item = asset_items[i]
+                        entry = {"index": i, "local_path": item.local_path, "kind": item.kind,
+                                 "resolved_path": resolved, "name": item.name, "title": item.title,
+                                 "verified": resolved in actual}
+                        if entry["verified"]:
+                            inserted.append(entry)
+                        else:
+                            unverified.append(entry)
+                            outcome.failed.append({"index": i, "local_path": item.local_path,
+                                                   "error": insert_error or "上传已成功，但未能确认引用已插入；请读取文档确认，不要重复整批上传。"})
+            status = outcome.status(len(asset_items))
+            if len(inserted) != len(asset_items):
+                status = "partial" if inserted else "failed"
             try:
-                client.push_msg(f"思源桥：已向「{doc_title}」插入 {len(asset_items)} 个附件")
+                client.push_msg(f"思源桥：附件插入{status}，已确认{len(inserted)}项")
             except Exception:
                 pass
-            return json.dumps(
-                {
-                    "ok": True,
-                    "action": "insert_assets",
-                    "document": doc_title,
-                    "document_id": doc_id,
-                    "anchor": {
-                        "start_index": target_blocks[-1].index,
-                        "start_id": target_blocks[-1].id,
-                    },
-                    "inserted": [
-                        {
-                            "local_path": item.local_path,
-                            "kind": item.kind,
-                            "resolved_path": resolved_path,
-                            "name": item.name,
-                            "title": item.title,
-                            "verified": True,
-                        }
-                        for item, resolved_path in zip(asset_items, resolved_paths)
-                    ],
-                    "snapshot_created": True,
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
+            return json.dumps({
+                "ok": status == "success", "status": status, "action": "insert_assets",
+                "document": doc_title, "document_id": doc_id,
+                "anchor": {"start_index": target_blocks[-1].index, "start_id": target_blocks[-1].id},
+                "inserted": inserted, "unverified": unverified, "failed": outcome.failed,
+                "warnings": outcome.warnings, "snapshot_created": True,
+                "message": "成功项已保留。失败或未确认项请单独核对；已上传资源不自动删除，如需整体恢复请在思源中手动恢复快照。",
+            }, ensure_ascii=False, indent=2)
+
 
         with ensure_notebooks_open(client, [notebook_id]):
             if action == "append":
@@ -5249,6 +5270,7 @@ class McpServer:
                     markdown_file=markdown_file_path,
                     affected_blocks=affected,
                     all_blocks=new_display_blocks,
+                    upload_large_files=bool(args.get('upload_large_files')),
                 )
                 new_display_blocks = build_display_blocks(client, doc_id, include_block_ids=True)
 
@@ -5258,7 +5280,8 @@ class McpServer:
             pass
 
         parts = [
-            "# 文档已编辑",
+            "# 文档编辑部分完成" if markdown_links_incomplete(link_result) else "# 文档已编辑",
+            "正文已修改，但引用处理未全部完成；成功项已保留。" if markdown_links_incomplete(link_result) else "",
             "",
             f"文档：{doc_title}（`{doc_id}`）",
             f"action：{action}",
@@ -6045,9 +6068,10 @@ def tool_specs() -> list[dict[str, Any]]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["refresh", "sync", "read_guide", "check_forward_references", "check_backward_references"], "description": "refresh: update the local safe index and word/block counts without cleaning ai_workspace. sync: trigger SiYuan built-in default sync. read_guide: return a complete built-in guide selected by guide. check_forward_references: show which blocks this document references, grouped by target document. check_backward_references: show which blocks reference this document or its blocks, grouped by source document. Both reference queries detail the selected document, summarize descendants, and include references within the same document."},
+                    "action": {"type": "string", "enum": ["refresh", "sync", "read_guide", "check_forward_references", "check_backward_references"], "description": "refresh: update the local safe index and word/block counts without cleaning ai_workspace. sync: follow SiYuan native sync checks and return a direction preview when a user choice is required. read_guide: return a complete built-in guide selected by guide. check_forward_references: show which blocks this document references, grouped by target document. check_backward_references: show which blocks reference this document or its blocks, grouped by source document. Both reference queries detail the selected document, summarize descendants, and include references within the same document."},
                     "guide": {"type": "string", "enum": ["mcp_usage", "workspace_index"], "description": "Required for action=read_guide only. mcp_usage: general usage principles; workspace_index: how to create or update the Workspace Index. Returns the complete bundled guide in the startup language, without local file access by the AI client."},
                     "timeout_seconds": {"type": "integer", "default": 10, "description": "For action=sync only. How long to wait for SiYuan built-in sync to return, 5-120 seconds. Does not change SiYuan sync behavior."},
+                    "upload": {"type": "boolean", "description": "For action=sync only, after requires_choice. Ask the user to choose upload (true) or download (false) for the displayed native preview, then repeat on the same connection. No default direction; never infer it. Omit to show or retain the pending choice."},
                     "document": {"type": "string", "description": "For either reference query. Preferred document path including notebook name. Existing unique-title and unique-partial locator compatibility is preserved."},
                     "document_id": {"type": "string", "description": "For either reference query. Document ID fallback when the path is ambiguous or unavailable. If document is also provided, it must identify the same document. A body block ID is rejected."},
                     "limit": {
@@ -6124,6 +6148,7 @@ def tool_specs() -> list[dict[str, Any]]:
                     "path": {"type": "string", "description": "Preferred: full readable path /Notebook/Folder/Doc. With notebook_id, legacy internal path /Folder/Doc is also accepted. If omitted, notebook_id is required and path defaults to /<title> inside that notebook."},
                     "markdown": {"type": "string", "description": "Default. Markdown body to write. Mutually exclusive with markdown_file. Do not write a local .md file first and then import it."},
                     "markdown_file": {"type": "string", "description": "Pass a local absolute path instead of markdown. Use only when importing or inserting an existing local .md file into SiYuan. After insertion, images and attachments in that file are uploaded to SiYuan, and relative references inside the file are rewritten to siyuan:// block links when possible. Do not create a temporary .md just to insert it; prefer the markdown parameter when editing."},
+                    "upload_large_files": {"type": "boolean", "default": False, "description": "For insert_assets or markdown_file imports. Resume files at or above SiYuan native 256 MiB prompt threshold only after explicit user approval. Default false pauses before snapshot, writing or upload; directories are not size-scanned."},
                     "if_exists": {"type": "string", "enum": ["reject", "overwrite", "create_new"], "default": "reject", "description": "Behavior when the target path already exists. reject refuses and explains options. overwrite clears all existing blocks and appends markdown, preserving document ID. create_new creates another same-name document."},
                     "reference_policy": {"type": "string", "enum": ["reject", "break"], "default": "reject", "description": "For overwrite only. reject refuses when any disappearing block ID is referenced. Use break only after the user explicitly confirms that those reported references may be broken."},
                     "confirmed": {"type": "boolean", "description": "Must be true. Writing to SiYuan requires explicit user approval."},
@@ -6163,7 +6188,7 @@ def tool_specs() -> list[dict[str, Any]]:
                             "additionalProperties": False,
                         },
                     },
-                    "upload_large_files": {"type": "boolean", "default": False, "description": "For action=insert_assets only. Allow ordinary files larger than 20 MB. Default false pauses the whole batch before snapshot/upload and asks for explicit user approval; folders are not size-scanned."},
+                    "upload_large_files": {"type": "boolean", "default": False, "description": "For insert_assets or markdown_file imports. Resume files at or above SiYuan native 256 MiB prompt threshold only after explicit user approval. Default false pauses before snapshot, writing or upload; directories are not size-scanned."},
                     "table_edit": {
                         "type": "object",
                         "description": "Required for action=table_edit on a normal Markdown table block. Use the table coordinate view from siyuan_read(include_block_ids=true): row=0 is header, row>=1 are data rows, column_index is 1-based.",

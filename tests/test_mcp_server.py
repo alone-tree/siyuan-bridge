@@ -238,6 +238,17 @@ class FakeSearchClient:
         self._inserted_before.append((next_id, markdown))
         self._insert_near(next_id, markdown, after=False)
 
+    def upload_assets(self, document_id, asset_paths):
+        self._inserted_assets.append((document_id, list(asset_paths), True))
+        return {"code": 0, "msg": "", "data": {
+            "succFiles": [{"index": i, "name": Path(raw).name, "path": f"assets/{Path(raw).name}"} for i, raw in enumerate(asset_paths)],
+            "failedFiles": [], "errFiles": [],
+        }}
+
+    def insert_local_assets_result(self, document_id, asset_paths, *, is_upload=False):
+        paths = self.insert_local_assets(document_id, asset_paths, is_upload=is_upload)
+        return {"code": 0, "data": {"succMap": paths, "failedFiles": [], "errFiles": []}}
+
     def insert_local_assets(self, document_id, asset_paths, *, is_upload=True):
         self._inserted_assets.append((document_id, list(asset_paths), is_upload))
         result = {}
