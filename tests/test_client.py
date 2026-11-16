@@ -604,6 +604,21 @@ class NativeTransportTests(unittest.TestCase):
         self.assertEqual(client.get_sync_source_state(), state)
         self.assertEqual(seen, [("http://unused/api/sync/getSyncSourceState", {})])
 
+    def test_sync_source_preview_connection_failure_and_timeout_are_never_retried(self):
+        for failure, expected_error in ((OSError("dropped"), SiYuanConnectionError),
+                                        (TimeoutError("slow"), SiYuanTimeoutError)):
+            calls = []
+
+            def transport(req, timeout):
+                calls.append(req.full_url)
+                raise failure
+
+            with self.subTest(failure=failure):
+                client = SiYuanClient("http://unused", transport=transport)
+                with self.assertRaises(expected_error):
+                    client.get_sync_source_state()
+                self.assertEqual(calls, ["http://unused/api/sync/getSyncSourceState"])
+
     def test_sync_source_missing_endpoint_preserves_http_status_without_retry(self):
         for status in (404, 405, 401, 500):
             calls = []

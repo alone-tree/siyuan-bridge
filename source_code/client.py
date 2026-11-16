@@ -402,7 +402,7 @@ class SiYuanClient:
         return data["conf"]
 
     def get_sync_source_state(self) -> dict[str, Any]:
-        data = self._post("/api/sync/getSyncSourceState", {})
+        data = self._post("/api/sync/getSyncSourceState", {}, retry=False)
         if not isinstance(data, dict):
             raise SiYuanApiError("Unexpected sync source state response shape")
         return data
