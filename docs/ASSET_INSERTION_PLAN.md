@@ -84,7 +84,7 @@ Bridge 直接复用思源前端的图片扩展名清单，按原始文件名后�
 
 优先按原生`succFiles.index`建立输入与结果映射，同批同名可保留。旧内核只有以基础文件名为键的`succMap`时，存在同名风险则逐文件调用，避免错配，不因同名整批拒绝。完整envelope和非零code中的成功项必须保留，见[原生上传结果](https://github.com/siyuan-note/siyuan/blob/v3.8.10/app/src/protyle/upload/uploadResult.ts#L58-L85)。
 
-## 3. 已实现的 MCP 参数
+## 3. MCP参数契约
 
 `siyuan_edit` 已增加：
 
@@ -126,7 +126,7 @@ Bridge 直接复用思源前端的图片扩展名清单，按原始文件名后�
 
 当前决定不增加显式 `type=image/file/directory`：路径类型可在预检阶段判断，图片和普通文件又共用思源上传通道。若后续实测发现 MCP 进程看不到调用端本地路径，则该问题属于部署边界，需要重新设计，不能靠调用者声明类型解决。
 
-## 4. 事务与安全流程
+## 4. 执行与安全流程
 
 遵循原生逐项成功语义，报告资源处理、块写入和验证各阶段的实际结果。
 
@@ -288,7 +288,7 @@ POST /api/asset/insertLocalAssets
 
 已涉及：
 
-- `source_code/client.py`：仅增加经实测确认的思源原生资源 API 封装。
+- `source_code/client.py`：封装原生multipart与本地目录链接接口，保留完整envelope。
 - `source_code/mcp_server.py`：`siyuan_edit` schema、参数校验、预检、事务协调、插入和验证。
 - `tests/test_client.py`：API 请求和返回解析测试。
 - `tests/test_mcp_server.py`：schema、权限、单组锚点、同位置多项目、name/title、官方图片清单、同名index映射与旧版逐文件、256MiB提示与同意、目录原生链接、部分成功保留及残留报告测试。
@@ -323,7 +323,7 @@ POST /api/asset/insertLocalAssets
 - 验证 AI 能只凭 tool schema 和 Skill 正确区分 `name` 与 `title`，完成文件、图片、文件夹插入及大文件上传开关处理。
 - 禁止用用户版思源桥冒充开发版验收。
 
-## 9. 本轮现场状态
+## 9. 2026-07-28历史现场状态
 
 截至 2026-07-28：
 

@@ -193,7 +193,7 @@ POST /api/sync/performSync {} 或原生upload与预览标识
 POST /api/sync/getSyncInfo {}
 ```
 
-`get_conf()`返回配置字典，`get_sync_source_state()`返回原生state。先检查只读、数据仓库密钥和同步启用状态，返回原生设置指引而不改配置。仅`getSyncSourceState`端点404/405时走已核对旧版流程；其他错误不吞掉。预览可能触发索引，不能当作绝对只读探针。
+`get_conf()`严格解包原生`data.conf`并返回配置字典，依据[系统配置响应](https://github.com/siyuan-note/siyuan/blob/v3.8.10/kernel/api/system.go#L813-L830)及[配置响应结构](https://github.com/siyuan-note/siyuan/blob/v3.8.10/kernel/apicontract/system.go#L64-L66)；`get_sync_source_state()`返回原生state。先检查只读、数据仓库密钥和同步启用状态，返回原生设置指引而不改配置。仅`getSyncSourceState`端点404/405时走已核对旧版流程；其他错误不吞掉。预览可能触发索引，不能当作绝对只读探针。
 
 内部`perform_sync(timeout=10, upload=None, source_state=None)`保留旧调用兼容，执行不自动重试。普通同步为空请求；source非空且cloudID空时原生自动上传并绑定预览；pending或mode=3先返回`requires_choice`而不执行。公开可选`upload:boolean`无默认值，只承接用户当次上传/下载选择。source/localID/cloudID只保存在当前连接，由NativeSync传递，连接重置清空；不开放AI手填state、不自动替换预览、不新增过期秒数。
 
