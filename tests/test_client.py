@@ -227,6 +227,19 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(seen["body"], {"page": 2})
         self.assertEqual(2, result["pagination"]["paginationRecordCount"])
 
+    def test_get_shorthands_unwraps_nested_envelope(self):
+        def transport(req, timeout):
+            return FakeResponse({"code": 0, "data": {"code": 0, "msg": "", "data": {
+                "pagination": {"paginationRecordCount": 1, "paginationPageCount": 1},
+                "shorthands": [{"oId": "1794880590020"}],
+            }}})
+
+        client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
+        result = client.get_shorthands(1)
+
+        self.assertEqual(1, result["pagination"]["paginationRecordCount"])
+        self.assertEqual("1794880590020", result["shorthands"][0]["oId"])
+
     def test_get_shorthand_payload(self):
         seen = {}
 

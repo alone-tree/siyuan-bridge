@@ -1,5 +1,14 @@
 # SiYuan Bridge 项目工程文档
 
+## 2026-11-17 收集箱支持落地：只读虚拟笔记本
+
+- 收集箱（云端Inbox）做成只读虚拟笔记本，复用现有9个工具，不新增工具。中文名`收集箱`、英文`Inbox`，与可见真实笔记本重名时依次退到`(系统)`、`(2)`…。条目权限恒为`read_only`，不参与索引与Privacy Rules匹配。
+- 工具面：`siyuan_start`概览表追加一行显示条目数；`siyuan_list()`列表末行；`siyuan_list(path=/收集箱)`列条目（`document | document_id | 权限 | 收藏时间 | 来源`，`document_id`是oId）；`siyuan_read`返回`shorthandMd`原文并忽略块坐标与图片内联；`siyuan_find`在普通结果后追加收集箱分组，只按标题匹配，`sql`与`notebooks`限定时不含；`siyuan_edit`与`siyuan_create`拒绝；`siyuan_doc_manage`只支持`move`与`delete`。
+- 上游核对更正了三处旧草案错误：收集箱面板自己组装请求直接调`createDocByParent`，`planDocCreate`不在必经链路；`createDocByParent`保留标题`/`并由内核自动升Spec 6，不需要调用方声明；`createDocWithMd`按hPath处理，`path.Base`才是斜杠分层主因，`documentBaseNameReplacer`只是兜底删除。源码依据见[架构文档的收集箱章节](<ARCHITECTURE.md#L328>)。按用户要求照思源原生行为实现：同名文档不检查、不拒绝；不做条目类型分支。版本分支为3.3.0-3.8.8用`createDocWithMd`、3.8.9+用`createDocByParent`。
+- 实现落点：新增`source_code/inbox.py`（命名、分页迭代、条目定位、标题匹配、版本判断），`source_code/client.py`增加三个inbox接口与`create_doc_by_parent`，`i18n.py`增加收集箱名称，`mcp_server.py`接入七个工具的收集箱分支并同步`tool_specs()`。发现`/api/inbox/getShorthands`返回被内核多包一层`code/msg/data`，已在client摊平。
+- 第一层验证：`python -m pytest tests -q`，746 passed、1 skipped（新增`tests/test_inbox.py`26条、`tests/test_client.py`5条）。第二层验证用`siyuan-bridge-dev`（思源3.8.10，本机真实收集箱2条）：`siyuan_start`概览出现`| 收集箱 | - | 2 | - | - | 2026-11-17 09:56 |`；`siyuan_list()`末行与`siyuan_list(path=/收集箱)`两行条目正常；`siyuan_read(document_id=1794880590020, include_block_ids=true)`返回原始Markdown且无块头；`siyuan_find(query=朋友圈)`在普通结果后追加1条收集箱命中并提示只按标题匹配；`siyuan_edit`返回只读文案；`siyuan_create`拒绝写入；`siyuan_doc_manage(action=rename)`拒绝。真实内核另验证`create_doc_by_parent`能按指定ID在`测试思源桥专用`建文档并删除；`remove_shorthands`以不存在ID调用正常返回且未改动现有条目。
+- 未验证：真实移出与删除没有执行，避免删除用户仅有的两条云端条目；这两条链路由Fake客户端单测覆盖（两个版本分支、删除失败部分完成、删除条目）。3.3.0-3.8.8回退分支无实例可测。开发版已改回`disabled`。未推送、未发版。
+
 ## 2026-11-17 收集箱方案核对：澄清收集箱与闪记是两个功能
 
 - 收集箱（Inbox）是云端功能。条目暂存思源云端，本地无副本、无文档 ID、不在块树、不进 FTS5 索引；只有移动到普通笔记本后才进入本地文档体系。内核 `kernel/model/cloud_service.go` 的 `GetCloudShorthands` 请求 `GetCloudServer() + "/apis/siyuan/inbox/getCloudShorthands?p=N"`，带 `userToken` cookie；接口 `/api/inbox/getShorthands`、`getShorthand`、`removeShorthands` 自 v3.0.0 全版本存在。官方用户指南术语表原文：「收集箱是云端快速记录功能，通过微信发送或 API 调用将文本暂存到云端，之后可在收集箱面板中将其移动到文档中进行整理。该功能需要订阅会员。」

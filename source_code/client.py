@@ -470,6 +470,10 @@ class SiYuanClient:
         data = self._post("/api/inbox/getShorthands", {"page": page})
         if not isinstance(data, dict):
             raise SiYuanApiError("Unexpected getShorthands response shape")
+        # 内核把 apicontract.ShorthandsData 又包了一层 code/msg/data，这里摊平。
+        inner = data.get("data")
+        if isinstance(inner, dict) and isinstance(inner.get("shorthands"), list):
+            return inner
         return data
 
     def get_shorthand(self, shorthand_id: str) -> dict[str, Any]:

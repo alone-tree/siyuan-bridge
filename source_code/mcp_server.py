@@ -2845,7 +2845,7 @@ class McpServer:
         state = self._render_startup_documents(client, state)
         overview = build_notebook_overview(self.root)
         overview = re.sub(r"^# [^\n]+\n+", "", overview).strip()
-        overview = _append_overview_row(overview, self._inbox_overview_row())
+        overview = _append_overview_row(overview, self._inbox_overview_row(client))
         total_ignore = len(state.privacy_rules.ignore)
         total_permissions = len(state.privacy_rules.permissions)
         nb_rules = [
@@ -3425,14 +3425,17 @@ class McpServer:
         names = [str(nb.get("name") or "") for nb in notebooks if isinstance(nb, dict)]
         return inbox_notebook_name(self._active_language or "zh-CN", names)
 
-    def _inbox_entries(self, stop_after: int | None = None) -> tuple[list[dict[str, Any]], int]:
-        client = self._require_active_client()
-        return collect_shorthands(client, stop_after)
+    def _inbox_entries(
+        self, stop_after: int | None = None, client: Any = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        return collect_shorthands(client or self._require_active_client(), stop_after)
 
-    def _inbox_entries_safe(self, stop_after: int | None = None) -> tuple[list[dict[str, Any]], int]:
+    def _inbox_entries_safe(
+        self, stop_after: int | None = None, client: Any = None,
+    ) -> tuple[list[dict[str, Any]], int]:
         """列表与启动包用的容错版本：任何失败都当作没有收集箱。"""
         try:
-            return self._inbox_entries(stop_after)
+            return self._inbox_entries(stop_after, client)
         except Exception:  # noqa: BLE001 - 云端或连接失败不阻塞本地能力
             return [], 0
 
@@ -3577,8 +3580,8 @@ class McpServer:
             lines.append(f"- `{entry_id(entry)}` {entry_title(entry) or '(无标题)'}{suffix}".rstrip())
         return "\n".join(lines)
 
-    def _inbox_overview_row(self) -> str:
-        entries, total = self._inbox_entries_safe(1)
+    def _inbox_overview_row(self, client: Any = None) -> str:
+        entries, total = self._inbox_entries_safe(1, client)
         if total <= 0:
             return ""
         latest = entry_created(entries[0]) if entries else ""

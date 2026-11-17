@@ -27,7 +27,8 @@
 | 笔记本 | `/api/notebook/lsNotebooks`, `/api/notebook/openNotebook`, `/api/notebook/closeNotebook` | 枚举笔记本；搜索/索引前临时打开关闭笔记本 | 内部使用，不单独暴露 |
 | 笔记本管理 | `/api/notebook/createNotebook`, rename/remove 类端点 | 创建、重命名、删除笔记本 | 不开放。笔记本管理是人工决策 |
 | 文档树读取 | `/api/filetree/listDocsByPath`, `/api/filetree/getHPathByID`, `/api/filetree/getIDsByHPath` | 解析文档路径、结构和 ID | 内部使用或现有只读工具间接使用 |
-| 文档创建 | `/api/filetree/createDocWithMd` | 创建新文档 | 暴露为 `siyuan_create` |
+| 文档创建 | `/api/filetree/createDocWithMd`、`/api/filetree/createDocByParent` | 创建新文档；后者为身份式寻址，自 v3.8.9 起存在 | `createDocWithMd`暴露为`siyuan_create`；收集箱移出时按版本在两者间选择 |
+| 收集箱 | `/api/inbox/getShorthands`、`/api/inbox/getShorthand`、`/api/inbox/removeShorthands` | 读取云端收集箱条目、单条正文、删除条目；三者自 v3.0.0 起全部版本存在 | 由`siyuan_list`、`siyuan_read`、`siyuan_find`、`siyuan_start`只读使用；删除由`siyuan_doc_manage(action=delete)`封装 |
 | 文档结构变更 | `/api/filetree/renameDocByID`, `/api/filetree/removeDocByID`, `/api/filetree/moveDocsByID`, `/api/filetree/duplicateDoc` | 重命名、删除、移动、复制文档 | 通过 `siyuan_doc_manage` 封装，写前快照 |
 | 块读取 | `/api/block/getBlockKramdown`, `/api/block/getChildBlocks` | 读取块内容、构建块窗口、引用阅读定位 | 内部使用 |
 | 块编辑 | `/api/block/updateBlock`, `/api/block/appendBlock`, `/api/block/insertBlock`, `/api/block/prependBlock` | 实现文档内增删改 | 只由 `siyuan_edit` 内部调用 |
@@ -55,6 +56,10 @@
 | `siyuan_edit` | 在已有可见文档中替换、追加、删除、插入文本、编辑普通 Markdown 表格或插入本地附件 | 隐私检查；引用阅读定位校验；delete/multi 写前查询 `refs`；`repo/createSnapshot`；`asset/upload`或目录用`asset/insertLocalAssets(isUpload=false)`；`block/updateBlock` / `appendBlock` / `insertBlock` / `deleteBlock`；`notification/pushMsg` |
 | `siyuan_create` | 通过完整可读路径创建、覆盖或新增同名文档；`markdown_file`导入已有本地`.md`（与`markdown`互斥），写后处理标准本地引用 | 隐私和路径检查；overwrite写前查反链；`repo/createSnapshot`；`filetree/createDocWithMd`或块删除/追加；`asset/upload`或目录用`asset/insertLocalAssets(isUpload=false)`；`block/updateBlock`；通知与路径同步 |
 | `siyuan_doc_manage` | 管理文档树：改名、移动、删除、复制、导出；设置文档标签 | 权限检查；`copy/export` 允许只读源文档；`rename/move/delete/set_tags` 需可写；`delete` 写前扫描子孙权限和整棵子树反链；`move` 写前检查源文档祖先链和目标父路径权限；写操作调用 `repo/createSnapshot`；内部使用 `renameDocByID` / `moveDocsByID` / `removeDocByID` / `duplicateDoc` / `exportMdContent` / `attr/setBlockAttrs`（set_tags）；写后用 `getHPathByID` 确认路径同步 |
+
+`/api/inbox/getShorthands`的返回被内核多包一层`code/msg/data`，真正的`pagination`与`shorthands`在第二层`data`里；`getShorthand`与`removeShorthands`没有这层重复包装。
+
+收集箱移出复用思源原生链路：读取`getShorthand`→`createDocByParent`（或旧版`createDocWithMd`）→`removeShorthands`，只在建文档成功后删除云端原件；删除失败保留已建文档并如实上报。
 
 AI 不需要知道这些底层端点。它只提供：
 

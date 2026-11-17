@@ -325,7 +325,45 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 - Privacy Rules 解析错误可以告诉表名、行号、字段名和错误类型。
 - 错误信息不暴露具体隐藏的笔记本名、文档 ID 或标题。
 
-所有自动 refresh 路径都传入系统笔记本 ID 和全部 Privacy Rules 文档 ID；这些 ID 以及系统笔记本内匹配 Privacy Rules 名称的文档都被硬过滤。多篇规则文档逐篇解析后合并，任一文档解析失败都保持失败关闭。## 索引模型
+所有自动 refresh 路径都传入系统笔记本 ID 和全部 Privacy Rules 文档 ID；这些 ID 以及系统笔记本内匹配 Privacy Rules 名称的文档都被硬过滤。多篇规则文档逐篇解析后合并，任一文档解析失败都保持失败关闭。## 收集箱（云端虚拟笔记本）
+
+收集箱是思源云端功能，条目通过微信或 API 暂存到云端，本地没有副本、没有文档 ID、不在块树与全文索引内。只有移出到普通笔记本后才变成本地文档。闪记是另一个独立的本地目录机制，与本功能无关。
+
+桥把它包装成一个虚拟笔记本，复用现有工具面：
+
+| 项目 | 约定 |
+|---|---|
+| 虚拟名 | 中文`收集箱`、英文`Inbox`；无冲突直接用，冲突时依次用`收集箱(系统)`、`收集箱(系统)(2)`…（英文`Inbox(System)`、`Inbox(System)(2)`…） |
+| 展示条件 | 云端接口返回总数大于 0 时才出现；未登录、无订阅、网络异常、收集箱为空都不展示，且不把云端错误抛给调用方 |
+| 索引 | 不写入`notebooks.json`、`docs.jsonl`、`tree.md`，不参与索引，不参与隐私规则匹配 |
+| 权限 | 所有条目恒为`read_only`：可 list、read、find、移出、删除；不可 edit、create、copy、export |
+| 路径 | 单层虚拟笔记本：`/收集箱/<标题或oId>`。只按第一个`/`拆分，标题里的`/`原样保留，不需要转义 |
+| 条目定位 | 先按`oId`精确匹配，再按标题全等匹配（大小写不敏感）；同名多条返回候选并要求改用`oId` |
+
+各工具的分支：
+
+| 工具 | 行为 |
+|---|---|
+| `siyuan_start` | 笔记本概览表追加一行，文档数列为条目数，字数/块数列`-`，最近更新取最新条目的收藏时间 |
+| `siyuan_list()` | 笔记本列表末尾追加`收集箱 \| - \| read_only` |
+| `siyuan_list(path=/收集箱)` | 列条目，列头`document \| document_id \| 权限 \| 收藏时间 \| 来源`，`document_id`是`oId`，不输出正文 |
+| `siyuan_read` | 返回`shorthandMd`原文，正文前一行来源提示（收藏时间、原文链接）。忽略`include_block_ids`、`start_index`、`block_start`、`block_limit`、`token_budget`、图片内联，不做附件提取。也接受`document_id=<oId>` |
+| `siyuan_find` | `query`/`regex`模式在普通结果之后追加收集箱分组，只匹配标题；`query`按空白切词全命中，`regex`用 Python 正则。`sql`模式与`notebooks`限定时不含收集箱 |
+| `siyuan_edit` | 命中收集箱路径报`permission:not_read_write`，固定文案提示先用`siyuan_doc_manage`移出 |
+| `siyuan_create` | 命中收集箱路径报`validation:wrong_target_type`，收集箱不能写入 |
+| `siyuan_doc_manage(move)` | 建文档后删除云端条目；建文档成功、删除失败时保留新文档并如实上报 |
+| `siyuan_doc_manage(delete)` | 直接删除云端条目，不创建快照（快照恢复不了云端数据），不可恢复 |
+| 其他 action | 报错，收集箱只支持 move 与 delete |
+
+移出时用`client.version()`分支：≥3.8.9 用`createDocByParent`（`parentID`为`null`表示笔记本根），3.3.0-3.8.8 用`createDocWithMd`。标题里的半角`/`转全角`／`，使两分支结果一致。按思源原生行为，同名文档不检查、不拒绝，由文档 ID 区分。
+
+原生依据：思源面板与官方内核都走`getShorthand`→建文档→`removeShorthands`，不经过`planDocCreate`（收集箱自己组装请求直接调`createDocByParent`）。`createDocByParent`自v3.8.9起存在，保留标题里的半角`/`并由内核自动把该文档升到Spec 6，调用方不需要声明；旧版`createDocWithMd`按hPath处理，`path.Base`会把`/`当层级切分，因此桥在写内核前统一把半角`/`换成全角`／`。
+
+底层接口：`/api/inbox/getShorthands`（分页）、`/api/inbox/getShorthand`（单条）、`/api/inbox/removeShorthands`（删除），三者自 v3.0.0 起全部版本存在；`/api/filetree/createDocByParent`自 v3.8.9 起存在。
+
+已知成本：`getShorthands`每页返回全量`shorthandMd`，内核还会对每条做 lute 解析与 HTML 预览渲染（实测渲染结果是 Markdown 的 2.2-2.8 倍），所以列表与搜索都必须裁剪输出，只有`siyuan_read`才回正文。
+
+## 索引模型
 
 客观索引由程序生成：
 
@@ -641,6 +679,7 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 - 只列一层，不递归展开全树。
 - 返回的 `document` 路径应可直接传给 `siyuan_read` 和 `siyuan_edit`。
 - 权限列只显示可见项目的最终有效权限：`read_write` 或 `read_only`；隐藏内容不出现在列表中。
+- 云端收集箱以只读虚拟笔记本出现，不参与索引与隐私规则；契约见「收集箱（云端虚拟笔记本）」。
 - 大结果必须分页。
 
 风险点：
@@ -687,7 +726,7 @@ scope：
 6. query/regex 把命中块映射回文档；SQL 提取结果行的 id，分批查询真实块元数据，不使用用户返回的其他列。文档 ID 必须已在可见索引中。
 7. 应用隐私过滤。
 8. 硬过滤 Privacy Rules 文档；过滤前不读取命中正文。
-9. query/regex 按文档聚合命中块，返回 snippet 和 match_count。SQL 不聚合、不去重命中行、不重新排序；前 20 条可见命中逐条附完整来源路径、文档 ID，正文块另附块 ID 和完整 Kramdown；文档复用 `build_display_blocks()` 展示前 20 块，不标内部序号，剩余用 `siyuan_read`。图片转普通地址链接，嵌入 SQL 不展开，不提取附件或内联图片。文档属性标签仍以 `tag：#甲# #乙#` 展示。
+9. query/regex 按文档聚合命中块，返回 snippet 和 match_count；随后追加收集箱分组，只按标题匹配，`sql`模式与`notebooks`限定时不含收集箱。SQL 不聚合、不去重命中行、不重新排序；前 20 条可见命中逐条附完整来源路径、文档 ID，正文块另附块 ID 和完整 Kramdown；文档复用 `build_display_blocks()` 展示前 20 块，不标内部序号，剩余用 `siyuan_read`。图片转普通地址链接，嵌入 SQL 不展开，不提取附件或内联图片。文档属性标签仍以 `tag：#甲# #乙#` 展示。
 10. SQL 上游 `truncated=true` 时说明还有候选未返回，提示保留 ORDER BY、使用 LIMIT/OFFSET；OFFSET 按原始候选数推进，不按可见数推进。用户显式 LIMIT 没触发自动截断，不意味着 LIMIT 外无数据。桥不自动补查或凑满可见结果，正文不额外截断。
 
 设计约束：
@@ -717,7 +756,7 @@ scope：
 
 数据流：
 
-1. 解析可见文档；路径歧义时要求补充 `document_id`。
+1. 解析可见文档；路径歧义时要求补充 `document_id`。命中收集箱路径或`document_id=<oId>`时走收集箱分支，直接返回`shorthandMd`原文，不走块窗口。
 2. 拒绝 Privacy Rules 文档。
 3. 临时打开所属笔记本。
 4. 调用 `getChildBlocks` 按真实顺序构建展示块，`query_embed` 绑定惰性解析器。
@@ -990,6 +1029,8 @@ scope：
 | `delete` | 源子树全部 `read_write`       | -              | 是   | 是     |
 | `copy`   | `read_only` 或 `read_write` | `read_write` | 是   | 是     |
 | `export` | `read_only` 或 `read_write` | 本地文件       | 否   | 否     |
+| `move`（收集箱条目） | 条目恒 `read_only`，放行 | 目标父路径 `read_write` | 是 | 是 |
+| `delete`（收集箱条目） | 条目恒 `read_only`，放行 | - | 否 | 是 |
 
 数据流：
 
@@ -1090,6 +1131,7 @@ Worker 统计边界：
 - 资源读取：get_asset
 - 资源写入：upload_assets（multipart内容）；insert_local_assets_result（目录本地链接，完整envelope）
 - 同步：get_conf / get_sync_source_state / perform_sync / get_sync_info；由NativeSync协调，执行不自动重试
+- 收集箱：getShorthands / getShorthand / removeShorthands
 - 通知：pushMsg / pushErrMsg
 
 API 设计原则：

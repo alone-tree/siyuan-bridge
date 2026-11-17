@@ -34,6 +34,7 @@ description: Use when the user wants to read, search, or write their private SiY
 
 - `siyuan_start` —— 始终最先调用。依次返回运行状态与程序数据（含版本及统计时间）、工作空间索引、用户个性化要求、思源桥使用指南（内置指南与索引创建指南调用方式）。
 - `siyuan_operate(action="read_guide")` —— 用 `guide="workspace_index"` 获取索引创建／更新指南，`guide="mcp_usage"` 获取使用原则。返回启动语言的完整内置正文，无需读取本机文件；不会读取思源笔记。
+- 收集箱（思源云端功能）以只读虚拟笔记本出现，名为`收集箱`（英文`Inbox`）。`siyuan_list(path="/收集箱")`列条目，`siyuan_read`读原文，`siyuan_find`只按标题匹配。移出用`siyuan_doc_manage(action="move", document_path="/收集箱/<标题或oId>", target_parent="<目标>", confirmed=true)`，移动即删除云端原件；`action="delete"`直接删除条目且不可恢复。收集箱条目不能`siyuan_edit`，也不能被`siyuan_create`写入；同名标题时先用 oId。
 - `siyuan_find` —— 搜索知识库，通过思源 API 实时搜索后经隐私规则过滤返回结果。搜索文本参数是 `query`。默认 `mode=query`，使用思源原生查询语法：空格表示 AND；探索主题、近义词或相关概念时显式使用 OR，例如 `GPU OR 光模块 OR NVLink`。含连字符等特殊字符的词会按 FTS5 规则自动加引号，例如 `Scale-out` 会按 `"Scale-out"` 发送。需要模式匹配或结构化查询时再使用 `regex` / `sql`。`sql` 使用思源只读 SQL 搜索，返回块 ID（`id` 列）对应的真实可见内容；适合按类型、时间或结构筛选块。按 SQL 原顺序展示前 20 条可见命中，不合并文档；正文块完整返回，文档展开前 20 个展示块，更多用 `siyuan_read`。图片只保留地址，嵌入 SQL 不展开。若提示上游截断，保留排序按提示使用 SQL LIMIT/OFFSET 继续，不能按可见命中数推进 OFFSET；不会自动补足 20 条。`scope/limit/max_snippets_per_doc` 仅控制 query/regex。命中文档带文档属性标签时会以 `tag：#名称#` 展示。
 - `siyuan_read` —— 只读取可见文档；隐藏文档和隐私规则文档即使已知 ID 也不会被读取。
 - 文档定位只有两个参数：`document_path`传完整可读路径，`document_id`传文档 ID；两者都能识别纯 ID，只记得 ID 时直接传给 `document_path` 也可以。`siyuan_read`/`siyuan_edit`/`siyuan_doc_manage`使用路径定位时会校验思源当前真实路径。外部UI改名或移动后主动refresh；若提示路径已过期，先调用`siyuan_operate(action="refresh")`，再用新路径重试，或只传`document_id`。同时传路径和ID时，以ID消歧并检查一致性，不会静默忽略冲突。

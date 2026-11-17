@@ -459,6 +459,21 @@ Error: invalid parameter
 
 - 思源文件树路径更新可能有短暂延迟。当前实现用 `getHPathByID` 短轮询后再刷新索引；若等待超时，仍应在返回中提示同步状态。
 
+## 修改收集箱支持时必须验证
+
+收集箱是云端虚拟笔记本，条目没有本地副本、不在块树和索引内。改动时必须验证：
+
+- 收集箱不写入 `notebooks.json`、`docs.jsonl`、`tree.md`，不参与索引刷新。
+- 虚拟名按语言取 `收集箱` / `Inbox`，与可见真实笔记本重名时依次退到 `收集箱(系统)`、`(2)`…，不与真实笔记本抢路径。
+- 云端接口未登录、无订阅、网络异常或收集箱为空时，`siyuan_start` 概览行与 `siyuan_list()` 行都不出现，且不把云端错误抛给调用方；显式 targeting 收集箱的 read/move/delete 要如实报错。
+- 收集箱条目权限恒为 `read_only`：可 list、read、find、移出、删除；`siyuan_edit`、`siyuan_create`、`copy`、`export` 一律拒绝。它不参与 Privacy Rules 匹配。
+- 虚拟笔记本是单层的：路径只按第一个 `/` 拆分，标题里的 `/` 原样保留；`siyuan_list` 与 `siyuan_read` 必须能按返回的原样路径命中，且不能误定位到别的条目。
+- 条目定位先 `oId` 后标题，同名多条返回候选并报歧义。
+- `siyuan_find` 只匹配标题，`sql` 模式与 `notebooks` 限定时不含收集箱；搜索不可用或为空时静默跳过。
+- 移出按版本分支：≥3.8.9 用 `createDocByParent`（`parentID` 为 `null` 表示笔记本根），3.3.0-3.8.8 用 `createDocWithMd`；标题半角 `/` 转全角 `／`；同名文档不检查、不拒绝。
+- 移出先建文档后删云端条目；删除失败保留新文档并写明条目未删除，不自动回滚。删除条目本身不创建快照（快照恢复不了云端数据）。
+- 列表与搜索必须裁剪输出，只有 `siyuan_read` 返回正文。
+
 ## MCP 工具契约清单
 
 | 工具 | 是否写思源 | 是否需要 confirmed | 是否快照 | 主要权限 |
@@ -473,7 +488,9 @@ Error: invalid parameter
 | `siyuan_find` | 否 | 否 | 否 | 返回前隐私过滤 |
 | `siyuan_read` | 否 | 否 | 否 | hidden 不可读 |
 | `siyuan_create` | 是 | 是 | 是 | 目标路径 read_write |
-| `siyuan_edit` | 是 | 是 | 是 | 文档 read_write |
+| `siyuan_edit` | 是 | 是 | 是 | 文档 read_write；收集箱条目拒绝 |
+| `siyuan_doc_manage:move`（收集箱条目） | 是 | 是 | 是 | 条目恒 read_only 放行，目标 read_write |
+| `siyuan_doc_manage:delete`（收集箱条目） | 是 | 是 | 否 | 条目恒 read_only 放行，不可恢复 |
 | `siyuan_doc_manage:create_notebook` | 是 | 是 | 是 | 新笔记本名称 read_write |
 | `siyuan_doc_manage:rename` | 是 | 是 | 是 | 文档 read_write |
 | `siyuan_doc_manage:move` | 是 | 是 | 是 | 文档 read_write |
