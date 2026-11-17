@@ -44,7 +44,7 @@ description: Use when the user wants to read, search, or write their private SiY
 - 如果 `siyuan_create` 提示目标笔记本不存在，先取得用户明确同意，再调用 `siyuan_doc_manage(action="create_notebook", notebook_name="<笔记本名称>", confirmed=true)`；创建成功后重试文档写入。不得根据文档路径隐式创建笔记本。
 - `siyuan_create`成功后会等待思源路径同步并自动刷新安全索引；普通新建可使用返回路径，同名新建必须按返回提醒使用新文档ID定位，不能仅复用同名路径。
 - 新写或直接编辑正文时传`markdown`，不要先写本地`.md`再导入。已有本地md才用`markdown_file`绝对路径；文件/图片上传multipart内容，目录保留原生本地链接且不递归，唯一文内标题锚点尽可能转为`siyuan://`块链接。独立附件用`insert_assets`。create/edit的`markdown_file`同样用`upload_large_files`承接256MiB及以上普通文件提示后的用户同意。
-- 用户给出网址要存进思源时，用`siyuan_create(source_url="<网址>", path="/Notebook/Doc", confirmed=true)`，不要自己抓网页再拼`markdown`。三个正文来源`markdown`/`markdown_file`/`source_url`必须且只能给一个。传`source_url`时`title`可省略，由页面标题决定；写入后图片默认本地化到思源资源库。抓不到正文时会明确拒绝并说明原因，此时改用浏览器扩展手动剪藏，不要重试或换路径硬写。
+- 用户给出网址要存进思源时，用`siyuan_create(source_url="<网址>", path="/Notebook/Doc", confirmed=true)`，不要自己抓网页再拼`markdown`。三个正文来源`markdown`/`markdown_file`/`source_url`必须且只能给一个。传`source_url`时`title`可省略，由页面标题决定；正文最前会加一行原文链接引用块；写入后图片默认本地化到思源资源库，下载失败的图保留外链、正文照常保存。一次只传一个网址，多个网址分多次调用；`siyuan_edit`不支持`source_url`。抓不到正文时会明确拒绝并说明原因（需要登录、JavaScript 渲染、微信图片消息页、反爬验证页、内网地址），此时改用浏览器扩展手动剪藏，不要重试或换路径硬写。
 - 面向用户说“第 N 块”前，必须先用 `siyuan_read(include_block_ids=true)` 读取当前文档。用户在思源页面看到的是同一套实时序号；文档被你或用户改过之后，旧序号立即失效，再次引用前必须重新读取。
 - 编辑已有文档前，先用 `siyuan_read(include_block_ids=true)` 进行引用阅读，并把返回的块序号和块 ID 作为 `siyuan_edit` 定位参数。面向用户用“第 25 块”即可，不要要求用户识别块 ID。
 - 不必为了块 ID 本身改变编辑方案；只有被其他块引用的 ID 消失时才会影响用户。

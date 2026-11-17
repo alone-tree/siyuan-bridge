@@ -40,8 +40,8 @@
 | 引用关系 | `/api/query/sql` 查询 `refs`、`spans` 并关联 `blocks` | 正向查询文档引用哪些块，反向查询文档被哪些块引用；写前检查即将消失的 ID 是否仍被引用 | 只读查询通过 `siyuan_operate` 的 `check_forward_references` / `check_backward_references` 暴露；写入保护仍内部执行 |
 | 导出 | `/api/export/exportMdContent` 等 | 读取文档 Markdown、导出资源 | 已用于阅读；不作为写入主路径 |
 | 资源 | `/api/asset/upload`、`/api/asset/insertLocalAssets` | 普通文件/图片上传multipart内容；目录返回原生本地链接 | 由`insert_assets`和create/edit的`markdown_file`附件后处理内部使用 |
-| 剪藏转换 | `/api/extension/copy` | 接收已抓好的 HTML 字符串，用内核 lute 转成 Markdown 返回；不抓网页、不写文档；自 v3.0.0 起存在 | 只由 `siyuan_create(source_url=...)` 内部使用 |
-| 网络图片本地化 | `/api/format/netImg2LocalAssets` | 下载文档内的网络图片并落盘到 `data/assets/`，改写正文引用 | `siyuan_create(source_url=...)` 写后默认调用 |
+| 剪藏转换 | `/api/extension/copy` | 接收已抓好的 HTML 字符串，用内核 lute 转成 Markdown 返回；不抓网页、不写文档；自 v3.0.0 起存在 | 只由 `siyuan_create(source_url=...)` 内部使用。multipart，字段 `dom`、`href`、`clipType=article`、`assets=false`；返回 `{"code":0,"data":{"md":"...","withMath":false}}`。不在官方 API 文档内（`docs/API.zh-CN.md` 检索 `api/extension` 命中 0 处），属内核内部接口：官方文档写明「只有在本文档中设有独立接口说明的接口属于公开 API」，但内核自己的 MCP 和浏览器扩展都在用这个端点，且它是唯一能保证产出格式与思源一致的方式。若未来内核移除或改签名，剪藏会失效 |
+| 网络图片本地化 | `/api/format/netImg2LocalAssets` | 下载文档内的网络图片并落盘到 `data/assets/`，改写正文引用 | `siyuan_create(source_url=...)` 写后默认调用，body `{"id":"<doc_id>"}`。返回 `{"code":0,"msg":"","data":null}`，没有逐项结果；下载失败的图保留外链 |
 | 仓库快照 | `/api/repo/createSnapshot`, `/api/repo/getRepoSnapshots` | 写入前备份；必要时帮助用户找到恢复点 | `createSnapshot` 内部强制使用；查询可后续做只读诊断 |
 | 仓库恢复 | `/api/repo/checkoutRepo` | 恢复整个工作空间到某个快照 | 不暴露给 AI |
 | 历史 | history rollback 类端点 | 文档/资源历史恢复 | 第一阶段不使用；只作为人工恢复参考 |

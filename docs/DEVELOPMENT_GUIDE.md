@@ -369,7 +369,7 @@ Error: invalid parameter
 - 写入后需要刷新的工具必须带系统上下文刷新索引，且不得把 Privacy Rules 写入 AI 可见缓存。
 - create/rename/move/copy/delete 后必须等待思源路径接口同步，返回路径同步状态。
 - `siyuan_create(if_exists=reject)` 必须检查思源当前 live 文档列表，不能只依赖可能过期的 `docs.jsonl`。
-- `siyuan_create` 的正文来源三选一：`markdown`、`markdown_file`、`source_url`，多传或都不传必须在快照前报错。
+- `siyuan_create` 的正文来源三选一：`markdown`、`markdown_file`、`source_url`，多传或都不传必须在快照前报错。`source_url` 的抓取规则见「修改剪藏支持时必须验证」。
 - 任何会删除现有文档/块 ID 的操作必须在快照和写入前检查统一引用关系；标准块引用、可识别嵌入块和 `siyuan://` 块链接任一存在外部关系时默认拒绝且不得创建快照。
 - 可见引用可以返回来源文档和块内容；隐藏或未知来源只能返回聚合数量，不得泄露路径、标题、块 ID 或内容。
 - 冲突结果必须包含针对本次被引用块的判断说明：语义继续时保留 ID 并重规划编辑，语义撤销或替代且保留会误导引用时才考虑破坏；多块范围需要逐个判断。
@@ -477,18 +477,24 @@ Error: invalid parameter
 
 ## 修改剪藏支持时必须验证
 
-剪藏指 `siyuan_create(source_url=...)`：抓取远端网页、抽出正文、交给内核转 Markdown、再走现有写入。完整开发方案、实测数据与实现清单见 `docs/剪藏支持开发方案-2026-11-17.md`。
+剪藏指 `siyuan_create(source_url=...)`：抓取远端网页、抽出正文、交给内核转 Markdown、再走现有写入。实现见 `source_code/clip.py`，完整规则与实测数据见 `ARCHITECTURE.md` 的「剪藏（从 URL 建文档）」。
 
-- 三个正文来源互斥：`markdown`、`markdown_file`、`source_url` 必须且只能给一个，多给或都不给在快照前报错。
-- 抓取在快照之前完成。抓取失败、HTTP 非 2xx、页面无正文、命中反爬验证页时拒绝写入，不创建快照。
-- 编码按通用顺序判定：Content-Type charset → HTML 前 4KB `<meta charset>` → UTF-8。用 GBK 页面（如新浪新闻）和 UTF-8 页面各验证一次，不能出现乱码。
+- 三个正文来源互斥：`markdown`、`markdown_file`、`source_url` 必须且只能给一个，多给或都不给在快照前报错。`siyuan_edit` 不接受 `source_url`，传了要报错并提示改用 `siyuan_create`。
+- 抓取在快照之前完成。抓取失败、HTTP 非 2xx、页面无正文、命中反爬验证页时拒绝写入，不创建快照、不产生文档。验证后必须确认 `client._snapshots` 为空。
+- 编码按通用顺序判定：Content-Type charset → HTML 前 4KB `<meta charset>` → UTF-8。用 GBK 页面（如新浪新闻）和 UTF-8 页面各验证一次，不能出现乱码。这一条与 `markdown_file` 的本地文件顺序（UTF-8 → GBK → GB18030）不同，不要为了「统一」把网页也套上 GB18030 兜底。
 - 正文定位按通用规则：语义容器（`article/main/[role=main]` 等）→ 文本密度扫描 → `body` 兜底。站点专属容器只允许微信 `#js_content`，新增需用户明确授权。
 - 清洗必须只保留 `src/href/alt` 三个属性。微信每个 `<span>` 带完整内联样式，不删会让内核把样式转成 IAL 属性语法，正文被垃圾淹没。
-- 图片懒加载属性 `data-src`、`data-original` 必须提升为 `src`，否则微信 26 张图全部丢失。
+- 图片懒加载属性 `data-src`、`data-original`、`data-lazy-src`、`data-actualsrc` 必须提升为 `src`，否则微信 26 张图全部丢失。
 - 转换交给内核 `/api/extension/copy`（`clipType=article`，`assets=false`），不在 Python 侧做 HTML 转 Markdown。自研转换在实测中明显劣于内核。
-- 建文档成功后默认对文档 ID 调用 `/api/format/netImg2LocalAssets` 本地化图片；失败不阻塞正文，按部分完成上报并保留文档 ID。
-- 图片消息页（`class="share_content_page"`，`js_base_container` 为空）必须明确拒绝并说明正文由 JS 渲染，不能把壳文案当正文写入。
+- 标题按内核规则清洗：页面标题先去半角 `/`（`/` 在桥这一侧是路径层级分隔符），其余换行、制表符、`\u2028`、`\u2029` 和 512 字截断交给内核。桥不做中文标点转换或全角半角归一。用户显式传 `title` 时以用户为准。
+- 原文出处用引用块 `> 原文：<URL>` 插在正文最前，必须在首 H1 去重之后插入。验证两点：引用块在第一位；网页自带的与标题相同的 H1 已被去掉，不重复。
+- 建文档成功后默认对文档 ID 调用 `/api/format/netImg2LocalAssets` 本地化图片；失败不阻塞正文，按部分完成上报并保留文档 ID。下载失败的图片保留外链。
+- 图片消息页（`class="share_content_page"`、`js_base_container` 为空壳、且无 `#js_content`）必须明确拒绝并说明正文由 JS 渲染，不能把「知道了／微信扫一扫／取消／允许」这类壳文案当正文写入。实测两个样本（12 图、17 图）都属此类。
 - 反爬与 JS 壳站点（知乎、Medium、StackOverflow、今日头条、B站专栏、豆瓣文章等）必须给出可理解的报错，建议用户用浏览器扩展手动剪藏。
+- 地址安全：抓取前解析主机名，拒绝私有、回环、链路本地、组播、保留、未指定地址，以及 NAT64、6to4、Teredo 等 IPv6 过渡地址，对齐内核 `isPrivateIP`。报错说明这是安全限制而非网络故障。
+- 一次只处理一个网址。
+
+实测基线（2026-11-17，开发版 MCP 真实调用）：阮一峰周刊 5445 字 237 块 57 张图全部本地化；微信图文《陆家嘴财经早餐》10729 字符 21 张图本地化、`mmbiz` 归零；微信图片消息页正确拒绝；知乎 403 正确报错；`127.0.0.1` 正确拒绝；三选一冲突正确报错；同名重复默认拒绝。
 
 ## MCP 工具契约清单
 

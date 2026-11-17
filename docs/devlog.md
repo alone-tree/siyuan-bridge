@@ -1,5 +1,17 @@
 # SiYuan Bridge 项目工程文档
 
+## 2026-11-17 剪藏功能实现完成
+
+- 用户确认九项业务决策后开始实现：抓不到正文直接拒绝（不写半成品）；原文出处用引用块 `> 原文：URL`；图片下载失败保留外链、正文照常存；一次一个网址；图片全部下载不设上限；标题交给思源规则清洗、桥只去掉 `/``；目标路径沿用现有 `path`/`notebook_id` 语义不设默认笔记本；做完先交验收不发版。
+- 新增 `source_code/clip.py`（约 560 行）：地址校验（对齐内核 `isPrivateIP`，含 NAT64/6to4/Teredo）、抓取（浏览器 UA、30 秒超时、5 MiB 上限）、编码判定（Content-Type → meta → UTF-8）、`html.parser` 轻量 DOM、正文三级定位、清洗（只留 `src/href/alt`、懒加载图提升、`section` 改 `div`、相对地址补全）、标题提取与 `/` 清洗。
+- `client.py` 新增 `extension_copy`（multipart，`/api/extension/copy`）与 `net_img2_local_assets`（`/api/format/netImg2LocalAssets`，120 秒超时不重试）。
+- `mcp_server.py`：`resolve_markdown_input` 增加 `allow_source_url` 开关，只有 create 认 `source_url`，edit 传了明确报错；create 校验顺序改为「确认 → 收集箱 → 正文来源（含抓取）→ title → if_exists → 路径」，抓取全部在快照前；原文引用块在首 H1 去重之后插入；图片本地化放在路径同步之后。新增 8 个剪藏错误码。`tool_specs()` 中 `siyuan_create` 的 `required` 从 `["title","confirmed"]` 改为 `["confirmed"]`，新增 `source_url` 参数并同步三个正文来源的互斥说明。
+- 实测发现并修复一个真实缺陷：微信图片消息页（`share_content_page` + 空壳 `js_base_container` + 无 `#js_content`）最初被当成正常页面剪藏，把「知道了／微信扫一扫／取消／允许」壳文案写进文档。现按「含 `share_content_page` 且无 `#js_content`」判定并拒绝，两个样本（12 图、17 图）均正确拦截。同时把「无正文」判定从 `not visible` 收紧为 `len < 200`。
+- 测试：新增 `tests/test_clip.py`（30 项）与 `tests/test_clip_create.py`（9 项）。全量 `python -m pytest tests -q` → 786 passed, 1 skipped。
+- 开发版 MCP 真实调用验证：阮一峰周刊第 287 期（5445 字 237 块 57 张图全部本地化，原文引用块在首位、重复 H1 已去重）；微信图文《陆家嘴财经早餐》（10729 字符 21 张图本地化、`mmbiz` 归零）；微信图片消息页正确拒绝且不产生文档；知乎 403 报错；`127.0.0.1` 内网地址正确拒绝；`markdown`+`source_url` 同时传正确报冲突；同名重复默认拒绝。
+- 已知遗留（非本次引入）：`if_exists=overwrite` 覆盖大文档时，删除旧块阶段会偶发 `block not found`，但最终内容正确写入（实测 15136 字符 57 图 234 块）。该分支代码本次未改动，属既有并发时序问题，未擅自扩大范围修复。
+- 文档落点：`ARCHITECTURE.md` 剪藏章节重写（补实测站点表、反爬特征词、微信三页判定、错误码表、标题内核规则、原文引用块、图片失败策略），`siyuan_create` 数据流重排为 18 步，补 `clip.py` 到代码结构、`extension_copy`/`net_img2_local_assets` 到 API 封装清单、剪藏依赖对比到第三方依赖章节；`DEVELOPMENT_GUIDE.md`「修改剪藏支持时必须验证」重写并补实测基线；`思源API.md` 补两个接口的版本边界与返回形状；`SKILL.md`、`README.md`、`README.en-US.md`、`templates/guides/` 两个语言版本同步；删除 `docs/剪藏支持开发方案-2026-11-17.md`（实测数据已并入正式文档）。
+
 ## 2026-11-17 剪藏方案定稿与依赖原则修订
 
 - 用户确认三项决策：`siyuan_create` 增加 `source_url` 参数（不新增第 10 个工具）；图片默认本地化；站点特殊处理只保留微信 `#js_content` 一条。

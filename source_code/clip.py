@@ -57,6 +57,8 @@ SEMANTIC_SELECTORS: tuple[tuple[str, str], ...] = (
 )
 MIN_CONTAINER_TEXT = 200
 MIN_CONTAINER_RATIO = 0.15
+# 定位到的容器可见文本低于这个长度时，认为页面没有可读正文（JS 壳、纯导航页）
+MIN_BODY_CHARS = 200
 
 VOID_TAGS = frozenset({
     "area", "base", "br", "col", "embed", "hr", "img", "input",
@@ -578,6 +580,21 @@ def _looks_blocked(text: str) -> bool:
     return any(marker in text for marker in BLOCK_MARKERS)
 
 
+def _is_wechat_image_page(html_text: str, root: Node) -> bool:
+    """微信图片消息页：正文由 JS 渲染，静态 HTML 里只有壳文案。
+
+    判据（实测 2026-11-17，两个样本都是 12/17 张图）：
+    - 页面含 `share_content_page`，且正文容器 `js_base_container` 是空壳；
+    - 静态 HTML 里没有 `id="js_content"` 的正文容器。
+    普通图文文章一定有 `#js_content` 且内含正文，不会命中。
+    """
+    if "share_content_page" not in html_text:
+        return False
+    if any(node.attrs.get("id") == "js_content" for node in root.iter()):
+        return False
+    return True
+
+
 def clip_url(url: str, *, transport=None, timeout: float = FETCH_TIMEOUT) -> ClippedPage:
     """抓取并清洗一个网页，返回用于内核转换的 HTML 片段与标题。"""
     page = fetch_page(url, transport=transport, timeout=timeout)
@@ -599,6 +616,13 @@ def clip_url(url: str, *, transport=None, timeout: float = FETCH_TIMEOUT) -> Cli
     root = builder.root
     base_url = builder.base_href or page.url
 
+    if _is_wechat_image_page(page.text, root):
+        raise ClipError(
+            "这是微信的图片消息页，正文和图片都由 JavaScript 渲染，静态页面里只有壳文案，抓不到内容。"
+            "请改用浏览器扩展手动剪藏。",
+            code="api:clip_no_content",
+        )
+
     container = locate_main_container(root)
     visible = _visible_text(container).strip()
 
@@ -609,7 +633,7 @@ def clip_url(url: str, *, transport=None, timeout: float = FETCH_TIMEOUT) -> Cli
             code="api:clip_blocked",
         )
 
-    if not visible:
+    if len(visible) < MIN_BODY_CHARS:
         raise ClipError(
             "该页面没有可读正文，可能由 JavaScript 渲染。"
             "请改用浏览器扩展手动剪藏。",

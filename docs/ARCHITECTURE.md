@@ -114,6 +114,7 @@ source_code/
   i18n.py            系统笔记本和系统文档名称、多语言
   agent_notebook.py  系统笔记本只读加载与多文档合并
   mcp_server.py      MCP stdio server、工具实现、工具 schema
+  clip.py            从 URL 剪藏：抓取、编码判定、地址校验、正文定位与清洗
   cli.py             开发诊断 CLI
 
 plugins/siyuan-bridge/
@@ -149,6 +150,8 @@ Python Bridge 的连接、检索、文字读取和工具发现只使用标准库
 | 包 | 版本 | 用途 | 清单 | 代码入口 |
 |---|---|---|---|---|
 | Pillow | 13.0.0 | 图片解码、缩放、裁剪、重编码 | `templates/dependencies/pillow-13.0.0.json` | `source_code/image_runtime.py` |
+
+剪藏功能不新增依赖。三种方案实测对比（2026-11-17）：标准库 `html.parser` 零依赖，10 个站点抽取结果与 bs4 接近，耗时 24-172 ms；bs4 + soupsieve + typing_extensions 204 KB，结果接近但耗时 45-569 ms，且需要扩展现有 wheel 机制支持纯 Python 包；trafilatura 全树 6.88 MiB（15 个包，3 个编译型），微信 0 张图、正文前插 9 行 YAML 头、MDN 截断到 618 字符。标准库版在微信上比 bs4 更快且图片更多。唯一取舍是 `html.parser` 对畸形 HTML 的容错比 lxml 差；兜底策略是解析异常或抽不到容器时退回整页 `body`，交给内核转换。
 
 ## 思源插件形态
 
@@ -392,47 +395,90 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 
 ```text
 source_url
-  → urllib 抓 HTML（浏览器 UA，走系统代理，30 秒超时，正文上限 5 MiB）
+  → urllib 抓 HTML（浏览器 UA，走系统代理，30 秒超时，上限 5 MiB）
   → 标准库 html.parser 建轻量树
   → 定位主容器，清属性，提升懒加载图
-  → POST /api/extension/copy（clipType=article）拿内核转好的 Markdown
+  → POST /api/extension/copy（clipType=article，assets=false）拿内核转好的 Markdown
   → 走现有 create 写入
   → /api/format/netImg2LocalAssets 本地化图片
 ```
 
-关键取舍：HTML 转 Markdown 交给内核，不在 Python 侧重写。内核的 lute 转换器本来就是思源自己的格式来源，产出与手写文档一致；实测同一篇微信文章，内核产出 26 到 29 张图，trafilatura 产出 0 张。
+代码入口 `source_code/clip.py`。抓取、正文定位、清洗、转换全部在快照之前完成，任何一步失败都不写思源、不创建快照。
+
+关键取舍：HTML 转 Markdown 交给内核，不在 Python 侧重写。内核的 lute 转换器本来就是思源自己的格式来源，产出与手写文档一致。同一篇微信文章实测：内核 `/api/extension/copy` 产出 11022 字符 26-29 张图；trafilatura 2.3.1 产出 5553 字符 0 张图且前插 9 行 YAML 头；readability-lxml 0.9 产出 4599 字符 0 张图。
 
 正文定位规则（通用，不为站点写特例）：
 
-1. 语义容器：`article`、`main`、`[role=main]`、`#main-content`、`.article-content` 等。
-2. 文本密度扫描：`文本长度 - 2 × 链接文本长度`，按 DOM 深度衰减，取最高分。
+1. 语义容器：`#js_content`、`article`、`main`、`[role=main]`、`#main-content`、`.article-content`、`.post-content`、`.entry-content`、`.content`。命中条件：可见文本 ≥ 200 字且 ≥ 全页 15%。
+2. 文本密度扫描：`文本长度 - 2 × 链接文本长度`，按 `/(1 + 0.08 × DOM 深度)` 衰减，取最高分。
 3. `body` 兜底。
 
 唯一的站点专属规则是微信的 `#js_content`。它的语义明确，且微信是用户明确要求支持的渠道。新增站点专属规则需要用户授权。
 
 清洗规则：
 
-- 删除 `script`、`style`、`noscript`、`svg`、`iframe`、`form`、`button`、`template`。
+- 删除 `script`、`style`、`noscript`、`svg`、`iframe`、`form`、`button`、`select`、`textarea`、`canvas`、`template`。
 - 所有元素只保留 `src`、`href`、`alt`，其余属性全部删除。这条不可省：微信每个 `<span>` 都带完整内联样式，不删的话内核会把样式转成 IAL 属性语法，产出 39270 字符垃圾；删完是 11022 字符干净正文。
-- `<img>` 的 `data-src`、`data-original` 提升为 `src`。微信的图全在 `data-src` 上，不提升则 26 张图全丢。
+- `<img>` 的 `data-src`、`data-original`、`data-lazy-src`、`data-actualsrc` 提升为 `src`。微信的图全在 `data-src` 上（实测页面上 `data-src` 出现 72 次而 `<img>` 只有 35 个），不提升则 26 张图全丢。
 - `section` 改名为 `div`，避免内核生成超级块。
+- 属性值里的相对 URL 按页面 `base` 补全为绝对 URL；非 http/https 的 scheme 直接去掉该属性。
 
-编码判定按通用顺序：Content-Type 的 charset → HTML 前 4KB 的 `<meta charset>` → UTF-8。GBK 站点（新浪、新华网等）靠这一步正确解码。
+编码判定按通用顺序：`Content-Type` 的 `charset` → HTML 前 4KB 的 `<meta charset>` → UTF-8。GBK 站点（新浪、新华网等）靠这一步正确解码。这一条与 `markdown_file` 的本地文件顺序（UTF-8 → GBK → GB18030）不同，两者不互相复用：本地文件没有 HTTP 头可依据，网页有。
 
-图片默认本地化：写入成功后对文档 ID 调用 `/api/format/netImg2LocalAssets`，内核下载并落盘到 `data/assets/`，正文外链自动改写为本地路径。实测 26 张外链图本地化后 `mmbiz` 引用归零、`assets/` 引用 26 个。该接口返回 `data: null`，没有逐项结果；失败不阻塞正文，按部分完成上报。
+标题提取与清洗：
+
+- 优先级 `og:title` → `<title>` → URL 末段（去掉查询串与扩展名）。传了 `source_url` 时 `title` 可选；用户显式传 `title` 时以用户为准。
+- 清洗交给内核，桥只去掉半角 `/`。依据 `kernel/api/filetree.go` 的 `documentBaseNameReplacer`：内核在 `createDocWithMd` 里删除文档名中的换行、`\u2028`、`\u2029`、制表符和半角 `/`，超过 512 rune 截断；`kernel/model/file.go` 的 `validateCreateDoc` 再做一次 `normalizeDocumentTitle`。桥必须自己去掉 `/`，因为它在桥这一侧的路径解析中是层级分隔符，会在到达内核之前把标题拆成两级目录。其余字符原样交给内核，桥不做中文标点转换、不做全角半角归一、不加额外截断。
+
+原文出处：正文最前面一行引用块 `> 原文：<URL>`。必须在 `normalize_new_document_markdown` 完成首 H1 去重之后再插入，否则去重逻辑会把引用块当成正文开头而失效，网页自带的 H1 会和文档标题重复。`if_exists=overwrite` 走同一套逻辑，引用块跟着重写，不累积多行。
+
+图片本地化：写入成功后对文档 ID 调用 `/api/format/netImg2LocalAssets`，内核下载并落盘到 `data/assets/`，正文外链自动改写为本地路径。实测阮一峰周刊 57 张图全部本地化、微信图文 21 张图本地化后 `mmbiz` 引用归零。该接口返回 `data: null`，没有逐项结果。下载失败的图保留外链，正文照常保存，不阻塞、不整篇报错；图片数量不设上限。
+
+一次只处理一个网址，多个网址由调用方多次调用。
+
+站点抽取实测（2026-11-17，标准库 html.parser）：
+
+| 站点 | 抽中容器 | 正文文本 | 转出 Markdown | 图片 | 耗时 |
+|---|---|---|---|---|---|
+| 微信 | `#js_content` | 5540 | 11022 | 26 | 76 ms |
+| 阮一峰 | `div`（密度） | 5417 | 14462 | 40 | 24 ms |
+| 少数派 | `article` | 5291 | 14100 | 37 | 39 ms |
+| 掘金 | `article` | 34205 | 54376 | 5 | 172 ms |
+| 新浪 | `.article-content` | 1054 | 10357 | 18 | 88 ms |
+| Wikipedia | `main` | 20747 | 52011 | 3 | 65 ms |
+| GitHub | `article` | 1881 | 4488 | 7 | 54 ms |
+| MDN | `main` | 1375 | 6151 | 0 | 35 ms |
+| arXiv | `main` | 4450 | 11601 | 2 | 28 ms |
+| CSDN | `article` | 3784 | 4930 | 3 | 47 ms |
 
 能力边界，抓不到时明确报错并建议用浏览器扩展手动剪藏：
 
-| 类别 | 表现 | 例子 |
-|---|---|---|
-| 直连可抓 | 正文完整 | 微信图文、阮一峰、少数派、CSDN、虎嗅、新浪、GitHub、arXiv、MDN、Wikipedia、BBC、Guardian |
-| JS 壳 | 可见文本为 0 | 今日头条、B站专栏、豆瓣文章 |
-| 反爬或登录墙 | 403 或验证页 | 知乎、Medium、StackOverflow、Reuters、简书、微博 |
-| 传输阻断或付费墙 | 连接重置或正文被截 | 小红书、NYT |
+| 类别 | 数量 | 表现 | 例子 |
+|---|---|---|---|
+| 直连可抓 | 18 | 正文完整 | 微信图文、阮一峰、少数派、CSDN、虎嗅、新浪、GitHub、arXiv、MDN、Wikipedia、BBC、Guardian |
+| JS 壳 | 3 | 可见文本为 0 | 今日头条（72914 字节可见文本 0）、B站专栏、豆瓣文章 |
+| 反爬或登录墙 | 8 | 403 或验证页 | 知乎、Medium、StackOverflow、Reuters 401、简书、微博 Visitor System |
+| 传输阻断或付费墙 | 2 | 连接重置或正文被截 | 小红书（TCP 重置）、NYT（计量墙） |
 
-微信自身还分三种页面：普通图文文章可抓；图片消息页（`class="share_content_page"`，`js_base_container` 为空壳）与纯图片消息页不可抓，因为正文由 JavaScript 渲染。图片消息页的图片列表在 `picture_page_info_list` 的 `cdn_url` 字段里，但正文拿不到，整体按不支持处理。
+反爬验证页识别用特征词，命中即判失败：`环境异常`、`访问受限`、`Just a moment`、`Please enable JS`、`Security Verification`、`Sina Visitor System`、`zh-zse-ck`。这是通用特征，不是站点规则。
 
-不借用的方案，完整论证见 `docs/剪藏支持开发方案-2026-11-17.md`：内核 `forwardProxy` 是裸 HTTP 且本机配置为空、走直连；内核 MCP 的 `web_fetch` 同样是裸 HTTP，整页转 Markdown 不做正文抽取；Electron 的 `native/frontend/web_page_fetch` 是真无头浏览器，但只注册给应用内 Agent，不投影到外部 MCP；官方浏览器扩展没有任何对外通道，也没有传 URL 的能力。
+微信自身分三种页面：普通图文文章（存在 `#js_content` 且内含正文）可抓；图片消息页（`class="share_content_page"`，`js_base_container` 为空壳，且无 `#js_content`）与纯图片消息页不可抓，因为正文由 JavaScript 渲染。图片消息页的图片列表在 `picture_page_info_list` 的 `cdn_url` 字段里（实测两个样本顶层对象分别 17 个和 12 个，全 2160x2880），但正文容器是空壳，整体按不支持处理。桥按「含 `share_content_page` 且无 `#js_content`」判定这类页面并拒绝，避免把「知道了／微信扫一扫／取消／允许」这类壳文案当正文写入。
+
+错误码：
+
+| 情况 | 错误码 |
+|---|---|
+| URL 不是 http/https | `validation:invalid_url` |
+| 主机名解析到内网/回环/IPv6 过渡地址 | `validation:blocked_address` |
+| 网络不可达、超时、HTTP 非 2xx | `api:clip_fetch_failed` |
+| 响应超过 5 MiB | `api:clip_too_large` |
+| 页面无正文（含微信图片消息页、JS 壳） | `api:clip_no_content` |
+| 命中反爬验证页 | `api:clip_blocked` |
+| 内核转换失败 | `api:clip_convert_failed` |
+
+内网地址校验对齐思源内核 `web_fetch`：抓取前先解析主机名，拒绝解析结果中的私有地址、回环、链路本地、组播、保留、未指定地址，以及 NAT64、6to4、Teredo 等 IPv6 过渡地址。依据 `kernel/util/httprequest.go` 的 `checkHostSSRFContext` 与 `kernel/util/net.go` 的 `isPrivateIP`。直接后果是本机部署的内部 Wiki、局域网服务不能用这个功能剪藏，这是有意取舍。报错文案说明这是安全限制而不是网络故障。
+
+不借用的方案：内核 `forwardProxy` 是裸 HTTP 且本机配置为空、走直连；内核 MCP 的 `web_fetch` 同样是裸 HTTP，整页转 Markdown 不做正文抽取（实测微信返回 72 字符验证页、arXiv 与 GitHub 直接 fetch failed）；Electron 的 `native/frontend/web_page_fetch` 是真无头浏览器，但注册条件写死在 `app/src/layout/dock/agent/frontendCapabilities.ts` 的 `#if !BROWSER && !MOBILE`，只给应用内 Agent，不投影到外部 MCP（内核 `tools/list` 31 个工具里没有它）；官方浏览器扩展 `permissions` 只有 `contextMenus/storage/commands`，无对外通道，`content.js` 只能剪当前已打开页面，没有传 URL 的能力。复用 Electron 那条路还要自带 428 MB Chromium（Chrome/Edge 已移除侧载扩展所需命令行标志），且拿不到用户的知乎、Medium 登录态，收益接近零。内核 723 条路由里 `puppeteer`、`chromedp`、`rod`、`playwright`、`selenium` 全零命中。
 
 ## 索引模型
 
@@ -866,10 +912,10 @@ scope：
 
 | 参数            | 类型    | 默认       | 含义                                        |
 | --------------- | ------- | ---------- | ------------------------------------------- |
-| `title`       | string  | 必填       | 文档标题                                    |
+| `title`       | string  | source_url 时可选 | 文档标题；用 `source_url` 时可省略，取页面标题 |
 | `markdown`    | string  | 三选一必填 | 默认写入正文；与 `markdown_file`、`source_url` 互斥 |
 | `markdown_file` | string | 三选一必填 | 仅导入已有本地 `.md` 文件；不要为导入先写临时文件 |
-| `source_url` | string | 三选一必填 | 抓取远端网页作为正文；传它时 `title` 可选 |
+| `source_url` | string | 三选一必填 | 抓取远端网页作为正文；传它时 `title` 可选；正文最前加原文引用块 |
 | `upload_large_files` | boolean | false | 仅`markdown_file`附件后处理，承接用户同意上传256MiB及以上普通文件 |
 | `path`        | string  | 可选       | 首选完整可读路径 `/Notebook/Folder/Doc`   |
 | `notebook_id` | string  | 可选       | 笔记本重名或使用内部路径时消歧              |
@@ -907,22 +953,25 @@ scope：
 数据流：
 
 1. 校验 `confirmed=true`、if_exists，以及 `markdown` / `markdown_file` / `source_url` 三选一（互斥，多传或都不传报错）。
-2. 使用 `source_url` 时先抓取并转换，得到 markdown 与默认标题；抓取失败、HTTP 非 2xx、抽不到正文或命中反爬页时在此拒绝，不进入后续步骤。转换细节见「剪藏」章节。
-3. 校验 title：使用 `source_url` 时 title 可选，依次取 `og:title`、`<title>`、URL 末段。
-4. 从可见笔记本和缓存文档解析目标路径，再读取思源当前 live 文档列表重新判断同路径文档，避免外部新建后缓存未刷新导致 `if_exists=reject` 漏检。
+2. 使用 `source_url` 时先抓取并转换，得到 markdown 与页面标题；抓取失败、HTTP 非 2xx、抽不到正文、微信图片消息页或命中反爬页时在此拒绝，不进入后续步骤。转换细节见「剪藏」章节。
+3. 校验 title：使用 `source_url` 时 title 可选，页面标题先按内核规则去掉半角 `/`；为空时依次取 `og:title`、`<title>`、URL 末段。
+4. 从可见笔记本和缓存文档解析目标路径，再读取思源当前 live 文档列表重新判断同路径文档，避免外部新建后缓存未刷新导致 `if_exists=reject` 漏检。`path` 省略时用 `/{title}` 兜底，这一步在 title 确定之后。
 5. 检查目标路径权限必须是 `read_write`。
 6. 拒绝创建 Privacy Rules 文档。
 7. 若目标已存在，按 `if_exists` 决策。
 8. `overwrite` 删除旧正文块前检查反链；存在外部引用时默认拒绝。
 9. 创建快照。
 10. 去掉与 title 重复的首个 H1，避免重复标题。
-11. 创建文档或覆盖已有文档。
-12. 若使用 `markdown_file`，扫描写入后的文档块，处理本地引用和文内锚点。
-13. 若使用 `source_url`，对文档 ID 调用 `/api/format/netImg2LocalAssets` 本地化图片。
-14. 尝试 pushMsg。
-15. 用文档 ID 短轮询 `getHPathByID`，等待思源暴露目标人类可读路径。
-16. 用系统笔记本 ID 和 Privacy Rules 文档 ID 安全刷新索引。
-17. 返回写入结果、路径同步状态、附件与图片处理摘要和回滚提示。
+11. 使用 `source_url` 时把 `> 原文：<URL>` 引用块插到正文最前（必须在第 10 步之后）。
+12. 创建文档或覆盖已有文档。
+13. 尝试 pushMsg。
+14. 用文档 ID 短轮询 `getHPathByID`，等待思源暴露目标人类可读路径。
+15. 若使用 `markdown_file`，扫描写入后的文档块，处理本地引用和文内锚点。
+16. 若使用 `source_url`，对文档 ID 调用 `/api/format/netImg2LocalAssets` 本地化图片；失败保留外链并如实上报，不撤销正文。
+17. 用系统笔记本 ID 和 Privacy Rules 文档 ID 安全刷新索引。
+18. 返回写入结果、路径同步状态、附件与图片处理摘要和回滚提示。
+
+`siyuan_edit` 不支持 `source_url`：`resolve_markdown_input` 只在 `siyuan_create` 传 `allow_source_url=True`，编辑工具传该参数会报错并提示改用 `siyuan_create`。
 
 当前实现差距：
 
@@ -1208,6 +1257,7 @@ Worker 统计边界：
 - 资源写入：upload_assets（multipart内容）；insert_local_assets_result（目录本地链接，完整envelope）
 - 同步：get_conf / get_sync_source_state / perform_sync / get_sync_info；由NativeSync协调，执行不自动重试
 - 收集箱：getShorthands / getShorthand / removeShorthands
+- 剪藏：extension_copy（`/api/extension/copy`，multipart，内核内部接口）；net_img2_local_assets（`/api/format/netImg2LocalAssets`）
 - 通知：pushMsg / pushErrMsg
 
 API 设计原则：

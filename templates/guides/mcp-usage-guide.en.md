@@ -18,6 +18,13 @@ This guide only supplements principles that tool descriptions do not explain cle
 - Check per-item `success/partial/failed` results. Failed attachments do not undo successful items. Do not recreate a document whose Markdown body was already written. Block insertion/update failures may leave resources; do not automatically delete them or compensate the whole batch. The user can restore a snapshot manually.
 - Ask for a sync direction only when the native prompt requires it, then pass that choice as `upload=true/false`, with no default direction. Omit it for ordinary sync; the native empty-cloud exception uploads automatically. Do not guess or fill internal preview state. New connections clear prior choices. A timeout or connection failure may occur after sync started; do not retry automatically or infer completion from HTTP success.
 
+## Clipping web pages
+
+- When the user gives a URL to save into SiYuan, call `siyuan_create(source_url="<url>", path="/Notebook/Doc", confirmed=true)` directly. Do not fetch the page yourself and assemble `markdown`. Pass one URL per call; split multiple URLs into multiple calls. `siyuan_edit` does not accept this parameter.
+- With `source_url`, `title` is optional and defaults to the page title. A quoted line with the original link is added at the top of the body. Article images are downloaded into the local asset library; an image that fails to download keeps its original link and the document is saved anyway.
+- When the body cannot be fetched, the call fails with a clear reason: login required, JavaScript rendering, WeChat image-message page, anti-bot verification page, or an internal-network address. Tell the user to clip it with the browser extension instead. Do not retry, do not try other parameters, and do not fetch the HTML yourself to assemble `markdown`.
+- When the target path already exists, behavior matches other writes: rejected by default. Pass `if_exists=overwrite` explicitly to refresh it.
+
 ## System notebook
 
 The system notebook maintains exactly four documents:
