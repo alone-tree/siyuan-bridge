@@ -212,6 +212,71 @@ class ClientTests(unittest.TestCase):
         result = client.create_doc_with_md("nb1", "/Test", "# Hi")
         self.assertEqual(result["id"], "20260503090000-newdoc-string")
 
+    def test_get_shorthands_payload(self):
+        seen = {}
+
+        def transport(req, timeout):
+            seen["url"] = req.full_url
+            seen["body"] = json.loads(req.data.decode("utf-8"))
+            return FakeResponse({"code": 0, "data": {"pagination": {"paginationRecordCount": 2}, "shorthands": []}})
+
+        client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
+        result = client.get_shorthands(2)
+
+        self.assertEqual(seen["url"], "http://127.0.0.1:6806/api/inbox/getShorthands")
+        self.assertEqual(seen["body"], {"page": 2})
+        self.assertEqual(2, result["pagination"]["paginationRecordCount"])
+
+    def test_get_shorthand_payload(self):
+        seen = {}
+
+        def transport(req, timeout):
+            seen["url"] = req.full_url
+            seen["body"] = json.loads(req.data.decode("utf-8"))
+            return FakeResponse({"code": 0, "data": {"oId": "1794880590020", "shorthandMd": "# 标题"}})
+
+        client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
+        result = client.get_shorthand("1794880590020")
+
+        self.assertEqual(seen["url"], "http://127.0.0.1:6806/api/inbox/getShorthand")
+        self.assertEqual(seen["body"], {"id": "1794880590020"})
+        self.assertEqual("# 标题", result["shorthandMd"])
+
+    def test_remove_shorthands_payload(self):
+        seen = {}
+
+        def transport(req, timeout):
+            seen["url"] = req.full_url
+            seen["body"] = json.loads(req.data.decode("utf-8"))
+            return FakeResponse({"code": 0, "data": None})
+
+        client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
+        client.remove_shorthands(["1794880590020", "1792243354103"])
+
+        self.assertEqual(seen["url"], "http://127.0.0.1:6806/api/inbox/removeShorthands")
+        self.assertEqual(seen["body"], {"ids": ["1794880590020", "1792243354103"]})
+
+    def test_create_doc_by_parent_payload(self):
+        seen = {}
+
+        def transport(req, timeout):
+            seen["url"] = req.full_url
+            seen["body"] = json.loads(req.data.decode("utf-8"))
+            return FakeResponse({"code": 0, "data": {"id": "20261117123000-abcdefg"}})
+
+        client = SiYuanClient("http://127.0.0.1:6806", transport=transport)
+        result = client.create_doc_by_parent("nb1", None, "20261117123000-abcdefg", "A／B", "# 正文")
+
+        self.assertEqual(seen["url"], "http://127.0.0.1:6806/api/filetree/createDocByParent")
+        self.assertEqual(seen["body"], {
+            "notebook": "nb1",
+            "parentID": None,
+            "id": "20261117123000-abcdefg",
+            "title": {"format": "plain", "text": "A／B"},
+            "markdown": "# 正文",
+        })
+        self.assertEqual("20261117123000-abcdefg", result["id"])
+
     def test_get_hpath_by_id_payload(self):
         seen = {}
 

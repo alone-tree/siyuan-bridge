@@ -65,6 +65,24 @@ from .telemetry import (
     set_siyuan_version,
     submit_feedback as _telemetry_submit_feedback,
 )
+from .inbox import (
+    InboxUnavailable,
+    collect_shorthands,
+    entry_created,
+    entry_id,
+    entry_markdown,
+    entry_title,
+    entry_url,
+    find_entry,
+    inbox_notebook_name,
+    is_shorthand_id,
+    iter_shorthands,
+    new_document_id,
+    split_inbox_path,
+    supports_create_doc_by_parent,
+    title_matches,
+    writable_document_title,
+)
 
 
 from . import __version__
@@ -164,6 +182,7 @@ _ERR_DOC_NOT_FOUND    = "not_found:document"
 _ERR_NB_NOT_FOUND     = "not_found:notebook"
 _ERR_PARENT_NOT_FOUND = "not_found:parent"
 _ERR_BLOCK_NOT_FOUND  = "not_found:block_index"
+_ERR_INBOX_NOT_FOUND  = "not_found:inbox_entry"
 
 # conflict — 状态不一致
 _ERR_ALREADY_EXISTS      = "conflict:already_exists"
@@ -185,6 +204,7 @@ _ERR_ASSET_UPLOAD = "api:asset_upload"
 _ERR_ASSET_INSERT = "api:asset_insert"
 _ERR_MARKDOWN_CONFLICT = "validation:markdown_conflict"
 _ERR_FILE_READ = "api:file_read"
+_ERR_INBOX_UNAVAILABLE = "api:inbox_unavailable"
 
 
 DOCUMENT_ID_PATTERN = re.compile(r"\d{14}-[0-9a-z]{7}")
@@ -1556,6 +1576,26 @@ def display_document_path(doc: dict[str, Any]) -> str:
     return hpath
 
 
+def _markdown_cell(value: str) -> str:
+    """表格单元格转义：竖线会截断 Markdown 表格。"""
+    return str(value).replace("|", "\\|")
+
+
+def _append_overview_row(overview: str, row: str) -> str:
+    """把一行追加到概览表最后一行表格之后；没有表格时原样返回。"""
+    if not row:
+        return overview
+    lines = overview.splitlines()
+    last_table_index = -1
+    for index, line in enumerate(lines):
+        if line.strip().startswith("|"):
+            last_table_index = index
+    if last_table_index < 0:
+        return overview
+    lines.insert(last_table_index + 1, row)
+    return "\n".join(lines)
+
+
 def normalize_display_path(path: str) -> str:
     text = str(path or "").strip()
     if not text:
@@ -2805,6 +2845,7 @@ class McpServer:
         state = self._render_startup_documents(client, state)
         overview = build_notebook_overview(self.root)
         overview = re.sub(r"^# [^\n]+\n+", "", overview).strip()
+        overview = _append_overview_row(overview, self._inbox_overview_row())
         total_ignore = len(state.privacy_rules.ignore)
         total_permissions = len(state.privacy_rules.permissions)
         nb_rules = [
@@ -3243,6 +3284,10 @@ class McpServer:
         limit = clamp_int(args.get("limit"), 100, 1, 500)
         offset = max(int(args.get("offset") or 0), 0)
 
+        inbox_rest = split_inbox_path(path, self._inbox_notebook_name()) if path else None
+        if inbox_rest is not None:
+            return self._list_inbox(inbox_rest, limit, offset)
+
         if (not path or path == "/") and not notebook_id and not notebook_name:
             # List all notebooks
             notebooks = read_json(self.root / KNOWLEDGE_BASE_DIR / "notebooks.json")
@@ -3264,6 +3309,9 @@ class McpServer:
                     ])
                     + " |"
                 )
+            _, inbox_total = self._inbox_entries_safe(1)
+            if inbox_total > 0:
+                lines.append(f"| {self._inbox_notebook_name()} | - | read_only |")
             lines.append("")
             return "\n".join(lines)
 
@@ -3367,6 +3415,293 @@ class McpServer:
                 return str(nb.get("name", notebook_id))
         return notebook_id
 
+    # ── 收集箱（云端虚拟笔记本） ─────────────────────────────────────────
+    #
+    # 收集箱条目只存在于思源云端：没有本地副本、没有文档 ID、不在块树和索引里。
+    # 这里统一处理虚拟笔记本命名、路径拆分、条目定位和渲染，各工具只做分支接入。
+
+    def _inbox_notebook_name(self) -> str:
+        notebooks = read_json(self.root / KNOWLEDGE_BASE_DIR / "notebooks.json")
+        names = [str(nb.get("name") or "") for nb in notebooks if isinstance(nb, dict)]
+        return inbox_notebook_name(self._active_language or "zh-CN", names)
+
+    def _inbox_entries(self, stop_after: int | None = None) -> tuple[list[dict[str, Any]], int]:
+        client = self._require_active_client()
+        return collect_shorthands(client, stop_after)
+
+    def _inbox_entries_safe(self, stop_after: int | None = None) -> tuple[list[dict[str, Any]], int]:
+        """列表与启动包用的容错版本：任何失败都当作没有收集箱。"""
+        try:
+            return self._inbox_entries(stop_after)
+        except Exception:  # noqa: BLE001 - 云端或连接失败不阻塞本地能力
+            return [], 0
+
+    def _inbox_locator(self, args: dict[str, Any]) -> tuple[bool, str]:
+        """判断本次调用是否指向收集箱及其条目名。返回 (是否收集箱, 条目名)。"""
+        name = self._inbox_notebook_name()
+        path = str(args.get("document_path") or "").strip()
+        if path:
+            rest = split_inbox_path(path, name)
+            if rest is not None:
+                return True, rest
+        doc_id = str(args.get("document_id") or "").strip()
+        if is_shorthand_id(doc_id):
+            return True, doc_id
+        return False, ""
+
+    def _resolve_inbox_entry(self, locator: str) -> dict[str, Any]:
+        name = self._inbox_notebook_name()
+        if not locator:
+            raise tool_error(
+                _ERR_WRONG_TARGET,
+                f"/{name} 是收集箱笔记本，不是条目。用 `siyuan_list(path=\"/{name}\")` 查看条目。",
+            )
+        client = self._require_active_client()
+        if is_shorthand_id(locator):
+            try:
+                data = client.get_shorthand(locator)
+            except Exception:  # noqa: BLE001 - oId 不存在时回落到标题匹配
+                data = None
+            if isinstance(data, dict) and entry_id(data):
+                return data
+        try:
+            entries, _ = collect_shorthands(client)
+        except InboxUnavailable as exc:
+            raise tool_error(
+                _ERR_INBOX_UNAVAILABLE,
+                f"收集箱不可用：{exc}。请确认思源已登录并联网后重试。",
+            )
+        entry, matches = find_entry(entries, locator)
+        if entry is not None:
+            return entry
+        if matches:
+            choices = "\n".join(f"- `{entry_id(item)}` {entry_title(item)}" for item in matches)
+            raise tool_error(_ERR_AMBIGUOUS, f"收集箱有多条同名条目，请改用 oId：\n{choices}")
+        raise tool_error(_ERR_INBOX_NOT_FOUND, f"收集箱里没有匹配的条目：{locator}")
+
+    def _list_inbox(self, entry_path: str, limit: int, offset: int) -> str:
+        name = self._inbox_notebook_name()
+        if entry_path:
+            raise tool_error(
+                _ERR_WRONG_TARGET,
+                f"收集箱条目没有子文档：/{name}/{entry_path}。用 `siyuan_read` 读取它。",
+            )
+        try:
+            entries, total = self._inbox_entries(offset + limit)
+        except InboxUnavailable as exc:
+            raise tool_error(_ERR_INBOX_UNAVAILABLE, f"收集箱不可用：{exc}。") from exc
+        page = entries[offset:offset + limit]
+        lines = [
+            f"# /{name}",
+            "",
+            "收集箱条目只存在于云端，权限恒为 read_only；移出或删除会同时删除云端原件。",
+            "",
+            "| document | document_id | 权限 | 收藏时间 | 来源 |",
+            "|---|---|---|---|---|",
+        ]
+        if not page:
+            lines.append("| (收集箱为空) |  |  |  |  |")
+        for entry in page:
+            title = entry_title(entry) or "(无标题)"
+            lines.append(
+                "| "
+                + " | ".join([
+                    _markdown_cell(f"/{name}/{title}"),
+                    f"`{entry_id(entry)}`",
+                    "read_only",
+                    _markdown_cell(entry_created(entry) or "-"),
+                    _markdown_cell(entry_url(entry) or "-"),
+                ])
+                + " |"
+            )
+        lines.append("")
+        if total > offset + limit:
+            lines.extend([
+                f"还有 {total - offset - limit} 条未显示。",
+                f'继续：siyuan_list(path="/{name}", offset={offset + limit}, limit={limit})',
+            ])
+        else:
+            lines.append(f"共 {total} 条。")
+        return "\n".join(lines)
+
+    def _read_inbox_entry(self, locator: str) -> str:
+        entry = self._resolve_inbox_entry(locator)
+        title = entry_title(entry) or "(无标题)"
+        source_bits: list[str] = []
+        created = entry_created(entry)
+        if created:
+            source_bits.append(f"收藏时间 {created}")
+        url = entry_url(entry)
+        if url:
+            source_bits.append(f"原文链接 {url}")
+        lines = [f"# {title}", ""]
+        if source_bits:
+            lines.extend(["> 收集箱条目：" + "，".join(source_bits), ""])
+        lines.extend(["---", "", entry_markdown(entry)])
+        return "\n".join(lines)
+
+    def _inbox_search_section(
+        self,
+        query: str,
+        mode: str,
+        limit: int,
+        notebook_filter: list[str] | None,
+    ) -> str:
+        if mode == "sql" or notebook_filter:
+            return ""
+        name = self._inbox_notebook_name()
+        hits: list[dict[str, Any]] = []
+        try:
+            client = self._require_active_client()
+            for entry in iter_shorthands(client):
+                if title_matches(entry_title(entry), mode, query):
+                    hits.append(entry)
+                    if len(hits) >= limit:
+                        break
+        except InboxUnavailable:
+            return ""
+        except SiYuanConnectionError:
+            return ""
+        if not hits:
+            return ""
+        lines = [
+            "",
+            f"## {name}（{len(hits)} 条命中）",
+            "",
+            f"收集箱只按标题匹配，不检索正文。读取用 `siyuan_read(path=\"/{name}/<标题或oId>\")`。",
+            "",
+        ]
+        for entry in hits:
+            created = entry_created(entry)
+            suffix = f" {created}" if created else ""
+            lines.append(f"- `{entry_id(entry)}` {entry_title(entry) or '(无标题)'}{suffix}".rstrip())
+        return "\n".join(lines)
+
+    def _inbox_overview_row(self) -> str:
+        entries, total = self._inbox_entries_safe(1)
+        if total <= 0:
+            return ""
+        latest = entry_created(entries[0]) if entries else ""
+        return f"| {self._inbox_notebook_name()} | - | {total} | - | - | {latest or '-'} |"
+
+    def _resolve_inbox_move_target(
+        self,
+        target_parent: str,
+        notebooks: list[dict[str, Any]],
+        docs: list[dict[str, Any]],
+    ) -> tuple[str, str | None, str, str]:
+        """返回 (notebook_id, parent_id, 目标显示路径, 父文档内部路径)。"""
+        path = normalize_display_path(target_parent)
+        if not path:
+            raise tool_error(_ERR_MISSING_PARAM, "target_parent 不能为空。")
+        notebook = next(
+            (
+                nb
+                for nb in notebooks
+                if normalize_display_path(str(nb.get("name", ""))).casefold() == path.casefold()
+            ),
+            None,
+        )
+        if notebook is not None:
+            return str(notebook.get("id") or ""), None, normalize_display_path(str(notebook.get("name", ""))), ""
+        matches = [doc for doc in docs if display_document_path(doc).casefold() == path.casefold()]
+        if len(matches) > 1:
+            choices = "\n".join(f"- `{doc.get('id')}` {display_document_path(doc)}" for doc in matches)
+            raise tool_error(_ERR_AMBIGUOUS, f"target_parent 存在歧义：\n{choices}")
+        if not matches:
+            raise tool_error(_ERR_PARENT_NOT_FOUND, f"未找到可见 target_parent：{path}")
+        doc = matches[0]
+        hpath = str(doc.get("hpath") or "")
+        if not hpath.startswith("/"):
+            hpath = "/" + hpath
+        return str(doc.get("notebook_id") or ""), str(doc.get("id") or ""), display_document_path(doc), hpath
+
+    def _doc_manage_inbox(self, action: str, locator: str, args: dict[str, Any]) -> str:
+        name = self._inbox_notebook_name()
+        if action not in {"move", "delete"}:
+            raise tool_error(
+                _ERR_WRONG_TARGET,
+                f"收集箱条目只支持 move 与 delete，不支持 {action}。",
+            )
+        if not bool(args.get("confirmed")):
+            raise tool_error(_ERR_NOT_CONFIRMED, f"action={action} 需要 confirmed=true。")
+        client = self._require_active_client()
+        entry = self._resolve_inbox_entry(locator)
+        oid = entry_id(entry)
+        title = entry_title(entry) or "(无标题)"
+
+        if action == "delete":
+            try:
+                client.remove_shorthands([oid])
+            except SiYuanApiError as exc:
+                raise tool_error(_ERR_INBOX_UNAVAILABLE, f"删除收集箱条目失败：{exc}") from exc
+            return "\n".join([
+                "# 收集箱条目已删除",
+                "",
+                f"条目：{title}（`{oid}`）",
+                "该操作删除云端数据，无法通过思源工作空间快照恢复。",
+            ])
+
+        target_parent = str(args.get("target_parent") or "").strip()
+        if not target_parent:
+            raise tool_error(_ERR_MISSING_PARAM, "action=move 需要 target_parent，例如 /Notebook 或 /Notebook/Folder。")
+        notebooks = read_json(self.root / KNOWLEDGE_BASE_DIR / "notebooks.json")
+        privacy = load_privacy_rules(self.root)
+        docs = filter_documents(load_docs(self.root), privacy)
+        notebook_id, parent_id, target_label, parent_internal = self._resolve_inbox_move_target(
+            target_parent, notebooks, docs
+        )
+        self._ensure_doc_manage_target_parent_writable(target_label, privacy, docs, action="move")
+
+        snapshot_status = self._create_snapshot_or_raise(client, "siyuan_doc_manage", f"/{name}/{locator}")
+        doc_title = writable_document_title(title) or "(无标题)"
+        markdown = entry_markdown(entry)
+        doc_id = new_document_id()
+        try:
+            if supports_create_doc_by_parent(client.version()):
+                client.create_doc_by_parent(notebook_id, parent_id, doc_id, doc_title, markdown)
+            else:
+                internal_path = f"{parent_internal.rstrip('/')}/{doc_title}" if parent_internal else f"/{doc_title}"
+                created = client.create_doc_with_md(notebook_id, internal_path, markdown)
+                doc_id = str(created.get("id") or created.get("docID") or doc_id)
+        except SiYuanApiError as exc:
+            raise tool_error(_ERR_INBOX_UNAVAILABLE, f"创建文档失败，收集箱条目未删除：{exc}") from exc
+
+        removed = True
+        remove_error = ""
+        try:
+            client.remove_shorthands([oid])
+        except SiYuanApiError as exc:
+            removed = False
+            remove_error = str(exc)
+
+        try:
+            client.push_msg(f"思源桥：已移出收集箱条目「{title}」")
+        except Exception:  # noqa: BLE001 - 通知失败不影响结果
+            pass
+
+        refresh_ok = False
+        try:
+            self._refresh_index_with_system_context(client)
+            refresh_ok = True
+        except Exception:  # noqa: BLE001 - 刷新失败由返回提示
+            pass
+
+        parts = ["# 收集箱条目已移出", ""]
+        parts.append(f"条目：{title}（`{oid}`）")
+        parts.append(f"新文档：`{doc_id}`")
+        parts.append(f"快照：{snapshot_status}")
+        parts.append("索引：已自动刷新" if refresh_ok else '索引：自动刷新失败，请手动运行 `siyuan_operate(action="refresh")`')
+        if not removed:
+            parts.extend([
+                "",
+                "文档已建立，但收集箱条目未删除。",
+                f"删除失败原因：{remove_error}",
+                "可人工确认后再次删除该条目，或改用 `siyuan_doc_manage(action=\"delete\")` 重试。",
+            ])
+        return "\n".join(parts)
+
+
     def siyuan_find(self, args: dict[str, Any]) -> str:
         query = str(args.get("query") or "").strip()
         keyword_alias = str(args.get("keyword") or "").strip()
@@ -3443,9 +3778,10 @@ class McpServer:
                                                   system_notebook_ids=collect_system_notebook_ids(client))
 
         query_syntax_hint = simple_query_syntax_hint(query) if mode == "query" else ""
+        inbox_section = self._inbox_search_section(query, mode, limit, notebooks)
         if not enriched:
             output = f"# 搜索：\"{query}\"（{scope}，{mode}）\n\n未找到匹配的可见文档。"
-            return output + query_syntax_hint
+            return output + inbox_section + query_syntax_hint
 
         enriched = enriched[:limit]
         grouped = self._group_by_notebook(enriched)
@@ -3492,7 +3828,7 @@ class McpServer:
             if remaining <= 0:
                 break
 
-        return "\n".join(lines) + query_syntax_hint
+        return "\n".join(lines) + inbox_section + query_syntax_hint
 
     def _enrich_search_blocks(
         self,
@@ -3986,6 +4322,9 @@ class McpServer:
 
     def siyuan_read(self, args: dict[str, Any]) -> str:
         self._pending_read_images = None
+        is_inbox, inbox_locator = self._inbox_locator(args)
+        if is_inbox:
+            return self._read_inbox_entry(inbox_locator)
         doc = self.resolve_visible_document(args)
         client = self._require_active_client()
         include_block_ids = bool(args.get("include_block_ids"))
@@ -4434,6 +4773,13 @@ class McpServer:
         title = str(args.get("title") or "").strip()
         if not title:
             raise tool_error(_ERR_MISSING_PARAM, "title 参数是必填的")
+
+        inbox_name = self._inbox_notebook_name()
+        if split_inbox_path(str(args.get("path") or ""), inbox_name) is not None:
+            raise tool_error(
+                _ERR_WRONG_TARGET,
+                f"/{inbox_name} 是收集箱虚拟笔记本，不能写入。收集箱只支持移出或删除条目。",
+            )
 
         markdown = resolve_markdown_input(args, require=True).strip()
         if not markdown:
@@ -4988,6 +5334,13 @@ class McpServer:
         confirmed = bool(args.get("confirmed"))
         if not confirmed:
             raise tool_error(_ERR_NOT_CONFIRMED, "需要 confirmed=true。编辑思源文档必须经过用户明确确认。")
+
+        is_inbox, _ = self._inbox_locator(args)
+        if is_inbox:
+            raise tool_error(
+                _ERR_NOT_READ_WRITE,
+                "这是收集箱文档，只读。需要编辑请先用 `siyuan_doc_manage` 移出收集箱",
+            )
 
         action = str(args.get("action") or "").strip()
         if action == "multi_block_replace":
@@ -5618,6 +5971,10 @@ class McpServer:
                 f'现在可以使用 `siyuan_create(path="/{notebook_name}/<文档标题>", ...)` 创建文档。',
             ])
 
+        is_inbox, inbox_locator = self._inbox_locator(args)
+        if is_inbox:
+            return self._doc_manage_inbox(action, inbox_locator, args)
+
         doc = self.resolve_visible_document(args)
         doc_id = str(doc.get("id", ""))
         doc_path = display_document_path(doc)
@@ -6211,7 +6568,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_list",
-            "description": "List visible notebooks or one level of visible documents. No arguments or path=/ lists notebooks. Provide path=/Notebook or /Notebook/Folder to list only direct child documents at that path. Each row returns effective permission (read_write/read_only), a full readable document path for siyuan_read/siyuan_edit, plus document_id fallback, word count, block count, update date, and descendant document count. Hidden items are not listed. Results are paginated with offset/limit. notebook_id/notebook_name are compatibility shortcuts for path=/Notebook.",
+            "description": "List visible notebooks or one level of visible documents. No arguments or path=/ lists notebooks. Provide path=/Notebook or /Notebook/Folder to list only direct child documents at that path. Each row returns effective permission (read_write/read_only), a full readable document path for siyuan_read/siyuan_edit, plus document_id fallback, word count, block count, update date, and descendant document count. A cloud inbox may appear as a virtual read_only notebook; its rows use the entry oId as document_id and have no word/block counts. Hidden items are not listed. Results are paginated with offset/limit. notebook_id/notebook_name are compatibility shortcuts for path=/Notebook.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -6226,7 +6583,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_find",
-            "description": "Search visible SiYuan notes using SiYuan's native query syntax, regex, or SQL, then apply privacy filtering. In query mode, whitespace means AND; use explicit OR for exploratory searches or related concepts.",
+            "description": "Search visible SiYuan notes using SiYuan's native query syntax, regex, or SQL, then apply privacy filtering. In query mode, whitespace means AND; use explicit OR for exploratory searches or related concepts. Cloud inbox entries are searched by title only and listed in a separate section.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -6243,7 +6600,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_read",
-            "description": "Read a visible SiYuan document as Markdown. Prefer document path including notebook name, e.g. /Notebook/Folder/Doc; use document_id only as fallback. Always returns the document outline and one complete block window. Set include_block_ids=true before any siyuan_edit call to get exact [index id=... type=...] targets. Normal reading keeps Markdown clean and hides block IDs. SELECT query_embed blocks in the selected window expand privacy-visible matches as quoted Markdown with source paths; hidden targets are never disclosed. Embedded blocks remain atomic under token and shared image budgets, preserving contiguous-window behavior. When images are inlined (plugin setting, or include_images=true), images in this window are returned as image content blocks interleaved with the text, up to the per-call image budget (9 MB by default, set in the plugin settings); images beyond the budget and unsupported images are reported at their position with their location.",
+            "description": "Read a visible SiYuan document as Markdown. Prefer document path including notebook name, e.g. /Notebook/Folder/Doc; use document_id only as fallback. Cloud inbox entries are read as raw Markdown; block coordinates, token windows and image inlining do not apply to them. Always returns the document outline and one complete block window. Set include_block_ids=true before any siyuan_edit call to get exact [index id=... type=...] targets. Normal reading keeps Markdown clean and hides block IDs. SELECT query_embed blocks in the selected window expand privacy-visible matches as quoted Markdown with source paths; hidden targets are never disclosed. Embedded blocks remain atomic under token and shared image budgets, preserving contiguous-window behavior. When images are inlined (plugin setting, or include_images=true), images in this window are returned as image content blocks interleaved with the text, up to the per-call image budget (9 MB by default, set in the plugin settings); images beyond the budget and unsupported images are reported at their position with their location.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -6261,7 +6618,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_create",
-            "description": "Create or write a SiYuan document. Prefer path as the full readable path including notebook name, e.g. /Notebook/Folder/Doc. Requires confirmed=true and creates a workspace snapshot before writing. After writing, waits for the target path and refreshes the safe index. Pass new body text with markdown.",
+            "description": "Create or write a SiYuan document. Prefer path as the full readable path including notebook name, e.g. /Notebook/Folder/Doc. Requires confirmed=true and creates a workspace snapshot before writing. After writing, waits for the target path and refreshes the safe index. Pass new body text with markdown. The cloud inbox virtual notebook is read-only and rejects writes.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -6281,7 +6638,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_edit",
-            "description": "Edit a visible SiYuan document using block coordinates from siyuan_read(include_block_ids=true). Requires confirmed=true and creates a workspace snapshot before writing. Choose the edit method with action; pass new body text with markdown.",
+            "description": "Edit a visible SiYuan document using block coordinates from siyuan_read(include_block_ids=true). Requires confirmed=true and creates a workspace snapshot before writing. Choose the edit method with action; pass new body text with markdown. Cloud inbox entries are read-only and rejected here; move them out with siyuan_doc_manage(action=move) first.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -6336,7 +6693,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_doc_manage",
-            "description": "Manage SiYuan notebooks and visible documents at the document-tree level, not document body editing. Requires action. create_notebook/rename/move/delete/copy/set_tags require confirmed=true and create a workspace snapshot; export does not. After writes, refreshes the safe index.",
+            "description": "Manage SiYuan notebooks and visible documents at the document-tree level, not document body editing. Requires action. create_notebook/rename/move/delete/copy/set_tags require confirmed=true and create a workspace snapshot; export does not. After writes, refreshes the safe index. For a cloud inbox entry only move and delete apply: move creates the document then removes the cloud entry; delete removes the cloud entry and is irreversible.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

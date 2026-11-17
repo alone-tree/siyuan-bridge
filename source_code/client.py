@@ -465,6 +465,43 @@ class SiYuanClient:
             raise SiYuanApiError("Unexpected createDocWithMd response shape")
         return data
 
+    def get_shorthands(self, page: int) -> dict[str, Any]:
+        """收集箱分页列表。内核会把每条的正文一并返回。"""
+        data = self._post("/api/inbox/getShorthands", {"page": page})
+        if not isinstance(data, dict):
+            raise SiYuanApiError("Unexpected getShorthands response shape")
+        return data
+
+    def get_shorthand(self, shorthand_id: str) -> dict[str, Any]:
+        data = self._post("/api/inbox/getShorthand", {"id": shorthand_id})
+        if not isinstance(data, dict):
+            raise SiYuanApiError("Unexpected getShorthand response shape")
+        return data
+
+    def remove_shorthands(self, ids: list[str]) -> None:
+        self._post("/api/inbox/removeShorthands", {"ids": ids})
+
+    def create_doc_by_parent(
+        self,
+        notebook: str,
+        parent_id: str | None,
+        doc_id: str,
+        title: str,
+        markdown: str,
+    ) -> dict[str, Any]:
+        """身份式建文档，思源 v3.8.9 起提供。parent_id 为 None 表示笔记本根。"""
+        payload: dict[str, Any] = {
+            "notebook": notebook,
+            "parentID": parent_id,
+            "id": doc_id,
+            "title": {"format": "plain", "text": title},
+            "markdown": markdown,
+        }
+        data = self._post("/api/filetree/createDocByParent", payload)
+        if not isinstance(data, dict):
+            raise SiYuanApiError("Unexpected createDocByParent response shape")
+        return data
+
     def get_hpath_by_id(self, block_id: str) -> str:
         data = self._post("/api/filetree/getHPathByID", {"id": block_id})
         if isinstance(data, str):

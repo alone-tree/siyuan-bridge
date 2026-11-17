@@ -19,6 +19,17 @@ LEGACY_NOTEBOOK_NAMES: dict[str, str] = {
     "SiYuan Agent Bridge": "en",
 }
 
+# 收集箱是云端虚拟笔记本，不落在思源里，名字只用于展示与路径定位。
+INBOX_NOTEBOOK_NAMES: dict[str, str] = {
+    "zh-CN": "收集箱",
+    "en": "Inbox",
+}
+
+INBOX_SYSTEM_SUFFIXES: dict[str, str] = {
+    "zh-CN": "(系统)",
+    "en": "(System)",
+}
+
 SYSTEM_DOC_KEYS = [
     "ai_guide",
     "workspace_index",
@@ -181,6 +192,14 @@ def resolve_language(config_language: str | None = None) -> str:
 
 def get_notebook_name(language: str) -> str:
     return SYSTEM_NOTEBOOK_NAMES.get(language, SYSTEM_NOTEBOOK_NAMES[DEFAULT_LANGUAGE])
+
+
+def get_inbox_notebook_name(language: str) -> str:
+    return INBOX_NOTEBOOK_NAMES.get(language, INBOX_NOTEBOOK_NAMES[DEFAULT_LANGUAGE])
+
+
+def get_inbox_system_suffix(language: str) -> str:
+    return INBOX_SYSTEM_SUFFIXES.get(language, INBOX_SYSTEM_SUFFIXES[DEFAULT_LANGUAGE])
 
 
 def get_doc_name(key: str, language: str) -> str:
