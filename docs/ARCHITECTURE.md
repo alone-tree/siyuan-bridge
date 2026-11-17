@@ -432,7 +432,7 @@ source_url
 
 微信自身还分三种页面：普通图文文章可抓；图片消息页（`class="share_content_page"`，`js_base_container` 为空壳）与纯图片消息页不可抓，因为正文由 JavaScript 渲染。图片消息页的图片列表在 `picture_page_info_list` 的 `cdn_url` 字段里，但正文拿不到，整体按不支持处理。
 
-不借用的方案，结论见 `docs/剪藏支持方案-2026-11-17.md`：内核 `forwardProxy` 是裸 HTTP 且本机配置为空、走直连；内核 MCP 的 `web_fetch` 同样是裸 HTTP，整页转 Markdown 不做正文抽取；Electron 的 `native/frontend/web_page_fetch` 是真无头浏览器，但只注册给应用内 Agent，不投影到外部 MCP。
+不借用的方案，完整论证见 `docs/剪藏支持开发方案-2026-11-17.md`：内核 `forwardProxy` 是裸 HTTP 且本机配置为空、走直连；内核 MCP 的 `web_fetch` 同样是裸 HTTP，整页转 Markdown 不做正文抽取；Electron 的 `native/frontend/web_page_fetch` 是真无头浏览器，但只注册给应用内 Agent，不投影到外部 MCP；官方浏览器扩展没有任何对外通道，也没有传 URL 的能力。
 
 ## 索引模型
 

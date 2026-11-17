@@ -8,7 +8,7 @@
 - 无头浏览器评估最终结论：思源本体没有可直接借用的。内核 723 条路由无浏览器符号；内核自带 MCP 的 `web_fetch` 是裸 HTTP（`kernel/util/webfetch.go` 走 `ssrfSafeClient`，50000 字符截断，整页转 Markdown 不做正文抽取，本机实测微信返回 72 字符验证页、arXiv 与 GitHub 直接 fetch failed）；Electron 的 `app/electron/remote/webPageFetch.ts` 是真离屏浏览器，但注册为 `native/frontend/web_page_fetch`，条件写死在 `app/src/layout/dock/agent/frontendCapabilities.ts` 的 `#if !BROWSER && !MOBILE`，只给应用内 Agent，实测内核 MCP 的 31 个工具里没有它。
 - 浏览器扩展复用评估：放弃。官方扩展 `permissions` 只有 `contextMenus/storage/commands`，无 `externally_connectable`、无 `nativeMessaging`、无 `debugger`；`content.js` 读 `document.title`、`window.location.href`、`document.body`，只能剪当前已打开页面，从来没有传 URL 的能力。要用程序驱动需自带 Chromium，且 Playwright 文档明说 Chrome 和 Edge 已移除侧载扩展所需的命令行标志。
 - 文档落点：`ARCHITECTURE.md` 新增「第三方依赖」与「剪藏（从 URL 建文档）」两章，`siyuan_create` 参数表和数据流补 `source_url`；`DEVELOPMENT_GUIDE.md` 新增「修改剪藏支持时必须验证」11 条；`思源API.md` 能力分层补 `/api/extension/copy` 与 `/api/format/netImg2LocalAssets`；`SKILL.md`、`README.md`、`README.en-US.md`、`AGENTS.md` 任务路由同步。
-- 代码尚未改动。`docs/剪藏支持方案-2026-11-17.md` 保留到实现完成后按文档规范删除。
+- 专题文档重写为可指导开发的《剪藏支持开发方案》，旧的可行性草案删除。新文档按「背景与目标 → 核心设计决策 → 实现设计（链路/抓取/定位/清洗/转换/工具面/校验/失败处理/图片/写入位置/返回值）→ 依赖 → 能力边界 → 实现清单 → 未决与风险」组织，含 18 项实现清单。代码尚未改动。
 
 ## 2026-11-17 收集箱真实移出与删除实测
 

@@ -477,7 +477,7 @@ Error: invalid parameter
 
 ## 修改剪藏支持时必须验证
 
-剪藏指 `siyuan_create(source_url=...)`：抓取远端网页、抽出正文、交给内核转 Markdown、再走现有写入。方案与实测数据见 `docs/剪藏支持方案-2026-11-17.md`。
+剪藏指 `siyuan_create(source_url=...)`：抓取远端网页、抽出正文、交给内核转 Markdown、再走现有写入。完整开发方案、实测数据与实现清单见 `docs/剪藏支持开发方案-2026-11-17.md`。
 
 - 三个正文来源互斥：`markdown`、`markdown_file`、`source_url` 必须且只能给一个，多给或都不给在快照前报错。
 - 抓取在快照之前完成。抓取失败、HTTP 非 2xx、页面无正文、命中反爬验证页时拒绝写入，不创建快照。
