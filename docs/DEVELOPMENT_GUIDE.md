@@ -390,6 +390,9 @@ Error: invalid parameter
 - `default_block_replace` 必须明确旧块 ID 会失效。
 - `delete` / `default_block_replace` 必须检查目标块及其随同删除的子孙块 ID。
 - `default_block_replace` 的返回摘要不得把本轮已删除的旧块列入“新内容”，即使思源写后读取短暂返回旧块。
+- 单选列表项替换（含 `single_block_replace`）返回摘要必须展示整棵子树（父项 + 各级子项），不得只显示首块一行；`insert_after` 锚点带子树时摘要须显示实际插入内容。
+- `start_index` 与 `start_id` 必须同时提供，schema 描述与 Skill 均须写明"以免改错块"，缺一时报错并提示两者都传。
+- rename/move/copy/delete 后索引自动刷新须短延迟重试（最多三次），消除文件树落盘延迟导致的"自动刷新失败"偶发返回。
 - 公开 schema 不暴露旧名 `multi_block_replace`；后端别名仍可执行，但错误信息和工具描述不得再出现该旧名。
 - 表格编辑必须使用`row`和`column_index`坐标；引用视图必须提示不可直接回写。替换后表格数量减少时输出结构变化警告。
 - 表格源内容含裸换行或列边界异常时，table_edit在快照和写入前拒绝，不静默补齐/截断后写回；新输入单元格LF/CRLF/CR规范化为`<br>`，保留相邻列及行数。

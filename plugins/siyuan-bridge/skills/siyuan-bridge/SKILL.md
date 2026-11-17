@@ -46,7 +46,7 @@ description: Use when the user wants to read, search, or write their private SiY
 - 新写或直接编辑正文时传`markdown`，不要先写本地`.md`再导入。已有本地md才用`markdown_file`绝对路径；文件/图片上传multipart内容，目录保留原生本地链接且不递归，唯一文内标题锚点尽可能转为`siyuan://`块链接。独立附件用`insert_assets`。create/edit的`markdown_file`同样用`upload_large_files`承接256MiB及以上普通文件提示后的用户同意。
 - 用户给出网址要存进思源时，用`siyuan_create(source_url="<网址>", path="/Notebook/Doc", confirmed=true)`，不要自己抓网页再拼`markdown`。三个正文来源`markdown`/`markdown_file`/`source_url`必须且只能给一个。传`source_url`时`title`可省略，由页面标题决定；正文最前会加一行原文链接引用块；写入后图片默认本地化到思源资源库，下载失败的图保留外链、正文照常保存。一次只传一个网址，多个网址分多次调用；`siyuan_edit`不支持`source_url`。抓不到正文时会明确拒绝并说明原因（需要登录、JavaScript 渲染、微信图片消息页、反爬验证页、内网地址），此时改用浏览器扩展手动剪藏，不要重试或换路径硬写。
 - 面向用户说“第 N 块”前，必须先用 `siyuan_read(include_block_ids=true)` 读取当前文档。用户在思源页面看到的是同一套实时序号；文档被你或用户改过之后，旧序号立即失效，再次引用前必须重新读取。
-- 编辑已有文档前，先用 `siyuan_read(include_block_ids=true)` 进行引用阅读，并把返回的块序号和块 ID 作为 `siyuan_edit` 定位参数。面向用户用“第 25 块”即可，不要要求用户识别块 ID。
+- 编辑已有文档前，先用 `siyuan_read(include_block_ids=true)` 进行引用阅读，并把返回的块序号和块 ID 作为 `siyuan_edit` 定位参数。`start_index` 和 `start_id` 必须同时提供，两者来自同一引用阅读结果，缺一或错配会被拒绝，以免改错块。面向用户用“第 25 块”即可，不要要求用户识别块 ID。
 - 不必为了块 ID 本身改变编辑方案；只有被其他块引用的 ID 消失时才会影响用户。
 - 替换正文默认用 `default_block_replace`：删除旧块并创建带新 ID 的新块，不保留原格式。`single_block_replace` 只替换一个块内的文本，并保留该块 ID 和所有格式（如颜色、字号）；仅当必须保住该块引用时使用。
 - 引用阅读里列表块和每个列表项各占一个序号：列表项正文不带 `- ` 或 `1. ` 标记（任务勾选 `[ ]`、`[x]` 保留），缩进表示层级。编辑列表项时提交内容必须以 `- ` 或 `1. ` 开头，这个读写格式差异是有意的。只改一个列表项的文字用`single_block_replace`且不传终点，原文字段落整体替换，其他子块及其ID和属性保留；提交首行带`[x]`/`[ ]`时同步任务勾选。显式传入`end_index/end_id`会整棵替换，即使起终点相同。要重建整个列表或含子树替换，用 `default_block_replace` 选中列表块（整表替换）或选中从某个列表项到其同级项末代后代的范围；范围横跨不同父容器会被拒绝。想给列表项添加第一个子项，用 `single_block_replace` 提交带子列表的内容。

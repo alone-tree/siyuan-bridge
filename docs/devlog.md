@@ -1,5 +1,22 @@
 # SiYuan Bridge 项目工程文档
 
+## 2026-11-17 列表编辑三项体验修复
+
+- 用户验收列表编辑后提出三处改进，本轮实施：编辑返回摘要返回整个列表子树；doc_manage索引自动刷新加重试；start_index/start_id描述明确必须同时提供。
+- 改动1（摘要）：`mcp_server.py` 的 `siyuan_edit` 返回构建处，`single_block_replace` 目标为列表块/列表项（`l`/`i`）时，摘要"新内容"从只显示目标块一行改为按 `indent` 扫描输出整棵子树（父项+各级子项），与 `default_block_replace` 一致；非列表块仍按原块ID筛一行。解决多级嵌套替换后返回摘要看不到新子项的问题。
+- 改动2（索引刷新）：`siyuan_doc_manage` 写后刷新索引由单次 try/except 改为最多3次、每次间隔 `POST_WRITE_SYNC_INTERVAL`（0.25s），消除思源文件树落盘延迟导致的"已移动但索引自动刷新失败"偶发返回。失败三次仍返回手动refresh提示。
+- 改动3（描述）：`tool_specs()` 中 `start_index`/`start_id` 描述改为"Must be provided together with start_id/start_index ... avoid editing the wrong one"；Skill 同步补"必须同时提供，缺一或错配会被拒绝，以免改错块"；DEVELOPMENT_GUIDE「修改写入模型时必须验证」补三条契约。
+- 测试：新增3个单测（摘要整棵子树、spec描述、索引刷新一次失败后重试成功）。全量 `python -m pytest tests -q`：789 passed、1 skipped、12条既有locale警告（比改动前多3个）。相关回归202 passed。
+- 本轮未部署用户版、未bump版本、未推送、未发版；真实MCP复验见下一条。
+
+## 2026-11-17 WinError 10048 并发问题排查结论
+
+- 子代理独立排查（只读、未改项目文件）确认：10048 是偶发，不是每次并发必然；业务并发调用（siyuan_list/siyuan_read/siyuan_edit）零复现，只在 siyuan_start 重连时偶发。本会话 start 观测 12 次失败 2 次，约 1/6。
+- 三层对照：纯 HTTP 层（urllib 直连 127.0.0.1:6806）串行 20/20、8线程并发 20/20、突发 300 次 0 失败；MCP stdio 直连 McpServer.handle 重复 start 15/15 成功；经 DSH 能力库 mcp_call 通道则 start 偶发 10048，且并发被通道串行化（5 路 list 耗时阶梯 +2.5s）。定位为 DSH 能力库 mcp_call 通道与 stdio 进程交互的通道层问题，不是 SiYuan Bridge 源码、也不是思源内核 HTTP 服务。
+- deja 另证：该机走 127.0.0.1:17891 代理访问外部网站也出现同样 10048，说明是该机建连层通用现象，非思源桥独有；不排除临时端口耗尽为共同底层因素。
+- 结论：不作为 SiYuan Bridge 发版阻塞项；旧记录"并发或多次写入后会抛 10048"的因果描述证据不足，改以"start 重连时偶发"为准。桥代码 client.py 已是每次请求新建连接、无 Session 池，无需改动。
+- 证据见子代理返回（会话内消息），含实验次数、耗时、源码行号与 deja 会话ID f11c4f28、6f8456f6。
+
 ## 2026-11-17 剪藏原文链接改为可点击
 
 - 用户反馈：正文开头的「原文：URL」是纯文本，点不动。改为 Markdown 链接 `> 原文：[<URL>](<URL>)`，思源里可直接点击打开。
@@ -90,7 +107,7 @@
 - 完整结论、9 条缺陷（P1 两条、P2 四条、P3 三条）、已验证正常的行为、方案与内核不一致之处、尚未覆盖项，全部写在 `docs/列表块read-edit审计-2026-11-13.md`，此处不再重复。
 - 两条最影响使用的发现：范围起点为普通段落时范围校验不执行，delete 与 default_block_replace 都会带走未选中的列表项；列表项单选替换删除被外部引用的后续段落时不查反链，引用被静默打断。
 - 与方案不符的内核行为：删除列表最后一项后思源自动移除空列表块，方案 3.4 的「空列表块占一个序号」在思源 3.8.10 不会出现。
-- 环境观察：同一开发版连接上连续并发调用或多次写入后会抛 `WinError 10048`，需重新 `siyuan_start`；串行调用正常。
+- 环境观察：同一开发版连接上连续并发调用或多次写入后会抛 `WinError 10048`，需重新 `siyuan_start`；串行调用正常。（2026-11-17 后续排查修正：实为 `siyuan_start` 重连时偶发，业务并发不触发，根因在 DSH 能力库通道层，详见 devlog「WinError 10048 并发问题排查结论」）
 - 测试基线：`python -m pytest tests -q` 635 passed、1 skipped；`node tests/test_block_index.js` 通过 11 个共享用例。真实调用记录见 `read-edit-audit-probe/20261113/`（未跟踪）。
 
 ## 2026-11-13：能力库验证通道改为 DSH 优先

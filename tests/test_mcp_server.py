@@ -7259,6 +7259,73 @@ class McpServerListEditTests(McpServerWriteTests):
         finally:
             mcp_server.detect_active_profile = original
 
+    def test_single_replace_list_item_summary_shows_full_subtree(self):
+        # 单选列表项时，"新内容"必须展示整棵子树（父项 + 各级子项），
+        # 只显示父项一行会让 AI 无法确认提交的嵌套结构是否写入。
+        blocks = self._list_blocks()
+        server, client, original = self._server_and_client(query_sql_blocks=blocks)
+        original_block_type = client._block_type
+
+        def block_type_with_list(markdown):
+            text = str(markdown or "").strip()
+            if re.match(r"^([-*+]|\d+\.)[ \t]+", text):
+                return "i"
+            return original_block_type(markdown)
+
+        client._block_type = block_type_with_list
+        try:
+            result = self._edit(
+                server,
+                markdown="- 项2改\n  - 子项2.1改",
+            )
+            new_content = result.split("## 新内容", 1)[1]
+            self.assertIn("项2改", new_content)
+            self.assertIn("子项2.1改", new_content)
+        finally:
+            mcp_server.detect_active_profile = original
+
+    def test_edit_spec_requires_start_index_and_start_id_together(self):
+        spec = next(tool for tool in mcp_server.tool_specs() if tool["name"] == "siyuan_edit")
+        properties = spec["inputSchema"]["properties"]
+        self.assertIn(
+            "Must be provided together with start_id",
+            properties["start_index"]["description"],
+        )
+        self.assertIn(
+            "Must be provided together with start_index",
+            properties["start_id"]["description"],
+        )
+        self.assertIn("avoid editing the wrong one", properties["start_index"]["description"])
+
+    def test_doc_manage_refresh_retries_once_on_transient_failure(self):
+        # 移动后索引自动刷新偶发失败，短延迟重试一次应稳定为"已自动刷新"。
+        server, _client, original_detect = self._server_and_client()
+        original_refresh = mcp_server.refresh_index
+        original_interval = mcp_server.POST_WRITE_SYNC_INTERVAL
+        mcp_server.POST_WRITE_SYNC_INTERVAL = 0
+        attempts = {"n": 0}
+
+        def flaky_refresh(_client, _root, **kwargs):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise RuntimeError("transient file-tree lag")
+            return None
+
+        mcp_server.refresh_index = flaky_refresh
+        try:
+            result = server.siyuan_doc_manage({
+                "document": "/Main/Projects/Doc One",
+                "action": "move",
+                "target_parent": "/Main",
+                "confirmed": True,
+            })
+            self.assertIn("索引：已自动刷新", result)
+            self.assertEqual(attempts["n"], 2)
+        finally:
+            mcp_server.refresh_index = original_refresh
+            mcp_server.POST_WRITE_SYNC_INTERVAL = original_interval
+            mcp_server.detect_active_profile = original_detect
+
 
 if __name__ == "__main__":
     unittest.main()

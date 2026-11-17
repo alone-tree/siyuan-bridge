@@ -5901,10 +5901,21 @@ class McpServer:
 
         if action in {"single_block_replace", "default_block_replace"}:
             if action == "single_block_replace":
-                replaced = [
-                    block for block in new_display_blocks
-                    if block.id == target_blocks[0].id
-                ]
+                # 目标是列表项时，摘要必须展示整棵子树（父项 + 各级子项），
+                # 否则新提交的嵌套子项不会出现在"新内容"里，AI 无法确认写入结果。
+                first = target_blocks[0]
+                start_pos = block_index_by_id(new_display_blocks, first.id)
+                if start_pos is not None and first.type in ("l", "i"):
+                    replaced = [new_display_blocks[start_pos]]
+                    scan = start_pos + 1
+                    while scan < len(new_display_blocks) and new_display_blocks[scan].indent > first.indent:
+                        replaced.append(new_display_blocks[scan])
+                        scan += 1
+                else:
+                    replaced = [
+                        block for block in new_display_blocks
+                        if block.id == first.id
+                    ]
             else:
                 replaced = blocks_between_anchors(
                     new_display_blocks,
@@ -6291,11 +6302,17 @@ class McpServer:
 
         refresh_ok = False
         if action != "export":
-            try:
-                self._refresh_index_with_system_context(client)
-                refresh_ok = True
-            except Exception:
-                pass
+            # 思源移动/复制文档后文件树落盘有短暂延迟，立即刷新可能读到不一致状态。
+            # 失败后短等待再试，最多三次，避免"已移动但索引自动刷新失败"。
+            for refresh_attempt in range(3):
+                try:
+                    if refresh_attempt:
+                        time.sleep(POST_WRITE_SYNC_INTERVAL)
+                    self._refresh_index_with_system_context(client)
+                    refresh_ok = True
+                    break
+                except Exception:
+                    continue
 
         parts = [
             "# 文档管理已完成",
@@ -6783,8 +6800,8 @@ def tool_specs() -> list[dict[str, Any]]:
                     "document_path": {"type": "string", "description": "Document path including notebook name, e.g. /Notebook/Folder/Doc. A document ID is also accepted here. If the path is ambiguous, use document_id instead."},
                     "document_id": {"type": "string", "description": "Document ID fallback or disambiguator. If document_path is also provided, both must identify the same document."},
                     "action": {"type": "string", "enum": ["default_block_replace", "single_block_replace", "insert_after", "insert_before", "append", "delete", "table_edit", "insert_assets"], "description": "default_block_replace: delete the target block(s) and create new block(s) with new IDs, without preserving formatting. single_block_replace: replace the text of exactly one block and keep its ID and formatting (color, font size); only when that block is referenced by other blocks and those references must be kept. insert_after / insert_before: insert markdown next to an anchor. append: add to the end; no start_index/start_id. delete: remove one block or an inclusive range. table_edit: edit a normal Markdown table via table_edit. insert_assets: insert local files/folders after one anchor using assets. List blocks: always use default_block_replace on the whole list container (single_block_replace on it is rejected). One list item without end coordinates: single_block_replace replaces its text paragraphs and keeps other children; submitted markdown must start with '- ' or '1. ' even though read omits that marker. With explicit end_index/end_id, it rebuilds whole item subtrees, even when both endpoints match. A list-item range must end at a sibling item or its last descendant; ranges crossing containers or mixing a list container with other blocks are rejected."},
-                    "start_index": {"type": "integer", "description": "Global display block index from reference reading. Required except append."},
-                    "start_id": {"type": "string", "description": "Block ID from reference reading. Required except append."},
+                    "start_index": {"type": "integer", "description": "Global display block index from reference reading. Must be provided together with start_id (not needed for append); both are required to target the exact block and avoid editing the wrong one."},
+                    "start_id": {"type": "string", "description": "Block ID from reference reading. Must be provided together with start_index (not needed for append); both are required to target the exact block and avoid editing the wrong one."},
                     "end_index": {"type": "integer", "description": "Inclusive end display index for range operations. For a list item, passing end_index/end_id makes single_block_replace rebuild the whole subtree, even if equal to the start."},
                     "end_id": {"type": "string", "description": "Inclusive end block ID; pass together with end_index. Omit both to preserve a list item's existing children with single_block_replace."},
                     "markdown": {"type": "string", "description": "Body for default_block_replace, single_block_replace, insert_after, insert_before, and append. Content creating multiple sibling blocks requires default_block_replace. A single list item may contain continuation paragraphs, blank lines, and nested children. Mutually exclusive with markdown_file. Do not write a local .md file first and then import it."},
