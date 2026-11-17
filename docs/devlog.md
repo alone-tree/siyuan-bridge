@@ -1,5 +1,12 @@
 # SiYuan Bridge 项目工程文档
 
+## 2026-11-17 收集箱方案核对：修正两处事实错误
+
+- 核对收集箱支持时先只查了 `/api/inbox/*` 就断言「收集箱纯云端、本地无副本」，被用户指出不应是纯云端。复查补上本地闪记通道：`kernel/util/working.go:250` 定义 `ShortcutsPath = home/.config/siyuan/shortcuts/`，`kernel/model/shortcuts.go:29` 读 `shortcuts/shorthands` 目录，`MoveLocalShorthands` 由 `AutoConsumeShorthandsJob` 定时消费，路由 `/api/filetree/moveLocalShorthands` 在 v3.5.0、v3.8.0、v3.8.10、master 存在，v3.0.0 不存在。思源官方用户指南术语表原文说明云端收集箱是「云端快速记录功能，通过微信发送或 API 调用将文本暂存到云端」，需订阅，与本地闪记并存。
+- 本机实测：`C:\Users\Zinger\.config\siyuan\shortcuts` 不存在，全盘无 `shortcuts` 目录；`conf.fileTree.shorthandSavePath` 与 `shorthandSaveBox` 均为空串；前端构建包中 `moveLocalShorthands` 引用 0 次。当前收集箱只有云端 2 条（`1794880590020` "没有人会逼一棵树说话" 2026-11-17 09:56、`1792243354103` 朋友圈反着发 2026-10-17 21:22）。
+- 另一处判定错误：用 `conf.user` 判断账号未登录。实际登录态加密存在 `conf.userData`，内核 `Conf.GetUser()` 解密；以 `getShorthands` 正常返回数据可证已登录。已把这两条写入 `DEVELOPMENT_GUIDE.md` 已知真实错误模式第15、16条，并在 `ARCHITECTURE.md` 历史踩坑表补两行。
+- 方案草案 `docs/收集箱支持方案-2026-11-17.md` 同步修正：补充本地闪记事实、撤销「不兼容本地速记」的决策。未改任何源码，未提交。
+
 ## 2026-11-17 反馈#29：文档定位参数改为document_path/document_id
 
 - 用户反馈把`path`传给`siyuan_read`时只报“document/document_id参数是必填的”，提示词与真实参数名不一致。按用户要求公开参数改为`document_path`与`document_id`，旧`document`只在源码里静默兼容并归一，不出现在schema、Skill、报错和文档中。

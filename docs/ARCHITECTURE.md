@@ -1128,6 +1128,8 @@ API 设计原则：
 | 跨文档块引用断裂            | 已对 multi/delete/overwrite/文档树删除实现写前反链检查；默认拒绝，用户明确允许后可 `reference_policy=break` |
 | 数据库/属性视图             | 只读渲染为 Markdown 表格，不支持编辑             |
 | rename/move 路径同步延迟    | 写入后用 `getHPathByID` 短轮询，再带系统上下文刷新索引 |
+| 收集箱只有云端一套          | 错。云端剪藏（`/api/inbox/*`）与本地闪记（`/api/filetree/moveLocalShorthands` + `home/.config/siyuan/shortcuts/shorthands/`）并存，v3.5.0 起有本地闪记 |
+| 用 `conf.user` 判断登录态   | 错。登录态在 `conf.userData`（加密），应以需要登录的接口是否可用为准 |
 
 ## 短期开发计划
 

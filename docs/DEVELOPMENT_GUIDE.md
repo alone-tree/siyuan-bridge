@@ -692,6 +692,8 @@ python scripts/verify.py
 12. 思源插件第一版的 `bridge/` 目录由同步脚本生成，不是发布 ZIP；不要把旧 ZIP 流程误当成当前插件实现路径。
 13. 测试空间里的思源插件目录不是源码，不得直接编辑。正确流程是修改仓库 `siyuan-plugin/`，再整体导入测试空间。
 14. 思源只把 `siyuan-plugin/index.js` 当单文件执行。根入口改成 ESM，或 `require("./xxx.js")` 拆本地模块，都会让插件加载失败、设置齿轮消失。根入口只能 `require("siyuan")`，运行时逻辑必须内联；`block-index.js` 这类文件只给 Node 测试用。
+15. 同名的思源概念常有多套实现，只查一套就下结论会误判。收集箱至少有两个来源：云端剪藏（`/api/inbox/*`，微信/API 暂存，需订阅）和本地闪记（`/api/filetree/moveLocalShorthands` + `home/.config/siyuan/shortcuts/shorthands/`，v3.5.0 起）。两者入口、存储位置、移动方式都不同。核对功能归属时，先查思源官方用户指南（`app/guide`）和 `kernel/apicontract` 的契约定义，再查 `kernel/api` 与前端构建包；只看其中一处不足以判断「本地还是云端」。
+16. 判断思源账号是否登录不能只看 `conf.user`。登录态加密存放在 `conf.userData`，内核 `Conf.GetUser()` 解密后使用；`conf.user` 字段在运行时配置里通常不存在。判断登录状态的可执行方法是调用一个需要登录的接口（如 `/api/inbox/getShorthands`），或检查 `userData` 是否非空。
 
 ## 版本号管理
 
