@@ -18,6 +18,7 @@ from urllib.request import Request, urlopen
 
 from .cli import load_live_docs
 from .client import SiYuanApiError, SiYuanClient, SiYuanConnectionError, SiYuanTimeoutError
+from .clip import ClipError, clip_url
 from .config import Profile, detect_active_profile, load_config
 from .image_processing import prepare_image
 from .sync import NativeSync
@@ -205,6 +206,25 @@ _ERR_ASSET_INSERT = "api:asset_insert"
 _ERR_MARKDOWN_CONFLICT = "validation:markdown_conflict"
 _ERR_FILE_READ = "api:file_read"
 _ERR_INBOX_UNAVAILABLE = "api:inbox_unavailable"
+_ERR_INVALID_URL = "validation:invalid_url"
+_ERR_BLOCKED_ADDRESS = "validation:blocked_address"
+_ERR_CLIP_FETCH_FAILED = "api:clip_fetch_failed"
+_ERR_CLIP_TOO_LARGE = "api:clip_too_large"
+_ERR_CLIP_NO_CONTENT = "api:clip_no_content"
+_ERR_CLIP_BLOCKED = "api:clip_blocked"
+_ERR_CLIP_CONVERT_FAILED = "api:clip_convert_failed"
+_ERR_CLIP_IMAGE_FAILED = "api:clip_image_failed"
+
+# clip.py 内部使用的错误码到 MCP 错误码的映射
+_CLIP_ERROR_CODES = {
+    "validation:invalid_url": _ERR_INVALID_URL,
+    "validation:blocked_address": _ERR_BLOCKED_ADDRESS,
+    "validation:missing_param": _ERR_MISSING_PARAM,
+    "api:clip_fetch_failed": _ERR_CLIP_FETCH_FAILED,
+    "api:clip_too_large": _ERR_CLIP_TOO_LARGE,
+    "api:clip_no_content": _ERR_CLIP_NO_CONTENT,
+    "api:clip_blocked": _ERR_CLIP_BLOCKED,
+}
 
 
 DOCUMENT_ID_PATTERN = re.compile(r"\d{14}-[0-9a-z]{7}")
@@ -261,6 +281,20 @@ def normalize_new_document_markdown(title: str, markdown: str) -> str:
     return markdown
 
 
+@dataclass
+class ClippedSource:
+    url: str
+    raw_title: str
+    title: str
+    markdown: str
+
+
+def prepend_source_line(markdown: str, url: str) -> str:
+    """在正文最前面插入原文出处引用块。必须在 H1 去重之后调用。"""
+    body = markdown.lstrip("\n")
+    return f"> 原文：{url}\n\n{body}"
+
+
 def read_markdown_file(path: str) -> str:
     """Read a local Markdown file, decoding utf-8 -> gbk -> gb18030 in order."""
     file_path = Path(path)
@@ -277,20 +311,50 @@ def read_markdown_file(path: str) -> str:
     raise tool_error(_ERR_FILE_READ, f"无法解码文件：{path}（已尝试 utf-8 / gbk / gb18030）")
 
 
-def resolve_markdown_input(args: dict[str, Any], require: bool) -> str:
-    """Resolve markdown content from `markdown` or `markdown_file` (mutually exclusive)."""
+def resolve_markdown_input(
+    args: dict[str, Any], require: bool, *, allow_source_url: bool = False
+) -> str:
+    """Resolve markdown from `markdown` / `markdown_file` / (`source_url` when allowed).
+
+    `source_url` 只是占位：三个来源必须且只能给一个，真正的抓取由调用方在快照前完成。
+    """
     markdown = args.get("markdown")
     markdown_file = args.get("markdown_file")
+    source_url = args.get("source_url")
     has_markdown = markdown is not None and str(markdown) != ""
     has_file = markdown_file is not None and str(markdown_file).strip() != ""
-    if has_markdown and has_file:
-        raise tool_error(_ERR_MARKDOWN_CONFLICT, "markdown 与 markdown_file 只能填写一个，请二选一。")
+    has_url = source_url is not None and str(source_url).strip() != ""
+
+    if has_url and not allow_source_url:
+        raise tool_error(
+            _ERR_INVALID_TYPE,
+            "source_url 参数无效：本工具不支持从网址抓取，只有 siyuan_create 支持。"
+            "如需把网页存进思源，请改用 siyuan_create(source_url=\"<网址>\", confirmed=true)。",
+        )
+
+    provided = [
+        name for name, flag in (
+            ("markdown", has_markdown),
+            ("markdown_file", has_file),
+            ("source_url", has_url),
+        ) if flag
+    ]
+    if len(provided) > 1:
+        options = "markdown、markdown_file、source_url" if allow_source_url else "markdown 与 markdown_file"
+        raise tool_error(
+            _ERR_MARKDOWN_CONFLICT,
+            f"正文来源只能填写一个，当前同时传了 {'、'.join(provided)}。请在 {options} 中只选一个。",
+        )
     if has_file:
         return read_markdown_file(str(markdown_file).strip())
     if has_markdown:
         return str(markdown)
+    if has_url:
+        # 抓取由调用方完成；这里只确认来源合法
+        return ""
     if require:
-        raise tool_error(_ERR_MISSING_PARAM, "需要提供 markdown 或 markdown_file（二者填一个）。")
+        options = "markdown、markdown_file 或 source_url" if allow_source_url else "markdown 或 markdown_file"
+        raise tool_error(_ERR_MISSING_PARAM, f"需要提供 {options}（只能填一个）。")
     return ""
 
 
@@ -4779,10 +4843,6 @@ class McpServer:
         if not confirmed:
             raise tool_error(_ERR_NOT_CONFIRMED, "需要 confirmed=true。写入思源必须经过用户明确确认。")
 
-        title = str(args.get("title") or "").strip()
-        if not title:
-            raise tool_error(_ERR_MISSING_PARAM, "title 参数是必填的")
-
         inbox_name = self._inbox_notebook_name()
         if split_inbox_path(str(args.get("path") or ""), inbox_name) is not None:
             raise tool_error(
@@ -4790,9 +4850,22 @@ class McpServer:
                 f"/{inbox_name} 是收集箱虚拟笔记本，不能写入。收集箱只支持移出或删除条目。",
             )
 
-        markdown = resolve_markdown_input(args, require=True).strip()
+        # 正文来源三选一。source_url 的抓取必须在快照之前完成。
+        source_url = str(args.get("source_url") or "").strip()
+        markdown = resolve_markdown_input(args, require=True, allow_source_url=True).strip()
+        clip_result: ClippedSource | None = None
+        if source_url:
+            clip_result = self._clip_source(source_url)
+            markdown = clip_result.markdown
+
+        title = str(args.get("title") or "").strip()
+        if not title and clip_result is not None:
+            title = clip_result.title
+        if not title:
+            raise tool_error(_ERR_MISSING_PARAM, "title 参数是必填的")
+
         if not markdown:
-            raise tool_error(_ERR_MISSING_PARAM, "markdown 或 markdown_file 内容不能为空。")
+            raise tool_error(_ERR_MISSING_PARAM, "正文内容不能为空。")
 
         if_exists = str(args.get("if_exists") or "reject").strip().casefold()
         if if_exists not in {"reject", "overwrite", "create_new"}:
@@ -4874,6 +4947,9 @@ class McpServer:
 
         # Normalize markdown to avoid duplicate H1
         markdown = normalize_new_document_markdown(title, markdown)
+        # 原文出处引用块必须在 H1 去重之后再插入，否则去重逻辑会把第一行的引用块当成正文开头
+        if clip_result is not None:
+            markdown = prepend_source_line(markdown, clip_result.url)
         if not markdown.strip():
             raise tool_error(_ERR_MISSING_PARAM, "markdown 参数是必填的")
 
@@ -4919,6 +4995,16 @@ class McpServer:
         if doc_id:
             sync_status = self._wait_for_hpath(client, doc_id, target.internal_path)
 
+        clip_image_status = ""
+        if clip_result is not None and doc_id:
+            try:
+                client.net_img2_local_assets(doc_id)
+                clip_image_status = "已请求本地化（图片下载失败时保留外链，正文不受影响）"
+            except Exception as exc:
+                clip_image_status = f"本地化失败，图片保留外链：{exc}"
+        elif clip_result is not None:
+            clip_image_status = "未取得文档 ID，跳过图片本地化，图片保留外链"
+
         markdown_file_path = str(args.get("markdown_file") or "").strip()
         link_result = MarkdownLinkProcessResult()
         if markdown_file_path:
@@ -4960,6 +5046,11 @@ class McpServer:
         ]
         if doc_id:
             parts.append(f"**文档 ID：**`{doc_id}`")
+        if clip_result is not None:
+            parts.append(f"**剪藏来源：**{clip_result.url}")
+            if clip_result.raw_title != title:
+                parts.append(f"**页面原标题：**{clip_result.raw_title}")
+            parts.append(f"**图片本地化：**{clip_image_status}")
         if action_status == "created_new":
             if doc_id:
                 parts.append(f"注意：新文档与已有文档同名，后续请使用document_id=\"{doc_id}\"定位，不要仅使用路径。")
@@ -4985,6 +5076,40 @@ class McpServer:
         if report:
             parts.append(report)
         return "\n".join(parts)
+
+    def _clip_source(self, source_url: str) -> ClippedSource:
+        """抓取网页、清洗、交给内核转 Markdown。全部在快照之前完成。
+
+        任何一步失败都直接抛错，不写思源、不创建快照。
+        """
+        try:
+            page = clip_url(source_url)
+        except ClipError as exc:
+            code = _CLIP_ERROR_CODES.get(exc.code, _ERR_CLIP_FETCH_FAILED)
+            raise tool_error(code, str(exc)) from exc
+
+        client = self._require_active_client()
+        try:
+            markdown = client.extension_copy(page.html, page.url, clip_type="article", assets=False)
+        except SiYuanApiError as exc:
+            raise tool_error(
+                _ERR_CLIP_CONVERT_FAILED,
+                f"内核转换正文失败：{exc}。"
+                "该转换接口属思源内部接口，若内核版本不兼容请改用浏览器扩展手动剪藏。",
+            ) from exc
+
+        if not markdown.strip():
+            raise tool_error(
+                _ERR_CLIP_NO_CONTENT,
+                "内核没有从该页面转出正文，可能是脚本渲染页面。请改用浏览器扩展手动剪藏。",
+            )
+
+        return ClippedSource(
+            url=page.url,
+            raw_title=page.title,
+            title=page.title,
+            markdown=markdown,
+        )
 
     @staticmethod
     def _create_snapshot_or_raise(client: Any, tool: str, target: str) -> str:
@@ -6627,21 +6752,22 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "siyuan_create",
-            "description": "Create or write a SiYuan document. Prefer path as the full readable path including notebook name, e.g. /Notebook/Folder/Doc. Requires confirmed=true and creates a workspace snapshot before writing. After writing, waits for the target path and refreshes the safe index. Pass new body text with markdown. The cloud inbox virtual notebook is read-only and rejects writes.",
+            "description": "Create or write a SiYuan document. Prefer path as the full readable path including notebook name, e.g. /Notebook/Folder/Doc. Requires confirmed=true and creates a workspace snapshot before writing. After writing, waits for the target path and refreshes the safe index. Pass new body text with markdown, or pass source_url to save a web page. The cloud inbox virtual notebook is read-only and rejects writes.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "notebook_id": {"type": "string", "description": "Optional notebook ID. Required only when path is an internal notebook path or when the notebook name in a full path is ambiguous."},
-                    "title": {"type": "string", "description": "Document title."},
+                    "title": {"type": "string", "description": "Document title. Required unless source_url is used, in which case it defaults to the page title."},
                     "path": {"type": "string", "description": "Preferred: full readable path /Notebook/Folder/Doc. With notebook_id, legacy internal path /Folder/Doc is also accepted. If omitted, notebook_id is required and path defaults to /<title> inside that notebook."},
-                    "markdown": {"type": "string", "description": "Default. Markdown body to write. Mutually exclusive with markdown_file. Do not write a local .md file first and then import it."},
-                    "markdown_file": {"type": "string", "description": "Pass a local absolute path instead of markdown. Use only when importing or inserting an existing local .md file into SiYuan. After insertion, images and attachments in that file are uploaded to SiYuan, and relative references inside the file are rewritten to siyuan:// block links when possible. Do not create a temporary .md just to insert it; prefer the markdown parameter when editing."},
+                    "markdown": {"type": "string", "description": "Default. Markdown body to write. Mutually exclusive with markdown_file and source_url. Do not write a local .md file first and then import it."},
+                    "markdown_file": {"type": "string", "description": "Pass a local absolute path instead of markdown. Use only when importing or inserting an existing local .md file into SiYuan. After insertion, images and attachments in that file are uploaded to SiYuan, and relative references inside the file are rewritten to siyuan:// block links when possible. Do not create a temporary .md just to insert it; prefer the markdown parameter when editing. Mutually exclusive with markdown and source_url."},
+                    "source_url": {"type": "string", "description": "Fetch a web page and use its body as the document content. Mutually exclusive with markdown and markdown_file. When set, title is optional and defaults to the page title. A line with the original link is added at the top of the document. Images in the page are downloaded into the SiYuan asset library; images that fail to download keep their original link and do not block the document. Fetching happens before the snapshot, so a failed fetch writes nothing. Pages that need login or JavaScript rendering cannot be fetched and the call fails; tell the user to use the browser extension instead. One URL per call."},
                     "upload_large_files": {"type": "boolean", "default": False, "description": "For insert_assets or markdown_file imports. Resume files at or above SiYuan native 256 MiB prompt threshold only after explicit user approval. Default false pauses before snapshot, writing or upload; directories are not size-scanned."},
                     "if_exists": {"type": "string", "enum": ["reject", "overwrite", "create_new"], "default": "reject", "description": "Behavior when the target path already exists. reject refuses and explains options. overwrite clears all existing blocks and appends markdown, preserving document ID. create_new creates another same-name document."},
                     "reference_policy": {"type": "string", "enum": ["reject", "break"], "default": "reject", "description": "For overwrite only. reject refuses when any disappearing block ID is referenced. Use break only after the user explicitly confirms that those reported references may be broken."},
                     "confirmed": {"type": "boolean", "description": "Must be true. Writing to SiYuan requires explicit user approval."},
                 },
-                "required": ["title", "confirmed"],
+                "required": ["confirmed"],
                 "additionalProperties": False,
             },
         },

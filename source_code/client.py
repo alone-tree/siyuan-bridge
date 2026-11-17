@@ -618,6 +618,47 @@ class SiYuanClient:
             return {}
         return data
 
+    def extension_copy(self, dom: str, href: str, *, clip_type: str = "article", assets: bool = False) -> str:
+        """内核 lute 把已抓好的 HTML 片段转成 Markdown。
+
+        `/api/extension/copy` 自 v3.0.0 起存在，不在官方 API 文档内，属内核内部接口；
+        内核自己的 MCP 与浏览器扩展都在用它。multipart 表单，返回 `data.md`。
+        """
+        boundary = "siyuan-bridge-" + uuid.uuid4().hex
+        fields = (("dom", dom), ("href", href), ("clipType", clip_type),
+                  ("assets", "true" if assets else "false"))
+        chunks: list[bytes] = []
+        for name, value in fields:
+            chunks.append(
+                f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8")
+            )
+            chunks.append(value.encode("utf-8"))
+            chunks.append(b"\r\n")
+        chunks.append(f"--{boundary}--\r\n".encode("ascii"))
+        body = b"".join(chunks)
+        headers = {
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Content-Length": str(len(body)),
+            "Connection": "close",
+        }
+        if self.token:
+            headers["Authorization"] = f"Token {self.token}"
+        data = self._post_once("/api/extension/copy", body, headers, include_envelope=True)
+        payload = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(payload, dict):
+            raise SiYuanApiError("Unexpected extension/copy response shape")
+        markdown = payload.get("md")
+        if not isinstance(markdown, str):
+            raise SiYuanApiError("extension/copy 未返回 md 字段")
+        return markdown
+
+    def net_img2_local_assets(self, doc_id: str) -> None:
+        """把文档内的网络图片下载到本地资源库并改写引用。
+
+        返回 `{"code":0,"msg":"","data":null}`，没有逐项结果。
+        """
+        self._post("/api/format/netImg2LocalAssets", {"id": doc_id}, timeout=120.0, retry=False)
+
     def push_msg(self, msg: str, timeout: int = 7000) -> None:
         self._post("/api/notification/pushMsg", {"msg": msg, "timeout": timeout})
 
