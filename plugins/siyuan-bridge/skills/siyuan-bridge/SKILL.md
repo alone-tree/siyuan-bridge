@@ -36,7 +36,7 @@ description: Use when the user wants to read, search, or write their private SiY
 - `siyuan_operate(action="read_guide")` —— 用 `guide="workspace_index"` 获取索引创建／更新指南，`guide="mcp_usage"` 获取使用原则。返回启动语言的完整内置正文，无需读取本机文件；不会读取思源笔记。
 - `siyuan_find` —— 搜索知识库，通过思源 API 实时搜索后经隐私规则过滤返回结果。搜索文本参数是 `query`。默认 `mode=query`，使用思源原生查询语法：空格表示 AND；探索主题、近义词或相关概念时显式使用 OR，例如 `GPU OR 光模块 OR NVLink`。含连字符等特殊字符的词会按 FTS5 规则自动加引号，例如 `Scale-out` 会按 `"Scale-out"` 发送。需要模式匹配或结构化查询时再使用 `regex` / `sql`。`sql` 使用思源只读 SQL 搜索，返回块 ID（`id` 列）对应的真实可见内容；适合按类型、时间或结构筛选块。按 SQL 原顺序展示前 20 条可见命中，不合并文档；正文块完整返回，文档展开前 20 个展示块，更多用 `siyuan_read`。图片只保留地址，嵌入 SQL 不展开。若提示上游截断，保留排序按提示使用 SQL LIMIT/OFFSET 继续，不能按可见命中数推进 OFFSET；不会自动补足 20 条。`scope/limit/max_snippets_per_doc` 仅控制 query/regex。命中文档带文档属性标签时会以 `tag：#名称#` 展示。
 - `siyuan_read` —— 只读取可见文档；隐藏文档和隐私规则文档即使已知 ID 也不会被读取。
-- `siyuan_read`/`siyuan_edit`/`siyuan_doc_manage`使用路径定位时会校验思源当前真实路径。外部UI改名或移动后主动refresh；若提示路径已过期，先调用`siyuan_operate(action="refresh")`，再用新路径重试，或只传`document_id`。同时传路径和ID时，以ID消歧并检查一致性，不会静默忽略冲突。
+- 文档定位只有两个参数：`document_path`传完整可读路径，`document_id`传文档 ID；两者都能识别纯 ID，只记得 ID 时直接传给 `document_path` 也可以。`siyuan_read`/`siyuan_edit`/`siyuan_doc_manage`使用路径定位时会校验思源当前真实路径。外部UI改名或移动后主动refresh；若提示路径已过期，先调用`siyuan_operate(action="refresh")`，再用新路径重试，或只传`document_id`。同时传路径和ID时，以ID消歧并检查一致性，不会静默忽略冲突。
 - `siyuan_list` —— 无参数或 `path="/"` 时列出可见笔记本；其他路径列出直接子文档及有效权限。`read_write` 可写，`read_only` 只能读取、复制或导出；隐私规则文档和隐藏内容不会出现在列表中。
 - `siyuan_create`、`siyuan_edit` —— 写入工具。始终 `confirmed=true`。写入前自动创建思源工作空间快照。默认不写入，除非用户明确要求。
 - `siyuan_create` 优先传完整可读路径 `path=/Notebook/Folder/Doc`；只有笔记本名称重名或使用内部路径时才补充 `notebook_id`。目标已存在时默认 `if_exists=reject`，可显式用 `overwrite` 清空块后重写并保留文档 ID，或用 `create_new` 新增同名文档。
@@ -58,7 +58,7 @@ description: Use when the user wants to read, search, or write their private SiY
 - `siyuan_operate(action=refresh)`刷新安全索引及字数/块数，不清理`ai_workspace/`；只有`siyuan_start`在新会话启动时清理。
 - `siyuan_operate(action=sync)`遵循原生配置和同步源预检；原生提示要求选择时先把预览交给用户，当次同意上传才传`upload=true`、下载传`upload=false`，无默认方向。普通同步省略`upload`，source非空而cloudID空的原生空云端分支自动上传。不要自行猜方向或手填内部state；重新连接后旧选择清空。只读、未配置密钥或未启用同步时按原生指引让用户设置，不自动修改。
 - 同步默认等待10秒，可用`timeout_seconds`调整到5-120秒。超时或连接失败时同步可能已经开始，不自动重试；先核对原生状态，HTTP成功也不能直接宣称同步完成。
-- 想知道“本文档引用了哪些块”，使用 `siyuan_operate(action="check_forward_references", document="/Notebook/Folder/Doc")`；想知道“哪些块引用了本文档”，改用 `action="check_backward_references"`。路径歧义时改传 `document_id`，不要传 `direction`。两者覆盖文档 ID、全部真实正文块 ID、块引用、可识别嵌入块和 `siyuan://` 块链接，也计入本篇内部引用。正向按目标文档展示目标块，反向按来源文档展示来源块；子文档递归汇总次数，不展开块详情。默认各展示 10 篇可见对端/子文档，`limit="none"` 查看全部，展示限制不影响关系总数。隐藏对端只计关系次数，不披露文档数、路径、ID 或内容。两个 action 均只读，不需要 `confirmed`。
+- 想知道“本文档引用了哪些块”，使用 `siyuan_operate(action="check_forward_references", document_path="/Notebook/Folder/Doc")`；想知道“哪些块引用了本文档”，改用 `action="check_backward_references"`。路径歧义时改传 `document_id`，不要传 `direction`。两者覆盖文档 ID、全部真实正文块 ID、块引用、可识别嵌入块和 `siyuan://` 块链接，也计入本篇内部引用。正向按目标文档展示目标块，反向按来源文档展示来源块；子文档递归汇总次数，不展开块详情。默认各展示 10 篇可见对端/子文档，`limit="none"` 查看全部，展示限制不影响关系总数。隐藏对端只计关系次数，不披露文档数、路径、ID 或内容。两个 action 均只读，不需要 `confirmed`。
 - `siyuan_bridge_feedback` —— 通过对话提交对思源桥 MCP 的反馈。type 为 bug/feature/idea，title 和 description 必填，contact 可选。不修改思源内容，不需要 confirmed=true，即使思源未启动也可使用（只要配置了遥测端点）。
 - 系统笔记本 `思源桥` / `SiYuan Bridge` 只维护用户个性化要求、工作空间索引、关于思源桥、隐私规则四篇文档。MCP 使用指南和索引创建指南来自 `templates/guides/` 代码资产，随插件版本更新；笔记本里的历史同名文档不作为指南读取。
 - 系统笔记本由思源插件激活时维护，不由 MCP 创建。若启动包警告普通系统文档缺失，可以继续工作并提醒用户重新启用插件；若 Privacy Rules 缺失，必须停止并按错误提示让用户禁用后重新启用插件。

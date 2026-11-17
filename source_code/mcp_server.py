@@ -187,6 +187,38 @@ _ERR_MARKDOWN_CONFLICT = "validation:markdown_conflict"
 _ERR_FILE_READ = "api:file_read"
 
 
+DOCUMENT_ID_PATTERN = re.compile(r"\d{14}-[0-9a-z]{7}")
+
+
+def normalize_document_locator_args(args: dict[str, Any]) -> dict[str, Any]:
+    """把文档定位归一成document_path/document_id两种；document仅作静默兼容。
+
+    定位串形如思源文档ID时按ID处理，否则按路径处理。显式传document_id时
+    与ID形态的document冲突要当场报错，不能让其中一个被静默丢弃。
+    """
+    raw_path = args.get("document_path")
+    if raw_path is not None and str(raw_path).strip():
+        return args
+    if args.get("document") is None:
+        return args
+    value = str(args.get("document") or "").strip()
+    if not value:
+        return args
+    document_id = str(args.get("document_id") or "").strip()
+    normalized = dict(args)
+    normalized.pop("document", None)
+    if not value.startswith("/") and DOCUMENT_ID_PATTERN.fullmatch(value):
+        if document_id and document_id != value:
+            raise tool_error(
+                _ERR_MISMATCH,
+                "document与document_id指向不同文档。请只保留一个定位参数：document_path传路径，document_id传文档ID。",
+            )
+        normalized["document_id"] = value
+    else:
+        normalized["document_path"] = value
+    return normalized
+
+
 def tool_error(code: str, message: str) -> ValueError:
     """创建一个附带遥测 error_code 的 ValueError。"""
     exc = ValueError(message)
@@ -3172,9 +3204,10 @@ class McpServer:
 
     def _resolve_reference_document(self, args: dict[str, Any], client: Any) -> dict[str, Any]:
         action = str(args.get("action") or "").strip().casefold()
-        locator = str(args.get("document") or args.get("document_id") or "").strip()
+        args = normalize_document_locator_args(args)
+        locator = str(args.get("document_path") or args.get("document_id") or "").strip()
         if not locator:
-            raise tool_error(_ERR_MISSING_PARAM, f"action={action} 需要 document 或 document_id。")
+            raise tool_error(_ERR_MISSING_PARAM, f"action={action} 需要 document_path 或 document_id。")
         if locator == "/":
             raise tool_error(_ERR_WRONG_TARGET, f"action={action} 只接受文档，不能使用 /。")
 
@@ -4285,7 +4318,8 @@ class McpServer:
         return text
 
     def resolve_visible_document(self, args: dict[str, Any]) -> dict[str, Any]:
-        document = str(args.get("document") or "").strip()
+        args = normalize_document_locator_args(args)
+        document = str(args.get("document_path") or "").strip()
         document_id = str(args.get("document_id") or "").strip()
         if document and document_id:
             doc = self.resolve_visible_document({"document_id": document_id})
@@ -4300,13 +4334,13 @@ class McpServer:
                 _, candidates = resolve_document(visible_docs, document)
                 matches = any(str(candidate.get("id") or "") == document_id for candidate in candidates)
             if not matches:
-                raise tool_error(_ERR_MISMATCH, "document与document_id不匹配。请核对定位参数；若仅按ID定位，请只传document_id。")
+                raise tool_error(_ERR_MISMATCH, "document_path与document_id不匹配。请核对定位参数；若仅按ID定位，请只传document_id。")
             if document.startswith("/"):
                 self._ensure_document_path_current(doc, document)
             return doc
         locator = str(document or document_id or args.get("locator") or "").strip()
         if not locator:
-            raise tool_error(_ERR_MISSING_PARAM, "document/document_id 参数是必填的")
+            raise tool_error(_ERR_MISSING_PARAM, "document_path 或 document_id 参数是必填的")
         locator_is_path = locator.startswith("/")
         docs = filter_documents(load_docs(self.root), load_privacy_rules(self.root))
         if locator_is_path:
@@ -4318,7 +4352,7 @@ class McpServer:
             if exact_display_path:
                 if len(exact_display_path) > 1:
                     choices = "\n".join(f"- `{doc.get('id')}` {display_document_path(doc)}" for doc in exact_display_path)
-                    raise tool_error(_ERR_AMBIGUOUS, f"文档路径存在歧义，请补充 document_id：\n{choices}")
+                    raise tool_error(_ERR_AMBIGUOUS, f"文档路径存在歧义，请改用 document_id：\n{choices}")
                 doc = exact_display_path[0]
                 if is_privacy_rules_document(
                     str(doc.get("hpath", "")),
@@ -4975,7 +5009,7 @@ class McpServer:
             )
         if action == "insert_assets":
             supported_parameters = {
-                "document", "document_id", "action", "start_index", "start_id",
+                "document_path", "document", "document_id", "action", "start_index", "start_id",
                 "end_index", "end_id", "assets", "upload_large_files", "confirmed",
             }
             unsupported_parameters = [
@@ -6160,8 +6194,8 @@ def tool_specs() -> list[dict[str, Any]]:
                     "guide": {"type": "string", "enum": ["mcp_usage", "workspace_index"], "description": "Required for action=read_guide only. mcp_usage: general usage principles; workspace_index: how to create or update the Workspace Index. Returns the complete bundled guide in the startup language, without local file access by the AI client."},
                     "timeout_seconds": {"type": "integer", "default": 10, "description": "For action=sync only. How long to wait for SiYuan built-in sync to return, 5-120 seconds. Does not change SiYuan sync behavior."},
                     "upload": {"type": "boolean", "description": "For action=sync only, after requires_choice. Ask the user to choose upload (true) or download (false) for the displayed native preview, then repeat on the same connection. No default direction; never infer it. Omit to show or retain the pending choice."},
-                    "document": {"type": "string", "description": "For either reference query. Preferred document path including notebook name. Existing unique-title and unique-partial locator compatibility is preserved."},
-                    "document_id": {"type": "string", "description": "For either reference query. Document ID fallback when the path is ambiguous or unavailable. If document is also provided, it must identify the same document. A body block ID is rejected."},
+                    "document_path": {"type": "string", "description": "For either reference query. Document path including notebook name, e.g. /Notebook/Folder/Doc. Unique-title and unique-partial locator matching is still accepted."},
+                    "document_id": {"type": "string", "description": "For either reference query. Document ID fallback when the path is ambiguous or unavailable. If document_path is also provided, it must identify the same document. A body block ID is rejected."},
                     "limit": {
                         "anyOf": [
                             {"type": "integer", "minimum": 1},
@@ -6213,8 +6247,8 @@ def tool_specs() -> list[dict[str, Any]]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "document": {"type": "string", "description": "Document path including notebook name, e.g. /Notebook/Folder/Doc. Preferred for reading and editing workflows."},
-                    "document_id": {"type": "string", "description": "Document ID fallback or disambiguator. If document is also provided, both must identify the same document."},
+                    "document_path": {"type": "string", "description": "Document path including notebook name, e.g. /Notebook/Folder/Doc. Preferred locator for reading. A document ID is also accepted here if you only have the ID."},
+                    "document_id": {"type": "string", "description": "Document ID fallback or disambiguator. If document_path is also provided, both must identify the same document."},
                     "block_start": {"type": "integer", "default": 1, "description": "Starting display block index (1-based). Default 1 reads from the first block."},
                     "block_limit": {"type": "integer", "default": DEFAULT_BLOCK_LIMIT, "description": "Maximum display blocks to return in this window, 1–1000."},
                     "token_budget": {"type": "integer", "default": DEFAULT_TOKEN_BUDGET, "description": "Estimated text budget for pagination, including outline, block IDs and paths. Image tokens are estimated separately by delivered dimensions and included in the reported total; an original image's slices are never split across calls. At least one complete plain block is returned."},
@@ -6251,8 +6285,8 @@ def tool_specs() -> list[dict[str, Any]]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "document": {"type": "string", "description": "Document path including notebook name, e.g. /Notebook/Folder/Doc. If ambiguous, use document_id instead."},
-                    "document_id": {"type": "string", "description": "Document ID fallback or disambiguator. If document is also provided, both must identify the same document."},
+                    "document_path": {"type": "string", "description": "Document path including notebook name, e.g. /Notebook/Folder/Doc. A document ID is also accepted here. If the path is ambiguous, use document_id instead."},
+                    "document_id": {"type": "string", "description": "Document ID fallback or disambiguator. If document_path is also provided, both must identify the same document."},
                     "action": {"type": "string", "enum": ["default_block_replace", "single_block_replace", "insert_after", "insert_before", "append", "delete", "table_edit", "insert_assets"], "description": "default_block_replace: delete the target block(s) and create new block(s) with new IDs, without preserving formatting. single_block_replace: replace the text of exactly one block and keep its ID and formatting (color, font size); only when that block is referenced by other blocks and those references must be kept. insert_after / insert_before: insert markdown next to an anchor. append: add to the end; no start_index/start_id. delete: remove one block or an inclusive range. table_edit: edit a normal Markdown table via table_edit. insert_assets: insert local files/folders after one anchor using assets. List blocks: always use default_block_replace on the whole list container (single_block_replace on it is rejected). One list item without end coordinates: single_block_replace replaces its text paragraphs and keeps other children; submitted markdown must start with '- ' or '1. ' even though read omits that marker. With explicit end_index/end_id, it rebuilds whole item subtrees, even when both endpoints match. A list-item range must end at a sibling item or its last descendant; ranges crossing containers or mixing a list container with other blocks are rejected."},
                     "start_index": {"type": "integer", "description": "Global display block index from reference reading. Required except append."},
                     "start_id": {"type": "string", "description": "Block ID from reference reading. Required except append."},
@@ -6306,8 +6340,8 @@ def tool_specs() -> list[dict[str, Any]]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "document": {"type": "string", "description": "Document path including notebook name, e.g. /Notebook/Folder/Doc. Preferred."},
-                    "document_id": {"type": "string", "description": "Document ID fallback or disambiguator. If document is also provided, both must identify the same document."},
+                    "document_path": {"type": "string", "description": "Document path including notebook name, e.g. /Notebook/Folder/Doc. A document ID is also accepted here. Preferred."},
+                    "document_id": {"type": "string", "description": "Document ID fallback or disambiguator. If document_path is also provided, both must identify the same document."},
                     "action": {"type": "string", "enum": ["create_notebook", "rename", "move", "delete", "copy", "export", "set_tags"], "description": "create_notebook: create an empty notebook; requires notebook_name; does not create a document; rejects duplicate names. rename: rename a document; requires new_title and read_write. move: move a document subtree; requires target_parent and read_write; rejected if the source inherits non-read_write restrictions or the target parent is not read_write. delete: delete a document subtree, not a notebook; every descendant must be read_write; checks backlinks. copy: duplicate the source document only, not children; requires target_path; allowed for readable documents. export: write Markdown to ai_workspace/exports; does not modify SiYuan; allowed for readable documents. set_tags: replace the document's tags entirely; requires tags and read_write."},
                     "notebook_name": {"type": "string", "description": "Required for action=create_notebook. Exact name of the new notebook."},
                     "new_title": {"type": "string", "description": "Required for action=rename."},

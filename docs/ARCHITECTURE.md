@@ -369,8 +369,8 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 
 核心数据流：
 
-1. 用 `document` 或 `document_id` 解析可见文档。
-2. 如果 `document` 是路径，按文档 ID 查询思源当前 hpath；路径已变化时停止并要求 refresh 后用新路径重试，或改用 `document_id`。
+1. 用 `document_path` 或 `document_id` 解析可见文档；定位串形如思源文档ID时自动按ID处理。
+2. 如果定位串是路径，按文档 ID 查询思源当前 hpath；路径已变化时停止并要求 refresh 后用新路径重试，或改用 `document_id`。
 3. 临时打开所属笔记本。
 4. 用 `/api/block/getChildBlocks` 按思源真实顺序构建展示块列表；`query_embed` 仅绑定惰性解析器。
 5. 构建全文大纲，并按 `block_start`、`block_limit` 选择连续展示块窗口。
@@ -565,7 +565,7 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 | `guide` | enum | read_guide 必填 | `mcp_usage`（使用原则）/ `workspace_index`（创建与更新索引）；其他 action 不使用 |
 | `timeout_seconds` | integer | 10 | 仅 `action=sync` 使用，等待思源内置同步返回的秒数，范围 5-120 |
 | `upload` | boolean | 不设默认值 | 仅原生同步提示要求当次选择时传入；true上传，false下载；省略不代表选择任一方向 |
-| `document` | string | 空 | 仅两个引用查询 action 使用；优先传包含笔记本名称的文档路径 |
+| `document_path` | string | 空 | 仅两个引用查询 action 使用；优先传包含笔记本名称的文档路径，传纯文档ID也可识别 |
 | `document_id` | string | 空 | 仅两个引用查询 action 使用；路径歧义或不可用时的文档 ID 兜底 |
 | `limit` | integer / `"none"` | 10 | 仅两个引用查询 action 使用；分别限制可见对端文档和有引用关系的可见子文档的展示数量，不限制关系总数；整数最小 1、无最大值 |
 
@@ -613,7 +613,8 @@ Workspace Index 仍为占位内容时，启动包提示 AI 询问用户是否创
 当前实现差距：
 
 - 当前设计已明确：只有 `siyuan_start` 会清理 `ai_workspace`，`siyuan_operate(action=refresh)` 不清理。refresh 可能发生在 AI 工作途中，中途清理 workspace 会误删附件、导出文件或临时工作材料。旧 devlog 和旧说明文档中仍可能保留相反历史表述，迁移时需要剔除，避免继续暗示 refresh 会清理 workspace。
-- 通用文档定位器同时收到`document`与`document_id`时，先按可见文档ID消歧义，再校验路径或定位符确实包含该文档；冲突返回`validation:mismatch`。双参数路径仍检查live hpath，隐藏文档和Privacy Rules不因ID消歧而放行。
+- 公开定位参数只有`document_path`与`document_id`，旧名`document`仅静默兼容、不出现在schema与报错。源码内的兼容入口是`normalize_document_locator_args`：`document`的值形如`YYYYMMDDHHMMSS-xxxxxxx`时转成ID，否则转成路径；显式`document_id`与该ID不一致时返回`validation:mismatch`并提示只保留一个参数。不传`document_path`但传了`document`属正常兼容路径，不算同时传参冲突。
+- 通用文档定位器同时收到路径与`document_id`时，先按可见文档ID消歧义，再校验路径或定位符确实包含该文档；冲突返回`validation:mismatch`。双参数路径仍检查live hpath，隐藏文档和Privacy Rules不因ID消歧而放行。
 
 ## `siyuan_list`
 
@@ -705,8 +706,8 @@ scope：
 
 | 参数                  | 类型    | 默认  | 含义                                        |
 | --------------------- | ------- | ----- | ------------------------------------------- |
-| `document`          | string  | 空    | 首选，完整可读路径 `/Notebook/Folder/Doc` |
-| `document_id`       | string  | 空    | 路径歧义或不可用时使用                      |
+| `document_path`     | string  | 空    | 首选，完整可读路径 `/Notebook/Folder/Doc`；传纯文档ID也按ID识别 |
+| `document_id`       | string  | 空    | 路径歧义、不可用或需要消歧时使用             |
 | `block_start`       | integer | 1     | 起始展示块序号                              |
 | `block_limit`       | integer | 200   | 最大展示块数量                              |
 | `token_budget`      | integer | 10000 | 文字分页预算；图片估算另计并报告合计 |
@@ -830,7 +831,7 @@ scope：
 
 | 参数            | 类型    | 默认                    | 含义                   |
 | --------------- | ------- | ----------------------- | ---------------------- |
-| `document`    | string  | 可选                    | 完整可读路径           |
+| `document_path` | string  | 可选                  | 完整可读路径；传纯文档ID也可识别 |
 | `document_id` | string  | 可选                    | 文档 ID fallback       |
 | `action`      | enum    | 必填                    | 编辑动作               |
 | `start_index` | integer | action 非 append 时必填 | 引用阅读中的起始块序号 |
@@ -861,7 +862,7 @@ scope：
 数据流：
 
 1. 校验 `confirmed=true` 和 action。
-2. 解析可见文档；如果 `document` 是路径，先校验当前 live hpath，路径已变化时停止并要求 refresh 后重试。
+2. 解析可见文档；如果定位串是路径，先校验当前 live hpath，路径已变化时停止并要求 refresh 后重试。
 3. 检查权限必须为 `read_write`。
 4. 用 `getChildBlocks` 重新构建引用阅读展示块。
 5. 校验 `start_index/start_id` 是否匹配当前文档。
@@ -967,7 +968,7 @@ scope：
 
 | 参数              | 类型    | 默认             | 含义                                                       |
 | ----------------- | ------- | ---------------- | ---------------------------------------------------------- |
-| `document`      | string  | 可选             | 源文档完整路径                                             |
+| `document_path` | string  | 可选             | 源文档完整路径；传纯文档ID也可识别                          |
 | `document_id`   | string  | 可选             | 源文档 ID fallback                                         |
 | `action`        | enum    | 必填             | `create_notebook` / `rename` / `move` / `delete` / `copy` / `export` / `set_tags` |
 | `notebook_name` | string  | create_notebook 必填 | 新笔记本名称                                            |
@@ -994,7 +995,7 @@ scope：
 
 1. `create_notebook` 在文档定位前单独处理：校验名称、确认状态和隐私权限，读取 live 笔记本列表拒绝同名项，创建快照后调用 `createNotebook`，再刷新安全索引；该 action 不同时创建文档。
 2. 其他 action 解析可见源文档。
-3. 如果 `document` 是路径，先校验当前 live hpath，路径已变化时停止并要求 refresh 后用新路径重试。
+3. 如果定位串是路径，先校验当前 live hpath，路径已变化时停止并要求 refresh 后用新路径重试。
 4. 计算源文档权限。
 5. 根据 action 校验 confirmed 和参数；delete 写入前从思源 live SQL 拉取源文档子树并逐篇检查权限，再检查整棵子树中所有将消失的文档/块 ID 的外部反链；move 写入前检查源文档祖先链和目标父路径权限。
 6. `export` 直接导出 Markdown 到 `ai_workspace/exports/` 的自包含目录，并把 `assets/...` 改写为 `./assets/...`，不创建快照。

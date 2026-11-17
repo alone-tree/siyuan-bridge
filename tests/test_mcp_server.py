@@ -451,6 +451,36 @@ class McpServerTests(unittest.TestCase):
         server._active_client = client
         return server, client, mcp_server.detect_active_profile
 
+    def test_document_path_and_document_id_are_the_only_locators(self):
+        for args, expected in (
+            ({"document_path": "/Main/Projects/Doc One"}, "doc1"),
+            ({"document_path": "doc1"}, "doc1"),
+            ({"document_path": "/Main/Projects/Doc One", "document_id": "doc1"}, "doc1"),
+        ):
+            with self.subTest(args=args):
+                server, _, _ = self._server_and_client()
+                self.assertEqual(expected, server.resolve_visible_document(dict(args))["id"])
+
+    def test_legacy_document_alias_is_accepted_without_appearing_in_schema(self):
+        server, _, _ = self._server_and_client()
+        for legacy in ({"document": "/Main/Projects/Doc One"}, {"document": "doc1"}):
+            with self.subTest(legacy=legacy):
+                self.assertEqual("doc1", server.resolve_visible_document(dict(legacy))["id"])
+        for tool in ("siyuan_read", "siyuan_edit", "siyuan_doc_manage", "siyuan_operate"):
+            spec = next(item for item in mcp_server.tool_specs() if item["name"] == tool)
+            properties = spec["inputSchema"]["properties"]
+            self.assertIn("document_path", properties)
+            self.assertNotIn("document", properties)
+
+    def test_document_path_ambiguity_and_mismatch_are_reported_by_new_names(self):
+        server, _, _ = self._server_and_client()
+        with self.assertRaisesRegex(ValueError, "document_path与document_id不匹配"):
+            server.resolve_visible_document({"document_path": "/Main/Projects/Doc One", "document_id": "doc2"})
+        with self.assertRaisesRegex(ValueError, "document_path 或 document_id"):
+            server.resolve_visible_document({})
+        with self.assertRaisesRegex(ValueError, "请只保留一个定位参数"):
+            server.resolve_visible_document({"document": "20260501151942-wjlifut", "document_id": "doc1"})
+
     def test_feedback6_id_disambiguates_same_path_and_still_checks_live_path(self):
         docs_path = self.root / "knowledge_base" / "docs.jsonl"
         docs = [json.loads(line) for line in docs_path.read_text(encoding="utf-8").splitlines()]
@@ -790,7 +820,8 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("grouped by source document", properties["action"]["description"])
         self.assertIn("within the same document", properties["action"]["description"])
         self.assertIn("without cleaning ai_workspace", properties["action"]["description"])
-        self.assertIn("document", properties)
+        self.assertIn("document_path", properties)
+        self.assertNotIn("document", properties)
         self.assertIn("document_id", properties)
         self.assertEqual(properties["guide"]["enum"], ["mcp_usage", "workspace_index"])
         self.assertEqual(properties["limit"]["default"], 10)

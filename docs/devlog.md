@@ -1,5 +1,12 @@
 # SiYuan Bridge 项目工程文档
 
+## 2026-11-17 反馈#29：文档定位参数改为document_path/document_id
+
+- 用户反馈把`path`传给`siyuan_read`时只报“document/document_id参数是必填的”，提示词与真实参数名不一致。按用户要求公开参数改为`document_path`与`document_id`，旧`document`只在源码里静默兼容并归一，不出现在schema、Skill、报错和文档中。
+- 归一规则集中在`normalize_document_locator_args`：值形如思源文档ID时转成ID，否则转成路径；这样`document_path`既能收路径也能收纯ID，提高兼容性。`siyuan_read`、`siyuan_edit`、`siyuan_doc_manage`、`siyuan_operate`的引用查询都经`resolve_visible_document`或`_resolve_reference_document`进入同一归一入口，`doc_manage`的`create_notebook`仍不需要文档定位。显式`document_id`与ID形态的旧`document`冲突时返回`validation:mismatch`并提示只保留一个参数。
+- 同步更新`docs/ARCHITECTURE.md`的定位规则与四处参数表、`docs/DEVELOPMENT_GUIDE.md`的定位校验要求、Skill的调用说明；README与内置指南未出现具体定位参数示例，无需改动。
+- 新增3组回归用例覆盖新参数、纯ID、旧名兼容、schema不暴露旧名以及歧义与冲突报错。全量`python -m pytest tests -q`：716 passed、1 skipped、12条既有locale弃用警告。未推送、未发版；待开发版MCP实测后再补真实验证记录。
+
 ## 2026-11-16 反馈#28：同步与附件上传原生对齐
 
 - 按用户确认的“思源原生行为优先”处理。同步补齐原生配置/来源检查、普通模式、空云端来源和方向选择；不默认选方向、不自动修改同步设置、不重试同步或有索引副作用的来源预览。前置连接失败沿用清连接/start指引，只有实际同步阶段沿用专用超时/连接错误。
