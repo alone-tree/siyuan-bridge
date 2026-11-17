@@ -9,9 +9,46 @@ AGENTS.md文件是入口导航，不替代架构文档和开发指南。它告�
 
 代码修改后必须要在相应文档记录，但禁止将所有相关信息不加选择写入AGENTS.md文档。本文档务必保持精简。专门、详细的内容需要转移到对应文档，并提供精确到标题的指引。
 
+
+## 开发核心约束
+
+- 思源原生行为优先：涉及思源操作，先核对思源官方规范【重要提示：先读开发者手册，再看源码】及当前前端、内核实现，尽可能复用其原生流程，保持行为和结果一致，不自行发明规则。包括但不限于：上传文件、图片、文件夹、点击同步、移动删除复制文档等，均以思源自身实现为准。确需偏离时，先说明差异并由用户确认。
+- MCP-first：用户功能通过 MCP 工具暴露，CLI没有专门优化，只作早期开发诊断使用。
+- 确认后可写：写入工具必须要求用户明确写入意图和 `confirmed=true`，写入前创建思源快照。
+- 恢复要求：项目不提供 AI 自动回滚/checkout。写入后如需恢复，只能提示用户通过思源快照手动恢复；不要让 AI 调用高风险恢复接口。
+- 不自动启动思源：连接失败只提示用户手动打开思源，不鼓励AI查找程序路径。在开发时，务必保留错误返回信息中的相关说明，不要省略“让用户启动”等关键表述。
+- Privacy Rules 硬隔离：任何操作都需要在执行前经隐私规则过滤。源码写死隐藏Privacy Rules文档，AI 不可读取、搜索或编辑 Privacy Rules 文档。
+- 系统笔记本四篇固定文档按各自生命周期维护；旧 AI Guide 按原 ID 更名为 User Preferences；定位一律按文档名匹配（当前名 + 历史名）；MCP 使用指南与索引创建指南是代码资产（`templates/guides/`），不是系统文档。详见 `docs/ARCHITECTURE.md` 的「系统笔记本」。
+- 关闭笔记本透明打开/关闭：索引、搜索和写入前可临时打开关闭的笔记本，完成后必须恢复。
+- 工作区可能有用户改动：不要回滚、删除或重置非本任务改动。
+- README 单一来源：根目录 `README.md`（中文）是唯一客观来源，`README.en-US.md` 根据它翻译；`siyuan-plugin/README*.md` 只能由 `scripts/build_package.py` 自动同步，禁止手动维护。
+- 插件根入口 `siyuan-plugin/index.js` 必须是单文件 CommonJS：只能 `require("siyuan")`，禁止 `import` 和 `require("./xxx.js")`。违者插件加载失败、设置齿轮消失。细节见 `docs/FRONTEND.md`。
+
+## 协作规则
+
+除非用户明确要求修复、实现、改代码、跑测试、提交或执行其他具体操作，否则只查看相关文档和代码，做只读分析说明，不要擅自行动。
+
+回复必须精简、明确、直接。不要绕圈子，不要输出无关铺垫。尽可能节省输出token，只提供影响决策的必要信息。
+
+用户只负责把控大的业务方向。不要拿技术细节去浪费用户的精力（看不懂也不想看）。不要用技术的语言去询问用户。
+
+用户需要的是在前期讨论的时间尽可能投入、集中精力，把所有要决策的问题都定下来（plan 模式）。不要一边开发一边问用户。这会极大的浪费用户时间等待AI，而不能去做其他事情。
+
+
+
+用户希望的协作流程是：
+1. 用户提出大概需求
+2. AI给出方案初稿（可行性报告、大概的实现设计等），并和用户讨论重大业务分歧
+4. 用户定稿
+5. 用户明确告知AI：开始执行【这一步不可以省略】
+6. AI按设计方案执行、验收、交付用户。不要在执行中途卡住等待用户回复（用户可能很久之后才会回来）
+7. 用户检查，没问题就发版，有问题就重新提需求、讨论、定方案、执行。
+
+第5步之前，用户的注意力会被持续占用。在开始之后才能释放。除非用户明确允许，否则不要在这一步之前就去做耗费时间超过60秒的工作。如果必要，需要先明确告知用户“我需要花一些时间去检查、探索、测试”。
+
 ## 必读流程
 
-任何时候（查看代码、讨论方案、排障、改代码），先同步远端（`git fetch`，必要时 `git pull`），确保基于最新代码工作；拿旧代码讨论没有意义。
+任何时候（查看代码、讨论方案、排障、改代码），先同步远端（`git fetch`，必要时 `git pull`），确保基于最新代码工作；拿旧代码讨论没有意义。fetch不算修改本地代码（因为已经在别处改过了），与只读不矛盾。
 
 不要猜测代码可能的样子和实现方式，不管是本项目还是思源笔记的接口、思源插件注册规则都不要自己猜。如果有任何不清楚不确定的地方，直接阅读代码以及相应说明文档。必要时先搜索网络资料。
 
@@ -58,6 +95,19 @@ CodeGraph 的退回顺序固定为：
 | 插件前端 UI、消息通知、用户反馈 | `docs/FRONTEND.md`（根 `index.js` 只能 `require("siyuan")`，禁止 ESM 和 `require("./xxx.js")`） | `siyuan-plugin/index.js`；`siyuan-plugin/src/index.js`；`siyuan-plugin/index.css`；`siyuan-plugin/plugin.json` |
 | 未决定的想法、待评估 idea | `docs/IDEAS.md` | 定案后再迁移到 `ARCHITECTURE.md` 或 `DEVELOPMENT_GUIDE.md` |
 | 思源页面显示与 AI 一致的实时块序号 | `docs/ARCHITECTURE.md` 的“阅读模型”；`docs/FRONTEND.md` 的“块序号显示” | 运行时内联在 `siyuan-plugin/index.js`；Node 测试用 `siyuan-plugin/block-index.js`；`tests/fixtures/display_block_index_cases.json` |
+| 撰写宣传材料、产品定位、README 文案 | 本节下方「手写宣传资料参考」；思源桥笔记本里的三篇手写原帖 | 用 siyuan_read 只读参考，不改变原文；优先沿用用户手写的语气和判断 |
+
+## 手写宣传资料参考
+
+用户手写的三篇思源桥宣传帖已剪藏到思源笔记本「思源桥」，写 README、宣传语、产品介绍前先读。只从思源桥笔记本读取，不要用测试笔记本。
+
+| 思源文档路径 | 文档 ID | 写作定位 |
+|---|---|---|
+| /思源桥/思源MCP是什么，以及你有哪些选择 | `20261117165430-84imzpy` | 横向对比官方 MCP、sisyphus、思源桥，用真实场景差异讲设计理念；场景列表最全 |
+| /思源桥/借鉴Claude Code开发思源MCP工具（分享设计思路与心得体会） | `20261117165443-amc4rdk` | 工具设计来源、Edit 工具迭代、把复杂封装在内部；理念叙事最完整 |
+| /思源桥/我做了一个思源桥，让AI像读代码一样读我的笔记 | `20261117165528-7y0c1jj` | 面向普通用户的通俗介绍，以 AI 为中心而非以笔记为中心 |
+
+原文：https://ld246.com/article/1785319302029 、 https://ld246.com/article/1780911033554 、 https://ld246.com/article/1777909344378
 
 涉及设计决策、工具契约、开发流程或排障结论时，不要只更新代码。必须同步更新对应文档。
 
@@ -113,45 +163,6 @@ docs/                架构、开发指南、前端、API、idea、devlog
   architecture-map.html 人类可读产品架构图，整体架构大改时同步更新
 ```
 
-## 开发核心约束
-
-- 思源原生行为优先：涉及思源操作，先核对思源官方规范及当前前端、内核实现，尽可能复用其原生流程，保持行为和结果一致，不自行发明规则。包括但不限于：上传文件、图片、文件夹、点击同步、移动删除复制文档等，均以思源自身实现为准。确需偏离时，先说明差异并由用户确认。
-- MCP-first：用户功能通过 MCP 工具暴露，CLI没有专门优化，只作早期开发诊断使用。
-- 确认后可写：写入工具必须要求用户明确写入意图和 `confirmed=true`，写入前创建思源快照。
-- 恢复要求：项目不提供 AI 自动回滚/checkout。写入后如需恢复，只能提示用户通过思源快照手动恢复；不要让 AI 调用高风险恢复接口。
-- 不自动启动思源：连接失败只提示用户手动打开思源，不鼓励AI查找程序路径。在开发时，务必保留错误返回信息中的相关说明，不要省略“让用户启动”等关键表述。
-- Privacy Rules 硬隔离：任何操作都需要在执行前经隐私规则过滤。源码写死隐藏Privacy Rules文档，AI 不可读取、搜索或编辑 Privacy Rules 文档。
-- 系统笔记本四篇固定文档按各自生命周期维护；旧 AI Guide 按原 ID 更名为 User Preferences；定位一律按文档名匹配（当前名 + 历史名）；MCP 使用指南与索引创建指南是代码资产（`templates/guides/`），不是系统文档。详见 `docs/ARCHITECTURE.md` 的「系统笔记本」。
-- 关闭笔记本透明打开/关闭：索引、搜索和写入前可临时打开关闭的笔记本，完成后必须恢复。
-- 工作区可能有用户改动：不要回滚、删除或重置非本任务改动。
-- README 单一来源：根目录 `README.md`（中文）是唯一客观来源，`README.en-US.md` 根据它翻译；`siyuan-plugin/README*.md` 只能由 `scripts/build_package.py` 自动同步，禁止手动维护。
-- 插件根入口 `siyuan-plugin/index.js` 必须是单文件 CommonJS：只能 `require("siyuan")`，禁止 `import` 和 `require("./xxx.js")`。违者插件加载失败、设置齿轮消失。细节见 `docs/FRONTEND.md`。
-
-## 协作规则
-
-除非用户明确要求修复、实现、改代码、跑测试、提交或执行其他具体操作，否则只查看相关文档和代码，做只读分析说明，不要擅自行动。
-
-回复必须精简、明确、直接。不要绕圈子，不要输出无关铺垫。尽可能节省输出token，只提供影响决策的必要信息。
-
-## Windows 命令
-
-Windows 上读取中文、输出中文、处理复杂引号或避免 PowerShell 编码问题时，优先使用 CMD UTF-8 包装：
-
-```bat
-cmd /d /s /c "chcp 65001 >nul && <command>"
-```
-
-示例：
-
-```bat
-cmd /d /s /c "chcp 65001 >nul && type AGENTS.md"
-cmd /d /s /c "chcp 65001 >nul && rg -n ""关键词"" AGENTS.md"
-cmd /d /s /c "chcp 65001 >nul && python -m pytest tests -q"
-```
-
-不要使用默认 `Get-Content AGENTS.md` 读取中文，不要把终端乱码误判为文件损坏。
-
-复杂命令优先拆成简单命令，避免多层 shell 引号。Windows CMD 不支持 Bash heredoc，不能用 `python - <<PY`。PowerShell 字符串中变量后紧跟冒号时要写成 `${p}:...`，不要写 `$p:...`。
 
 ## 常用入口
 
@@ -186,9 +197,9 @@ python -m pytest tests -q
 
 普通 MCP 代码改动默认运行单元测试后，把能力库里已经注册的 `siyuan-bridge-dev` 从 `disabled` 改为 `on-demand` 再 `mcp_load`，实际调用受影响工具验证。禁止新建思源桥 MCP，禁止使用用户版做开发验证；用完把 `siyuan-bridge-dev` 改回 `disabled`。只验证代码能运行或只看 `tools/list` 不算行为验证。只有必须在思源本体 UI 中观察的功能（例如插件前端）才把当前源码导入 `D:\Siyuan2test`，并把已注册的 `siyuan-bridge-test` 改为 `on-demand`，由人类手动打开思源查看；不要为普通 MCP 行为测试启动或部署测试工作空间。大型修改或用户明确要求时，再增加子代理独立调用验证。名字、档位切换和禁止新建注册项见 `docs/DEVELOPMENT_GUIDE.md` 的「DSH 能力库中的三个思源桥」。
 
-## 更新到本地思源
+## 更新到本地思源进行测试
 
-### 用户版（生产环境，不覆盖配置）
+### 模拟升级，不覆盖配置
 
 ```powershell
 # 1. 关思源
@@ -196,12 +207,12 @@ python -m pytest tests -q
 Get-Process python -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'run_mcp' } | Stop-Process -Force
 
 # 3. 导入（不加 --fresh，保留插件数据区全部持久数据）
-python scripts/import_siyuan_plugin.py --workspace D:/siyuan2
+python scripts/import_siyuan_plugin.py --workspace D:/Siyuan2test
 
 # 4. 开思源
 ```
 
-### 测试版（干净重装）
+### 干净重装
 
 ```powershell
 python scripts/import_siyuan_plugin.py --workspace D:/Siyuan2test --fresh
