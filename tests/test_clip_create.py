@@ -72,7 +72,7 @@ class SourceUrlCreateTests(unittest.TestCase):
         notebook, path, written = client._created_docs[0]
         self.assertEqual(path, "/文章")
         # 原文引用块在最前，重复 H1 已被去掉
-        self.assertTrue(written.startswith("> 原文：https://example.com/a"))
+        self.assertTrue(written.startswith("> 原文：[https://example.com/a](https://example.com/a)"))
         self.assertNotIn("# 页面标题", written)
         self.assertIn("正文内容", written)
         self.assertIn("剪藏来源", result)

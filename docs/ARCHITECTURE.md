@@ -430,7 +430,7 @@ source_url
 - 优先级 `og:title` → `<title>` → URL 末段（去掉查询串与扩展名）。传了 `source_url` 时 `title` 可选；用户显式传 `title` 时以用户为准。
 - 清洗交给内核，桥只去掉半角 `/`。依据 `kernel/api/filetree.go` 的 `documentBaseNameReplacer`：内核在 `createDocWithMd` 里删除文档名中的换行、`\u2028`、`\u2029`、制表符和半角 `/`，超过 512 rune 截断；`kernel/model/file.go` 的 `validateCreateDoc` 再做一次 `normalizeDocumentTitle`。桥必须自己去掉 `/`，因为它在桥这一侧的路径解析中是层级分隔符，会在到达内核之前把标题拆成两级目录。其余字符原样交给内核，桥不做中文标点转换、不做全角半角归一、不加额外截断。
 
-原文出处：正文最前面一行引用块 `> 原文：<URL>`。必须在 `normalize_new_document_markdown` 完成首 H1 去重之后再插入，否则去重逻辑会把引用块当成正文开头而失效，网页自带的 H1 会和文档标题重复。`if_exists=overwrite` 走同一套逻辑，引用块跟着重写，不累积多行。
+原文出处：正文最前面一行引用块 `> 原文：[<URL>](<URL>)`，URL 写成 Markdown 链接，思源里可直接点击打开。必须在 `normalize_new_document_markdown` 完成首 H1 去重之后再插入，否则去重逻辑会把引用块当成正文开头而失效，网页自带的 H1 会和文档标题重复。`if_exists=overwrite` 走同一套逻辑，引用块跟着重写，不累积多行。
 
 图片本地化：写入成功后对文档 ID 调用 `/api/format/netImg2LocalAssets`，内核下载并落盘到 `data/assets/`，正文外链自动改写为本地路径。实测阮一峰周刊 57 张图全部本地化、微信图文 21 张图本地化后 `mmbiz` 引用归零。该接口返回 `data: null`，没有逐项结果。下载失败的图保留外链，正文照常保存，不阻塞、不整篇报错；图片数量不设上限。
 
@@ -962,7 +962,7 @@ scope：
 8. `overwrite` 删除旧正文块前检查反链；存在外部引用时默认拒绝。
 9. 创建快照。
 10. 去掉与 title 重复的首个 H1，避免重复标题。
-11. 使用 `source_url` 时把 `> 原文：<URL>` 引用块插到正文最前（必须在第 10 步之后）。
+11. 使用 `source_url` 时把 `> 原文：[<URL>](<URL>)` 引用块插到正文最前（必须在第 10 步之后），URL 为可点击的 Markdown 链接。
 12. 创建文档或覆盖已有文档。
 13. 尝试 pushMsg。
 14. 用文档 ID 短轮询 `getHPathByID`，等待思源暴露目标人类可读路径。

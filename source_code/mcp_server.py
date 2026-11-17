@@ -290,9 +290,12 @@ class ClippedSource:
 
 
 def prepend_source_line(markdown: str, url: str) -> str:
-    """在正文最前面插入原文出处引用块。必须在 H1 去重之后调用。"""
+    """在正文最前面插入原文出处引用块。必须在 H1 去重之后调用。
+
+    URL 写成 Markdown 链接，思源里可直接点击打开。
+    """
     body = markdown.lstrip("\n")
-    return f"> 原文：{url}\n\n{body}"
+    return f"> 原文：[{url}]({url})\n\n{body}"
 
 
 def read_markdown_file(path: str) -> str:

@@ -487,7 +487,7 @@ Error: invalid parameter
 - 图片懒加载属性 `data-src`、`data-original`、`data-lazy-src`、`data-actualsrc` 必须提升为 `src`，否则微信 26 张图全部丢失。
 - 转换交给内核 `/api/extension/copy`（`clipType=article`，`assets=false`），不在 Python 侧做 HTML 转 Markdown。自研转换在实测中明显劣于内核。
 - 标题按内核规则清洗：页面标题先去半角 `/`（`/` 在桥这一侧是路径层级分隔符），其余换行、制表符、`\u2028`、`\u2029` 和 512 字截断交给内核。桥不做中文标点转换或全角半角归一。用户显式传 `title` 时以用户为准。
-- 原文出处用引用块 `> 原文：<URL>` 插在正文最前，必须在首 H1 去重之后插入。验证两点：引用块在第一位；网页自带的与标题相同的 H1 已被去掉，不重复。
+- 原文出处用引用块 `> 原文：[<URL>](<URL>)` 插在正文最前，URL 必须是可点击的 Markdown 链接而不是纯文本，必须在首 H1 去重之后插入。验证三点：引用块在第一位；URL 能点击；网页自带的与标题相同的 H1 已被去掉，不重复。
 - 建文档成功后默认对文档 ID 调用 `/api/format/netImg2LocalAssets` 本地化图片；失败不阻塞正文，按部分完成上报并保留文档 ID。下载失败的图片保留外链。
 - 图片消息页（`class="share_content_page"`、`js_base_container` 为空壳、且无 `#js_content`）必须明确拒绝并说明正文由 JS 渲染，不能把「知道了／微信扫一扫／取消／允许」这类壳文案当正文写入。实测两个样本（12 图、17 图）都属此类。
 - 反爬与 JS 壳站点（知乎、Medium、StackOverflow、今日头条、B站专栏、豆瓣文章等）必须给出可理解的报错，建议用户用浏览器扩展手动剪藏。
