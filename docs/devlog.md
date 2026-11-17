@@ -1,5 +1,15 @@
 # SiYuan Bridge 项目工程文档
 
+## 2026-11-17 剪藏方案定稿与依赖原则修订
+
+- 用户确认三项决策：`siyuan_create` 增加 `source_url` 参数（不新增第 10 个工具）；图片默认本地化；站点特殊处理只保留微信 `#js_content` 一条。
+- 依赖原则修正。原文写「Python Bridge 的连接、检索、文字读取和工具发现仍只依赖标准库」，容易被读成项目不做第三方依赖。实际 `source_code/image_runtime.py` 早就在用 Pillow 13.0.0，走固定 wheel 清单 + SHA-256 + PyPI/清华/阿里三源依次尝试。改为「最小外部依赖，不是零依赖」，并在 `ARCHITECTURE.md` 新增「第三方依赖」章节记录约束与当前清单，本地图片处理章节只留一句指向它，避免同一机制两处维护。
+- 微信图片消息页实测结论：不支持。`https://mp.weixin.qq.com/s/6mwhyTxtWBa6GUmaRa9iQQ` 的 17 张图在 `picture_page_info_list` 数组里（顶层对象正好 17 个，全 2160x2880），但正文容器 `js_base_container` 是空壳，由 JS 渲染；截图里的正文文字在整页 HTML 中命中 0 次，各种转义形式也是 0。对照 `https://mp.weixin.qq.com/s/2KmBNt2fD1j3sBpylT_Qaw`（12 图 + 正文）同样是 `share_content_page` 结构，`picture_page_info_list` 顶层对象正好 12 个，同样拿不到正文。用户裁决暂不管。
+- 无头浏览器评估最终结论：思源本体没有可直接借用的。内核 723 条路由无浏览器符号；内核自带 MCP 的 `web_fetch` 是裸 HTTP（`kernel/util/webfetch.go` 走 `ssrfSafeClient`，50000 字符截断，整页转 Markdown 不做正文抽取，本机实测微信返回 72 字符验证页、arXiv 与 GitHub 直接 fetch failed）；Electron 的 `app/electron/remote/webPageFetch.ts` 是真离屏浏览器，但注册为 `native/frontend/web_page_fetch`，条件写死在 `app/src/layout/dock/agent/frontendCapabilities.ts` 的 `#if !BROWSER && !MOBILE`，只给应用内 Agent，实测内核 MCP 的 31 个工具里没有它。
+- 浏览器扩展复用评估：放弃。官方扩展 `permissions` 只有 `contextMenus/storage/commands`，无 `externally_connectable`、无 `nativeMessaging`、无 `debugger`；`content.js` 读 `document.title`、`window.location.href`、`document.body`，只能剪当前已打开页面，从来没有传 URL 的能力。要用程序驱动需自带 Chromium，且 Playwright 文档明说 Chrome 和 Edge 已移除侧载扩展所需的命令行标志。
+- 文档落点：`ARCHITECTURE.md` 新增「第三方依赖」与「剪藏（从 URL 建文档）」两章，`siyuan_create` 参数表和数据流补 `source_url`；`DEVELOPMENT_GUIDE.md` 新增「修改剪藏支持时必须验证」11 条；`思源API.md` 能力分层补 `/api/extension/copy` 与 `/api/format/netImg2LocalAssets`；`SKILL.md`、`README.md`、`README.en-US.md`、`AGENTS.md` 任务路由同步。
+- 代码尚未改动。`docs/剪藏支持方案-2026-11-17.md` 保留到实现完成后按文档规范删除。
+
 ## 2026-11-17 收集箱真实移出与删除实测
 
 - 用户在收集箱放了13条后要求实测。`siyuan_doc_manage(action="move")`移出3条到`测试思源桥专用`，`action="delete"`删除1条，每次调用后`siyuan_list(path=/收集箱)`条数按预期递减（13→12→11→9），移出返回新文档ID与路径、快照created、索引已刷新。

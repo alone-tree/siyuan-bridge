@@ -129,7 +129,26 @@ tests/               单元测试
 
 `mcp_server.py` 当前承担过多职责：协议处理、工具 schema、文档定位、搜索富化、块展示、表格编辑、附件提取、写入操作都在同一文件中。后续会重构拆分，但重构必须保持 MCP 工具契约不变。
 
-Python Bridge 的连接、检索、文字读取和工具发现仍只依赖标准库。图片处理使用自动获取的私有 Pillow 二进制组件，不执行 pip、不修改系统 Python，准备流程见「本地图片处理」。发布包携带固定版本及 SHA-256 清单，用户不需要手动安装图片依赖。
+Python Bridge 的连接、检索、文字读取和工具发现只使用标准库。需要第三方能力的部分采用最小外部依赖：只引入解决特定问题的少量包，不追求零依赖；组件由程序自动下载到私有目录，不从 PyPI 之外的渠道安装，不执行 pip、不修改系统 Python；下载按固定版本 wheel 清单依次尝试 PyPI、清华、阿里三个镜像源，严格核对大小与随代码分发的 SHA-256。发布包携带该清单，用户不需要手动安装任何依赖。当前依赖清单与版本见「第三方依赖」。
+
+## 第三方依赖
+
+核心原则是最小外部依赖，不是零依赖。排序是：能用标准库就用标准库；标准库做不到或做不好时，允许引入少量解决特定问题的包；不允许为一个功能引入整套框架。
+
+依赖约束：
+
+- 只从 PyPI 及其镜像获取固定版本的预编译 wheel，不执行 `pip`、不进行源码编译、不修改系统 Python。
+- 清单文件放在 `templates/dependencies/<包名>-<版本>.json`，形如 `{"version": "...", "wheels": [{"filename", "url", "sha256", "size"}]}`。
+- 下载顺序固定为 PyPI 官方 → 清华镜像 → 阿里镜像，同一文件逐个尝试；每个文件都核对字节数与 SHA-256，不匹配即视为失败并换下一个源。
+- 组件安装到 `data/storage/petal/siyuan-bridge/deps/<包名>/<版本>/<运行标签>/`，开发仓库使用自身 deps。跨系统的不同运行标签互不覆盖。
+- 已安装或已校验的下载不重复获取。语言错误、网络错误不阻塞工具发现和不依赖该组件的功能。
+- 新增依赖必须同步更新本表，并在 `DEVELOPMENT_GUIDE.md` 的验证清单里补上对应的校验项。
+
+当前依赖：
+
+| 包 | 版本 | 用途 | 清单 | 代码入口 |
+|---|---|---|---|---|
+| Pillow | 13.0.0 | 图片解码、缩放、裁剪、重编码 | `templates/dependencies/pillow-13.0.0.json` | `source_code/image_runtime.py` |
 
 ## 思源插件形态
 
@@ -365,6 +384,56 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 
 已知成本：`getShorthands`每页返回全量`shorthandMd`，内核还会对每条做 lute 解析与 HTML 预览渲染（实测渲染结果是 Markdown 的 2.2-2.8 倍），所以列表与搜索都必须裁剪输出，只有`siyuan_read`才回正文。
 
+## 剪藏（从 URL 建文档）
+
+`siyuan_create(source_url=...)` 让 AI 直接把一个网页存成思源文档，不需要浏览器扩展。全部用 Python 标准库，不依赖浏览器或 Node。
+
+链路：
+
+```text
+source_url
+  → urllib 抓 HTML（浏览器 UA，走系统代理，30 秒超时，正文上限 5 MiB）
+  → 标准库 html.parser 建轻量树
+  → 定位主容器，清属性，提升懒加载图
+  → POST /api/extension/copy（clipType=article）拿内核转好的 Markdown
+  → 走现有 create 写入
+  → /api/format/netImg2LocalAssets 本地化图片
+```
+
+关键取舍：HTML 转 Markdown 交给内核，不在 Python 侧重写。内核的 lute 转换器本来就是思源自己的格式来源，产出与手写文档一致；实测同一篇微信文章，内核产出 26 到 29 张图，trafilatura 产出 0 张。
+
+正文定位规则（通用，不为站点写特例）：
+
+1. 语义容器：`article`、`main`、`[role=main]`、`#main-content`、`.article-content` 等。
+2. 文本密度扫描：`文本长度 - 2 × 链接文本长度`，按 DOM 深度衰减，取最高分。
+3. `body` 兜底。
+
+唯一的站点专属规则是微信的 `#js_content`。它的语义明确，且微信是用户明确要求支持的渠道。新增站点专属规则需要用户授权。
+
+清洗规则：
+
+- 删除 `script`、`style`、`noscript`、`svg`、`iframe`、`form`、`button`、`template`。
+- 所有元素只保留 `src`、`href`、`alt`，其余属性全部删除。这条不可省：微信每个 `<span>` 都带完整内联样式，不删的话内核会把样式转成 IAL 属性语法，产出 39270 字符垃圾；删完是 11022 字符干净正文。
+- `<img>` 的 `data-src`、`data-original` 提升为 `src`。微信的图全在 `data-src` 上，不提升则 26 张图全丢。
+- `section` 改名为 `div`，避免内核生成超级块。
+
+编码判定按通用顺序：Content-Type 的 charset → HTML 前 4KB 的 `<meta charset>` → UTF-8。GBK 站点（新浪、新华网等）靠这一步正确解码。
+
+图片默认本地化：写入成功后对文档 ID 调用 `/api/format/netImg2LocalAssets`，内核下载并落盘到 `data/assets/`，正文外链自动改写为本地路径。实测 26 张外链图本地化后 `mmbiz` 引用归零、`assets/` 引用 26 个。该接口返回 `data: null`，没有逐项结果；失败不阻塞正文，按部分完成上报。
+
+能力边界，抓不到时明确报错并建议用浏览器扩展手动剪藏：
+
+| 类别 | 表现 | 例子 |
+|---|---|---|
+| 直连可抓 | 正文完整 | 微信图文、阮一峰、少数派、CSDN、虎嗅、新浪、GitHub、arXiv、MDN、Wikipedia、BBC、Guardian |
+| JS 壳 | 可见文本为 0 | 今日头条、B站专栏、豆瓣文章 |
+| 反爬或登录墙 | 403 或验证页 | 知乎、Medium、StackOverflow、Reuters、简书、微博 |
+| 传输阻断或付费墙 | 连接重置或正文被截 | 小红书、NYT |
+
+微信自身还分三种页面：普通图文文章可抓；图片消息页（`class="share_content_page"`，`js_base_container` 为空壳）与纯图片消息页不可抓，因为正文由 JavaScript 渲染。图片消息页的图片列表在 `picture_page_info_list` 的 `cdn_url` 字段里，但正文拿不到，整体按不支持处理。
+
+不借用的方案，结论见 `docs/剪藏支持方案-2026-11-17.md`：内核 `forwardProxy` 是裸 HTTP 且本机配置为空、走直连；内核 MCP 的 `web_fetch` 同样是裸 HTTP，整页转 Markdown 不做正文抽取；Electron 的 `native/frontend/web_page_fetch` 是真无头浏览器，但只注册给应用内 Agent，不投影到外部 MCP。
+
 ## 索引模型
 
 客观索引由程序生成：
@@ -478,7 +547,7 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 - 大图版不缩像素、不做有损编码；普通完整位图直接复用原始字节，裁剪结果在 PNG 与无损 WebP 中选较小者。JPEG 解码后无损裁剪可能比原文件更大。动画保留原始全部帧，不静默只取第一帧；当前不对动画做切片。不可识别或不支持的图片明确声明。
 - 每个实际发送切片按 `ceil(width/28) × ceil(height/28)` 粗估视觉 token，整组求和；这是跨模型的本地估算，不是具体模型账单。文字与视觉合计展示，文字预算只决定文字分页；响应字节数按最终 UTF-8 紧凑 JSON 复核，包括所有 Base64、文字、JSON 和换行。
 - 网络图先以 64 MiB 输入下载上限取得原始文件，再处理并按返回体积判断；输入上限与 MCP 传输上限分开。同一次读取可复用同一来源的处理结果。
-- Pillow 13.0.0 的固定二进制 wheel 清单位于 `templates/dependencies/`，按实际 CPython ABI、操作系统和架构选择；支持清单内的 Windows、macOS、Linux。组件放在 `data/storage/petal/siyuan-bridge/deps/pillow/<版本>/<运行标签>/`，开发仓库使用自身 deps。仅从 PyPI、清华、阿里三个来源依次获取同一文件，严格核对大小和随代码分发的 SHA-256，不执行 pip、不进行源码编译。
+- 依赖 Pillow 13.0.0，按实际 CPython ABI、操作系统和架构从清单选 wheel；清单格式、来源顺序与校验规则见「第三方依赖」。
 - 插件加载时检查已记录的运行标签与准备状态；已安装或已有经校验的下载不重复获取，缺失时自动多线路下载到私有目录并提示。首次安装尚无实际 Python 信息时提示将在首次连接自动准备；MCP 成功 start 后在后台准备，首次 read 也会自动补齐，用户无须额外操作。语言/网络错误不阻塞工具发现和文字读取；真实图片处理失败按原位声明返回。跨系统同步的不同运行标签互不覆盖。前端细节见 FRONTEND.md。
 
 块展示规则：
@@ -798,8 +867,9 @@ scope：
 | 参数            | 类型    | 默认       | 含义                                        |
 | --------------- | ------- | ---------- | ------------------------------------------- |
 | `title`       | string  | 必填       | 文档标题                                    |
-| `markdown`    | string  | 二选一必填 | 默认写入正文；与 `markdown_file` 互斥           |
-| `markdown_file` | string | 二选一必填 | 仅导入已有本地 `.md` 文件；不要为导入先写临时文件 |
+| `markdown`    | string  | 三选一必填 | 默认写入正文；与 `markdown_file`、`source_url` 互斥 |
+| `markdown_file` | string | 三选一必填 | 仅导入已有本地 `.md` 文件；不要为导入先写临时文件 |
+| `source_url` | string | 三选一必填 | 抓取远端网页作为正文；传它时 `title` 可选 |
 | `upload_large_files` | boolean | false | 仅`markdown_file`附件后处理，承接用户同意上传256MiB及以上普通文件 |
 | `path`        | string  | 可选       | 首选完整可读路径 `/Notebook/Folder/Doc`   |
 | `notebook_id` | string  | 可选       | 笔记本重名或使用内部路径时消歧              |
@@ -836,20 +906,23 @@ scope：
 
 数据流：
 
-1. 校验 `confirmed=true`、title、if_exists，以及 `markdown` / `markdown_file` 二选一（互斥，都传或都不传报错）。
-2. 从可见笔记本和缓存文档解析目标路径，再读取思源当前 live 文档列表重新判断同路径文档，避免外部新建后缓存未刷新导致 `if_exists=reject` 漏检。
-3. 检查目标路径权限必须是 `read_write`。
-4. 拒绝创建 Privacy Rules 文档。
-5. 若目标已存在，按 `if_exists` 决策。
-6. `overwrite` 删除旧正文块前检查反链；存在外部引用时默认拒绝。
-7. 创建快照。
-8. 去掉与 title 重复的首个 H1，避免重复标题。
-9. 创建文档或覆盖已有文档。
-10. 若使用 `markdown_file`，扫描写入后的文档块，处理本地引用和文内锚点。
-11. 尝试 pushMsg。
-12. 用文档 ID 短轮询 `getHPathByID`，等待思源暴露目标人类可读路径。
-13. 用系统笔记本 ID 和 Privacy Rules 文档 ID 安全刷新索引。
-14. 返回写入结果、路径同步状态、附件处理摘要和回滚提示。
+1. 校验 `confirmed=true`、if_exists，以及 `markdown` / `markdown_file` / `source_url` 三选一（互斥，多传或都不传报错）。
+2. 使用 `source_url` 时先抓取并转换，得到 markdown 与默认标题；抓取失败、HTTP 非 2xx、抽不到正文或命中反爬页时在此拒绝，不进入后续步骤。转换细节见「剪藏」章节。
+3. 校验 title：使用 `source_url` 时 title 可选，依次取 `og:title`、`<title>`、URL 末段。
+4. 从可见笔记本和缓存文档解析目标路径，再读取思源当前 live 文档列表重新判断同路径文档，避免外部新建后缓存未刷新导致 `if_exists=reject` 漏检。
+5. 检查目标路径权限必须是 `read_write`。
+6. 拒绝创建 Privacy Rules 文档。
+7. 若目标已存在，按 `if_exists` 决策。
+8. `overwrite` 删除旧正文块前检查反链；存在外部引用时默认拒绝。
+9. 创建快照。
+10. 去掉与 title 重复的首个 H1，避免重复标题。
+11. 创建文档或覆盖已有文档。
+12. 若使用 `markdown_file`，扫描写入后的文档块，处理本地引用和文内锚点。
+13. 若使用 `source_url`，对文档 ID 调用 `/api/format/netImg2LocalAssets` 本地化图片。
+14. 尝试 pushMsg。
+15. 用文档 ID 短轮询 `getHPathByID`，等待思源暴露目标人类可读路径。
+16. 用系统笔记本 ID 和 Privacy Rules 文档 ID 安全刷新索引。
+17. 返回写入结果、路径同步状态、附件与图片处理摘要和回滚提示。
 
 当前实现差距：
 
@@ -859,6 +932,7 @@ scope：
 当前实现特点：
 
 - 写入成功后会短轮询路径同步，再带系统上下文自动刷新索引，避免 create 后新路径或 Privacy Rules 过滤状态滞后。
+- `source_url` 的抓取、正文定位和 HTML 转 Markdown 全部在快照之前完成，任何一步失败都不写思源、不创建快照。
 
 历史踩坑：
 

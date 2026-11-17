@@ -31,6 +31,8 @@ Files of 256MiB or more prompt for consent, rather than hitting a hard size limi
 
 AI can also create notebooks/documents and rename, move, copy, export, or delete documents.
 
+To save a web page directly into SiYuan, just give the AI the URL — no browser extension needed. It fetches the page, converts the body into a SiYuan document, and downloads the article images into the local asset library. WeChat articles, personal blogs, CSDN, SSPAI, GitHub and Wikipedia pages work. Pages that require login or JavaScript rendering, such as Zhihu, Medium and Toutiao, cannot be fetched; you get a clear message telling you to clip them with the browser extension instead.
+
 The cloud Inbox also appears as a read-only notebook. AI can list its entries, search by title, read the full text, move an entry into a normal notebook, or delete an entry. Moving matches the Inbox panel's Move action and also removes the cloud original; deleting is irreversible and no restorable snapshot is created. Inbox entries cannot be edited or written to.
 
 After enabling "Read images together with documents by default", screenshots and charts are returned with the text in document order. Standard reads automatically reduce image size while preserving useful visual detail. Images with an aspect ratio greater than 3:1 are split, and every slice from one original is returned together. AI can select include_large_images for original-pixel reading without lossy compression; long images may still be split. Original attachments remain unchanged.

@@ -369,6 +369,7 @@ Error: invalid parameter
 - 写入后需要刷新的工具必须带系统上下文刷新索引，且不得把 Privacy Rules 写入 AI 可见缓存。
 - create/rename/move/copy/delete 后必须等待思源路径接口同步，返回路径同步状态。
 - `siyuan_create(if_exists=reject)` 必须检查思源当前 live 文档列表，不能只依赖可能过期的 `docs.jsonl`。
+- `siyuan_create` 的正文来源三选一：`markdown`、`markdown_file`、`source_url`，多传或都不传必须在快照前报错。
 - 任何会删除现有文档/块 ID 的操作必须在快照和写入前检查统一引用关系；标准块引用、可识别嵌入块和 `siyuan://` 块链接任一存在外部关系时默认拒绝且不得创建快照。
 - 可见引用可以返回来源文档和块内容；隐藏或未知来源只能返回聚合数量，不得泄露路径、标题、块 ID 或内容。
 - 冲突结果必须包含针对本次被引用块的判断说明：语义继续时保留 ID 并重规划编辑，语义撤销或替代且保留会误导引用时才考虑破坏；多块范围需要逐个判断。
@@ -473,6 +474,21 @@ Error: invalid parameter
 - 移出按版本分支：≥3.8.9 用 `createDocByParent`（`parentID` 为 `null` 表示笔记本根），3.3.0-3.8.8 用 `createDocWithMd`；标题半角 `/` 转全角 `／`；同名文档不检查、不拒绝。
 - 移出先建文档后删云端条目；删除失败保留新文档并写明条目未删除，不自动回滚。删除条目本身不创建快照（快照恢复不了云端数据）。
 - 列表与搜索必须裁剪输出，只有 `siyuan_read` 返回正文。
+
+## 修改剪藏支持时必须验证
+
+剪藏指 `siyuan_create(source_url=...)`：抓取远端网页、抽出正文、交给内核转 Markdown、再走现有写入。方案与实测数据见 `docs/剪藏支持方案-2026-11-17.md`。
+
+- 三个正文来源互斥：`markdown`、`markdown_file`、`source_url` 必须且只能给一个，多给或都不给在快照前报错。
+- 抓取在快照之前完成。抓取失败、HTTP 非 2xx、页面无正文、命中反爬验证页时拒绝写入，不创建快照。
+- 编码按通用顺序判定：Content-Type charset → HTML 前 4KB `<meta charset>` → UTF-8。用 GBK 页面（如新浪新闻）和 UTF-8 页面各验证一次，不能出现乱码。
+- 正文定位按通用规则：语义容器（`article/main/[role=main]` 等）→ 文本密度扫描 → `body` 兜底。站点专属容器只允许微信 `#js_content`，新增需用户明确授权。
+- 清洗必须只保留 `src/href/alt` 三个属性。微信每个 `<span>` 带完整内联样式，不删会让内核把样式转成 IAL 属性语法，正文被垃圾淹没。
+- 图片懒加载属性 `data-src`、`data-original` 必须提升为 `src`，否则微信 26 张图全部丢失。
+- 转换交给内核 `/api/extension/copy`（`clipType=article`，`assets=false`），不在 Python 侧做 HTML 转 Markdown。自研转换在实测中明显劣于内核。
+- 建文档成功后默认对文档 ID 调用 `/api/format/netImg2LocalAssets` 本地化图片；失败不阻塞正文，按部分完成上报并保留文档 ID。
+- 图片消息页（`class="share_content_page"`，`js_base_container` 为空）必须明确拒绝并说明正文由 JS 渲染，不能把壳文案当正文写入。
+- 反爬与 JS 壳站点（知乎、Medium、StackOverflow、今日头条、B站专栏、豆瓣文章等）必须给出可理解的报错，建议用户用浏览器扩展手动剪藏。
 
 ## MCP 工具契约清单
 
