@@ -1,11 +1,12 @@
 # SiYuan Bridge 项目工程文档
 
-## 2026-11-17 收集箱方案核对：修正两处事实错误
+## 2026-11-17 收集箱方案核对：澄清收集箱与闪记是两个功能
 
-- 核对收集箱支持时先只查了 `/api/inbox/*` 就断言「收集箱纯云端、本地无副本」，被用户指出不应是纯云端。复查补上本地闪记通道：`kernel/util/working.go:250` 定义 `ShortcutsPath = home/.config/siyuan/shortcuts/`，`kernel/model/shortcuts.go:29` 读 `shortcuts/shorthands` 目录，`MoveLocalShorthands` 由 `AutoConsumeShorthandsJob` 定时消费，路由 `/api/filetree/moveLocalShorthands` 在 v3.5.0、v3.8.0、v3.8.10、master 存在，v3.0.0 不存在。思源官方用户指南术语表原文说明云端收集箱是「云端快速记录功能，通过微信发送或 API 调用将文本暂存到云端」，需订阅，与本地闪记并存。
-- 本机实测：`C:\Users\Zinger\.config\siyuan\shortcuts` 不存在，全盘无 `shortcuts` 目录；`conf.fileTree.shorthandSavePath` 与 `shorthandSaveBox` 均为空串；前端构建包中 `moveLocalShorthands` 引用 0 次。当前收集箱只有云端 2 条（`1794880590020` "没有人会逼一棵树说话" 2026-11-17 09:56、`1792243354103` 朋友圈反着发 2026-10-17 21:22）。
-- 另一处判定错误：用 `conf.user` 判断账号未登录。实际登录态加密存在 `conf.userData`，内核 `Conf.GetUser()` 解密；以 `getShorthands` 正常返回数据可证已登录。已把这两条写入 `DEVELOPMENT_GUIDE.md` 已知真实错误模式第15、16条，并在 `ARCHITECTURE.md` 历史踩坑表补两行。
-- 方案草案 `docs/收集箱支持方案-2026-11-17.md` 同步修正：补充本地闪记事实、撤销「不兼容本地速记」的决策。未改任何源码，未提交。
+- 收集箱（Inbox）是云端功能。条目暂存思源云端，本地无副本、无文档 ID、不在块树、不进 FTS5 索引；只有移动到普通笔记本后才进入本地文档体系。内核 `kernel/model/cloud_service.go` 的 `GetCloudShorthands` 请求 `GetCloudServer() + "/apis/siyuan/inbox/getCloudShorthands?p=N"`，带 `userToken` cookie；接口 `/api/inbox/getShorthands`、`getShorthand`、`removeShorthands` 自 v3.0.0 全版本存在。官方用户指南术语表原文：「收集箱是云端快速记录功能，通过微信发送或 API 调用将文本暂存到云端，之后可在收集箱面板中将其移动到文档中进行整理。该功能需要订阅会员。」
+- 闪记（shorthand/速记）是本地功能，与收集箱不是同一功能的两套实现。文件在 `home/.config/siyuan/shortcuts/shorthands/`（`kernel/util/working.go:250`），`kernel/model/shortcuts.go:29` 读取该目录，`AutoConsumeShorthandsJob` 定时调用 `MoveLocalShorthands` 消费，路由 `/api/filetree/moveLocalShorthands` 自 v3.5.0 起存在（v3.0.0 无）。本机当前该目录不存在。
+- 2026-11-17 用户新收藏条目（`1794880590020` "没有人会逼一棵树说话"，09:56，微信来源，shorthandMd 2046 字符）核验：云端 `getShorthands` 返回该条；本地 `D:\SiYuan\data` 搜「逼一棵树说话」0 命中；`SELECT ... FROM blocks` 查不到；FTS5 搜索 `matchedBlockCount: 0`。结论是只有云端。
+- 本轮先后两次判断失误并已纠正：先用 `conf.user` 判账号未登录（实际登录态加密在 `conf.userData`，以 `getShorthands` 正常返回为证）；随后把闪记当成收集箱的本地实现写进文档。两处已在 `DEVELOPMENT_GUIDE.md` 已知真实错误模式第15、16条与 `ARCHITECTURE.md` 历史踩坑表中修正为正确表述。
+- 方案草案 `docs/收集箱支持方案-2026-11-17.md` 同步修正：2.1b 节改为区分收集箱与闪记，D12 恢复为「不兼容闪记，不在范围」，删除此前引入的闪记待定项。未改任何源码。
 
 ## 2026-11-17 反馈#29：文档定位参数改为document_path/document_id
 
