@@ -353,7 +353,7 @@ Privacy Rules 是隐私主副本，存放在思源系统笔记本的 `隐私规�
 | `siyuan_find` | `query`/`regex`模式在普通结果之后追加收集箱分组，只匹配标题；`query`按空白切词全命中，`regex`用 Python 正则。`sql`模式与`notebooks`限定时不含收集箱 |
 | `siyuan_edit` | 命中收集箱路径报`permission:not_read_write`，固定文案提示先用`siyuan_doc_manage`移出 |
 | `siyuan_create` | 命中收集箱路径报`validation:wrong_target_type`，收集箱不能写入 |
-| `siyuan_doc_manage(move)` | 建文档后删除云端条目；建文档成功、删除失败时保留新文档并如实上报 |
+| `siyuan_doc_manage(move)` | 建文档后先等路径同步再刷新索引，然后删除云端条目；建文档成功、删除失败时保留新文档并如实上报 |
 | `siyuan_doc_manage(delete)` | 直接删除云端条目，不创建快照（快照恢复不了云端数据），不可恢复 |
 | 其他 action | 报错，收集箱只支持 move 与 delete |
 

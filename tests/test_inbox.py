@@ -198,6 +198,7 @@ class InboxServerTests(unittest.TestCase):
         server._active_client = client
         server._active_language = "zh-CN"
         server._refresh_index_with_system_context = lambda _client: None  # type: ignore[assignment]
+        server._wait_for_hpath = lambda *_args, **_kwargs: mcp_server.PostWriteSyncStatus(True, "路径已同步")  # type: ignore[assignment]
         return server, client
 
     def test_notebook_list_appends_inbox_row(self):

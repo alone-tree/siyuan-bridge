@@ -3659,16 +3659,19 @@ class McpServer:
         snapshot_status = self._create_snapshot_or_raise(client, "siyuan_doc_manage", f"/{name}/{locator}")
         doc_title = writable_document_title(title) or "(无标题)"
         markdown = entry_markdown(entry)
+        internal_path = f"{parent_internal.rstrip('/')}/{doc_title}" if parent_internal else f"/{doc_title}"
         doc_id = new_document_id()
         try:
             if supports_create_doc_by_parent(client.version()):
                 client.create_doc_by_parent(notebook_id, parent_id, doc_id, doc_title, markdown)
             else:
-                internal_path = f"{parent_internal.rstrip('/')}/{doc_title}" if parent_internal else f"/{doc_title}"
                 created = client.create_doc_with_md(notebook_id, internal_path, markdown)
                 doc_id = str(created.get("id") or created.get("docID") or doc_id)
         except SiYuanApiError as exc:
             raise tool_error(_ERR_INBOX_UNAVAILABLE, f"创建文档失败，收集箱条目未删除：{exc}") from exc
+
+        # 新文档刚落盘时文件树可能还没同步，先等路径可见再刷新索引。
+        sync_status = self._wait_for_hpath(client, doc_id, internal_path)
 
         removed = True
         remove_error = ""
@@ -3693,6 +3696,9 @@ class McpServer:
         parts = ["# 收集箱条目已移出", ""]
         parts.append(f"条目：{title}（`{oid}`）")
         parts.append(f"新文档：`{doc_id}`")
+        parts.append(f"路径：`{normalize_display_path(internal_path)}`")
+        if not sync_status.ok:
+            parts.append(f"同步：{sync_status.detail}")
         parts.append(f"快照：{snapshot_status}")
         parts.append("索引：已自动刷新" if refresh_ok else '索引：自动刷新失败，请手动运行 `siyuan_operate(action="refresh")`')
         if not removed:
