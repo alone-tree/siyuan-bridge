@@ -202,15 +202,10 @@ python -m pytest tests -q
 ### 模拟升级，不覆盖配置
 
 ```powershell
-# 1. 关思源
-# 2. 杀残留 MCP 进程
-Get-Process python -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'run_mcp' } | Stop-Process -Force
-
-# 3. 导入（不加 --fresh，保留插件数据区全部持久数据）
 python scripts/import_siyuan_plugin.py --workspace D:/Siyuan2test
-
-# 4. 开思源
 ```
+
+> AI 直接运行导入脚本即可，不要事先另查进程或锁文件，也不要自行重试或改命令。能导入就是成功；真有问题脚本会自己报错。
 
 ### 干净重装
 
