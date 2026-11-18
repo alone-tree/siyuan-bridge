@@ -1,5 +1,15 @@
 # SiYuan Bridge 项目工程文档
 
+## 2026-11-18 v2.0.0 发版准备
+
+- 版本号已在早前提交 bump 到 2.0.0：`source_code/__init__.py` 的 `__version__` 与 `siyuan-plugin/plugin.json` 的 `version` 均为 `2.0.0`。
+- 宣传语改版（早前提交 032a734）：`plugin.json` 的 `description` 改为"让AI接入你的思源笔记，针对知识库阅读编辑场景深度优化。支持灵活的隐私和个性化要求设置。"，英文 default 同步翻译。
+- README 全面改版：根 `README.md` 改为居中标题+标语+亮点短句+核心理念+使用场景+安装+保护+工具详解+FAQ 的新结构；`README.en-US.md` 一比一翻译，图片链接原样保留。
+- 执行 `python scripts/build_package.py`，自动同步 README 到 `siyuan-plugin/README.zh-CN.md` 与 `siyuan-plugin/README.md`，校验图片引用，生成 `dist/package.zip`（2034 KB，Git 忽略）。
+- 三篇手写宣传原帖已剪藏到思源笔记本「思源桥」（2026-11-17），索引记录在 `AGENTS.md` 的「手写宣传资料参考」。
+- 子代理实测对比 siyuan-sisyphus 四项能力（图文一次读、块序号+ID编辑、剪藏与收集箱、嵌入块展开），确认这些为思源桥相对优势；报告仅会话内参考，未写入 README，README 只说我们自己。
+- 本条为发版准备记录；push 与 GitHub Release 待用户明确确认后执行。
+
 ## 2026-11-17 列表编辑三项体验修复
 
 - 用户验收列表编辑后提出三处改进，本轮实施：编辑返回摘要返回整个列表子树；doc_manage索引自动刷新加重试；start_index/start_id描述明确必须同时提供。

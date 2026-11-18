@@ -1,125 +1,178 @@
-# Siyuan Bridge: Connect SiYuan Notes to Your AI Assistant
+<h1 align="center">SiYuan Bridge</h1>
 
-Let AI safely read, search, and edit your SiYuan notes.
+<p align="center">Connect AI to your SiYuan notes, deeply optimized for knowledge-base reading and editing, built for stability, reliability, and peace of mind. Supports flexible privacy and personalization settings.</p>
 
-Each session startup refreshes document metadata and reuses existing word/block statistics, showing the device time when they were calculated. Ask the AI to refresh the index when updated statistics are needed. New documents without statistics show “not counted.” User Preferences and Workspace Index use the shared block renderer, preserving embedded sources and quote nesting.
+## Highlights
 
-After installing Siyuan Bridge, you can work with your knowledge base directly inside AI agents like Codex, Claude Code, Hermes, and WorkBuddy. Just tell the AI what to find, read, or modify — Siyuan Bridge handles document navigation, long-text reading, block structure, and write verification.
+- Understand complex documents: read mixed text and images, embedded block content, and more in one pass, so what AI sees matches what you see, instead of reading only the text and missing the images.
+- Flexible editing: locate by block number and ID; headings, tables, lists, code blocks, and flowcharts can all be edited. Large tables and long lists get dedicated optimization.
+- Clipping and inbox: save web links as SiYuan documents, and read the cloud inbox and move items into notebooks.
+- Privacy control: three permission levels, read-write / read-only / hidden, inherited along the document tree, with privacy rules isolated from AI.
+- Safety net: automatic snapshot before editing, reference checks before deletion or rewrite, and breaking references refused by default.
+- Rules in SiYuan: preferences, index, and privacy rules are all SiYuan documents, viewable and editable directly, and synced with the workspace.
 
-It focuses on documents and knowledge bases: writing, organizing, editing tables, managing document trees, and handling cross-document references. Databases, flashcards, and block styling are not currently supported.
+## Core Philosophy
 
-Session startup refreshes document metadata and reuses word and block counts from the existing index. Ask the AI to refresh the index to update these statistics. Documents without prior statistics are marked as not counted. User Preferences and the Workspace Index use block-based rendering, preserving embedded content sources and quotation nesting.
+### Adapt to SiYuan's block structure
 
-## What You Can Ask AI to Do
+SiYuan organizes notes internally by blocks: a paragraph, a table, a list item are each a block, and the underlying APIs are designed block by block. SiYuan Bridge follows this block structure instead of copying plain-text editing. It naturally connects the underlying block structure with top-level document paragraphs, so AI still sees complete documents and a few simple actions. This avoids repeated failures in text matching while preserving SiYuan's native block semantics.
 
-- "Find my notes on procrastination and attention, identify recurring ideas, and write a summary with inline citations from the original notes."
+### Manage AI with SiYuan documents
+
+All behavioral rules AI must follow live in real SiYuan documents rather than local config files. User preferences, the workspace index, and privacy rules are all documents you can open, view, and edit directly in SiYuan. They are bound to the current workspace and sync across devices; once you change them in SiYuan, they take effect, with no need to go through plugin settings or local files.
+
+### Consolidate the tool surface
+
+SiYuan Bridge offers only a small set of lean tools, designed around the programming actions AI excels at: list files, search files, read files, edit files, create files. Each task has as few approaches as possible, reducing AI's choice burden.
+
+### Safety bottom line
+
+Safety is not left to reminding AI to behave; it is written into the tools' default flow. Backlink reference protection checks whether a block is referenced before deletion or rewrite; document-level privacy rules filter data before it is returned; an automatic SiYuan workspace snapshot is created before editing. All of this runs silently in the background, nearly invisible to AI, and saves you from manual checks every time.
+
+## What you can ask AI to do
+
+- "Find my notes on procrastination and attention, identify recurring ideas, write a summary, and cite specific passages from the original documents."
 - "Organize my course notes into a review framework with source references."
-- "Read this report and explain the architecture diagrams and screenshots in it."
-- "Section 3 of this article is confusing — keep the meaning but reorder the paragraphs."
+- "Clip this WeChat article (with its URL) into my knowledge base and explain the architecture diagrams in it."
+- "Section 3 of this article is confusing; keep the meaning but reorder the paragraphs."
 - "Update the dates in my travel itinerary and add a budget column."
-- "Insert the photos and itinerary files on my computer into this travel journal."
-- "Import a local Markdown file as a new note, or insert part of it into an existing note."
-- "Create a new project notebook and organize these PDFs into categorized documents."
+- "Insert the photos and itinerary files from my computer into this travel record."
+- "Create a new project notebook, organize these PDFs into documents, and reclassify them."
+- "See what's in my cloud inbox and move the ones I need into my project notebook."
 
-AI can search the entire knowledge base by keyword and browse notebook and document trees. SQL search returns the first 20 privacy-visible hits in the original query order: complete text for body blocks, or the first 20 display blocks for documents. Hidden content is neither returned nor counted. Images remain addresses and embedded SQL is not expanded. Upstream truncation includes LIMIT/OFFSET guidance; the bridge does not automatically fetch more candidates. For long documents, it sees the outline first, then reads in complete paragraphs — never splitting mid-sentence. All returned text, including outlines, block numbers, IDs, table coordinates, and attachment paths, counts toward the same reading budget. When editing, it can rewrite single paragraphs, reorganize multiple paragraphs, insert before or after, delete ranges, and append.
+## Installation and getting started
 
-Tables support cell-level editing by row and column, including adding or removing rows and columns. Images and files can be uploaded to SiYuan assets; local folders are inserted as links. Local Markdown files can be imported directly as new documents, or their content inserted at a specific position in an existing document. Local image, file, and folder references in the Markdown are imported as SiYuan assets; network URLs are left unchanged. AI can also create notebooks and documents, and rename, move, copy, export, or delete existing ones.
+Using SiYuan Bridge requires desktop SiYuan Notes (minimum 3.3.0, latest recommended) and Python 3.11 or higher. Some plugin features use a small number of third-party dependencies, which are installed automatically when you install the plugin.
 
-After enabling "Read images together with documents by default", screenshots and charts are returned with the text in document order. Standard reads automatically reduce image size while preserving useful visual detail. Images with an aspect ratio greater than 3:1 are split, and every slice from one original is returned together. AI can select include_large_images for original-pixel reading without lossy compression; long images may still be split. Original attachments remain unchanged.
+1. Search for "SiYuan Bridge" in the SiYuan marketplace and install the plugin.
+2. Open the plugin settings and save the current workspace token on the MCP configuration page (usually detected and saved automatically).
+3. Copy the generated MCP configuration and send it to your AI Agent to register it in the format its platform requires.
+4. Restart the AI Agent, then say: "Help me find a topic in my notes."
 
-Image components are downloaded automatically into SiYuan Bridge's own directory and reused; no manual installation is needed. The default image budget is 9 MiB (adjustable under "Advanced"), and the entire response always respects the 10 MB transport limit. An original image that cannot fit is reported with its location as a complete group; partial slice groups are never sent. With the image toggle off, only image locations are returned. AI can override this per call with include_images. The toggle is off by default, and the selected model must support image input.
+If you use cloud sync, see "FAQ" below.
 
-SiYuan block references are supported. You can ask which blocks a document references, or which blocks reference that document. Both queries cover the document and all its blocks, and recursively summarize reference counts for child documents. When AI modifies or deletes content, Siyuan Bridge verifies whether any existing references would break. Query embeds written as `{{SELECT ...}}` are read too: Siyuan Bridge confirms each target is visible before reading it, then shows the source path as a quote block; hidden targets never appear and are not counted, and when nothing is visible it only says "no such block".
+![New config page](image/README/1785317465017.png)
 
-When reading images and attachments, the bridge provides both a local viewing path and the original reusable `assets/...` reference. Reuse that reference in another note instead of uploading the extracted copy again.
+When the plugin is first enabled, SiYuan Bridge creates a notebook named "SiYuan Bridge" in the current workspace, containing 4 documents:
+- User Preferences: the instructions you want AI to follow, e.g. "show me a draft before modifying a document, and wait for my confirmation before writing"
+- Workspace Index: what's in your SiYuan notes and where. AI can help write it, or you can write it yourself
+- Privacy Rules: if you want special permissions for certain documents/notebooks, copy their IDs into the document. No extra restrictions by default. Privacy rules are managed only by the user and isolated from AI.
+- About SiYuan Bridge: a brief introduction
 
-Table coordinate views are for targeting only and must not be written back verbatim. Table edits stop before writing if raw line breaks make cell boundaries ambiguous; replacements report a warning if fewer tables remain afterward. After creating a same-name document, use its returned document ID for subsequent operations.
-
-## How Siyuan Bridge Protects Your Notes
-
-AI is fast, but a single mistake can affect a lot of content. Siyuan Bridge integrates confirmation, snapshots, reference detection, and privacy rules into the actual workflow.
-
-Before creating, editing, moving, copying, or deleting content, explicit user approval is required. Before writing, Siyuan Bridge creates a workspace snapshot. If results aren't what you expected, you can manually restore from SiYuan's data history. Siyuan Bridge does not auto-rollback, avoiding overwrites of subsequent valid changes.
-
-When deleting documents, overwriting content, or merging paragraphs, existing document IDs and block IDs may disappear. If other notes still reference them, Siyuan Bridge halts the operation by default and lists the visible reference sources. The AI can only proceed after you've reviewed the impact and explicitly allowed it. You can also proactively check references at any time, not just when something is about to break.
-
-Privacy rules are maintained directly in SiYuan. Notebooks or documents can be set to read-write, read-only, or hidden, with permissions inherited down the document tree. Hidden content will not appear in listings, search, reading, or operations. Read-only content can be queried and organized but not modified. The privacy rules document itself is isolated from AI — it cannot be read or modified by AI.
-
-Closed notebooks mean "not currently in use," not "hidden." During search and reading, Siyuan Bridge temporarily opens closed notebooks as needed and restores them afterward. If you want to prevent AI from accessing certain content, set it as hidden in the privacy rules.
-
-![Privacy rules page](image/README/1784633972321.png)
-
-## Installation and Getting Started
-
-You need the desktop version of SiYuan Notes and Python 3.11+.
-
-1. Install the plugin from the SiYuan Bazaar (search for "Siyuan Bridge").
-2. Open plugin settings and save your workspace token on the MCP configuration page.
-3. Copy the generated MCP config and send it to your AI agent. Let it register using your platform's format.
-4. Restart your AI agent, then say: "Help me find something about [topic] in my notes."
-
-If you use SiYuan on multiple computers with different directory paths, open the plugin settings on each computer and copy the machine-specific config.
-
-![MCP configuration page](image/README/1785317465017.png)
-
-When the plugin is first enabled, Siyuan Bridge creates a notebook named "Siyuan Bridge" in the current workspace. It contains four documents: User Preferences, Workspace Index, About SiYuan Bridge, and Privacy Rules. Installation and updates maintain them when the plugin reloads; opening settings or calling an AI tool first is not required. Privacy Rules are managed by the user and isolated from AI. The MCP Usage Guide and Workspace Index Guide ship as code assets and can be read in full through MCP without local file access by the AI client. The startup packet still includes the complete MCP Usage Guide. Older same-named notes are no longer used as guides.
-
-In "User Preferences," you can tell AI how concise answers should be, when to ask for confirmation before writing, which notebooks are more important, and what conventions to follow when organizing content. These preferences live in SiYuan and sync with your workspace.
+These documents are all stored in SiYuan and sync with the workspace.
 
 ![User preferences](image/README/1784634489547.png)
 
-Siyuan Bridge shows live block numbers on the left side of the editor by default, so you and AI can use the same numbers to locate specific paragraphs. The numbers refresh automatically after structural edits.
+SiYuan Bridge shows live block numbers in the left margin of the document by default, so the block numbers AI sees match what you see, making it easy to point to a specific paragraph. They recalculate automatically when the document structure changes.
 
-Right-click a single document in the document tree and select "Copy → 复制完整路径(思源桥)" to copy a path including its notebook name, such as `/Research/Companies/Example`. Paste it directly into your AI conversation to identify the document. This entry appears below SiYuan's built-in "Copy readable path". The "复制完整路径" (Copy full path) toggle in the plugin panel is on by default; turning it off hides the menu entry.
+Right-click a document in the document tree and choose "Copy → Copy Full Path (SiYuan Bridge)" to copy a path including the notebook name (e.g. `/Investment Research/Company Research/Example Company`) and paste it directly to AI for document targeting. This menu sits below the native "Copy readable path"; the plugin panel's "Copy full path" toggle is on by default, and turning it off hides the menu item.
 
-![Siyuan Bridge block number display](image/README/block-index-preview.png)
+![Block number display](image/README/block-index-preview.png)
 
-## Currently Not Supported
+Image components are downloaded automatically into SiYuan Bridge's own directory and reused if already present, with no manual installation. The default image budget is 9 MiB (adjustable in "Advanced Settings"), and every response stays within the 10 MB transport limit; original image groups that don't fit are reported with their path preserved rather than sent as partial slices. The image toggle is off by default and the model you use needs to support image input; AI can also request images per call with include_images. Original attachments are never modified.
 
-- Mobile: Siyuan Bridge runs as a local Python program, currently desktop only.
-- Database editing: databases can be read as regular tables, editing not yet supported.
-- Flashcards, tags, and block styling features.
-- Deleting entire notebooks: currently you can create notebooks; deletion is only for documents and their children.
+## How SiYuan Bridge protects your notes
+
+AI is fast, but a single wrong operation can affect a lot of content. SiYuan Bridge builds confirmation, snapshots, reference checks, and privacy permissions into the actual workflow.
+
+Before creating, editing, moving, copying, or deleting content, explicit user approval is required. Before any write, SiYuan Bridge creates a SiYuan workspace snapshot. If the result isn't what you expected, you can restore manually from SiYuan's data repository. SiYuan Bridge never auto-rolls back, to avoid a recovery operation overwriting later legitimate changes.
+
+When deleting documents, rewriting existing content, or merging paragraphs, original document IDs and block IDs may disappear. If other notes still reference them, SiYuan Bridge stops by default and lists the reference sources you may view. Only after you've reviewed the impact and explicitly allowed it can AI break these references. You can also proactively check references at any time, without waiting until something is about to be deleted.
+
+Privacy rules are maintained directly in SiYuan documents. Notebooks or documents can be set to read-write, read-only, or hidden, with permissions inherited down the document tree. Hidden content never appears in listings, search, reading, or operation results; read-only content can be queried and organized but not modified. The privacy rules document itself is isolated from AI, which cannot read, search, or edit it.
+
+![Privacy permission page](image/README/1784633972321.png)
+
+Closing a notebook only means it's not currently in use, not that it's hidden. During search and reading, SiYuan Bridge temporarily opens closed notebooks as needed and restores their closed state afterward. If you don't want AI to access certain content, set it to hidden in the privacy rules.
+
+## Tool details
+
+SiYuan Bridge wraps complex block handling inside the tools and exposes only nine tools. Each tool handles one class of decisions, and the division of parameters is written into the tool descriptions, so the same thing has as few optimal approaches as possible and AI gets it right the first time.
+
+### siyuan_start
+
+The tool that must be called first at session start. It aggregates runtime status, the workspace index, user preferences, and built-in guides into a startup packet delivered to AI.
+
+### siyuan_read
+
+The document reading tool. It provides the document outline and body together, paginates long documents by block window without cutting mid-sentence, and inlines images so mixed text-and-image documents aren't read as text only. Embedded blocks are also expanded, so what you see and what AI sees stay as consistent as possible. Before editing, it also provides block numbers and block IDs for AI to locate the target. Large and long images are automatically processed in the background into AI-friendly forms.
+
+### siyuan_create
+
+The document creation tool. It writes directly, imports a local md file, or clips from an external URL (most sites supported, with dedicated support for WeChat articles). Same-name documents are rejected by default; you can also choose to clear and rewrite while preserving the document ID, or create another document with the same name.
+
+### siyuan_edit
+
+The body editing tool based on blocks. It replaces whole blocks with excellent compatibility; headings, tables, lists, and code blocks can all be edited. Large tables and long lists get dedicated optimization to avoid collateral damage. It also supports inserting local images, files, and folders at specified positions in a document.
+
+### siyuan_doc_manage
+
+The document-tree management tool. It manages regular local notebooks and the SiYuan inbox (you can move inbox documents into other notebooks for further processing).
+
+### siyuan_list
+
+The document-tree listing tool. It lists notebooks or the direct child documents under a path, with effective permissions, word count, and update time.
+
+### siyuan_find
+
+The knowledge-base search tool. It supports native query, regex, and SQL modes, and filters results through privacy rules before returning them. During search it temporarily opens closed notebooks and restores them afterward, so a closed notebook doesn't cause misses.
+
+### siyuan_operate
+
+Supports querying a document's forward and backward references, reading built-in guides, and triggering SiYuan's native sync.
+
+### siyuan_bridge_feedback
+
+A tool for submitting bugs, feature requests, or ideas through the conversation. It needs no confirmation and doesn't modify SiYuan content. You can tell AI "report the scenario that just failed to SiYuan Bridge's developer", and the feedback goes to the developer's backend (suggestions welcome!)
+
+## Currently not supported
+
+- Database editing: databases can be read as plain tables, but editing is not yet supported.
+- Flashcards, block styling, and similar features.
+- Deleting an entire notebook: currently only notebook creation is supported; deletion applies to documents and their sub-documents.
+- Mobile: SiYuan Bridge runs through a local Python program and is currently desktop-only.
 
 ## FAQ
 
-- **Windows Bazaar update fails with `rename ... Access is denied`?** Older bridge MCP processes use the plugin directory as their working directory, which can block replacement while running in the background. Before the first upgrade to the fixed version, stop all MCP processes connected to this plugin (including AI client background services), keep SiYuan open, and retry. Do not delete plugin data or terminate all Python processes indiscriminately. The fixed launcher no longer uses the plugin directory as its working directory; existing MCP registrations and configuration remain unchanged. Pause tool calls during updates, then restart the bridge MCP process to load the new code; opening a new conversation alone may not restart it. If the error persists, check other programs holding the directory or directory permissions.
+- Do you support multiple SiYuan workspaces? Yes. Install the plugin in your main workspace, then manually add tokens for other workspaces in the plugin settings. User preferences, the workspace index, and privacy rules are stored separately in each workspace and switch automatically. Only one workspace can be active at a time. When switching, open the target workspace and close the others, then close and restart the target workspace. SiYuan assigns a fixed port to the first workspace started and random ports to later ones, which SiYuan Bridge cannot reliably detect. So there's no need to register the same MCP separately in every workspace, or AI will see duplicate tools.
 
-- **Does it support multiple workspaces?** Yes. Install the plugin in your primary workspace, then manually add tokens for other workspaces in plugin settings. User preferences, workspace index, and privacy rules are stored per workspace and switch automatically. Only one workspace can run at a time. To switch: 1) open the target workspace, 2) close other workspaces, 3) close the target workspace, 4) restart SiYuan. This 4-step process is needed because the first workspace uses a fixed port while subsequent ones use random ports that the tool can't reliably detect. Do not register the same MCP in every workspace — AI would see duplicate tools.
+- I have SiYuan on two computers, how do I use it? The plugin itself syncs with the workspace, but the MCP config's startup script must use the current computer's absolute path and matching token. The plugin automatically detects the current device's path and token and generates the corresponding MCP config. Just open the plugin settings on each computer and copy the MCP config it regenerates to AI.
 
-- **"SiYuan not running" error?** Open the SiYuan desktop app and verify the correct workspace. MCP registration succeeds even when SiYuan is offline; tools will clearly prompt you to start SiYuan when actually needed. If SiYuan is already running and errors persist, restart your AI agent. Some agents lose MCP connections after network proxy or VPN changes.
+- SiYuan isn't started, what should I do? This plugin uses SiYuan's default port 6806, but in some cases the port may be occupied. Close all running SiYuan Notes and reopen.
 
-- **AI can't see tools after configuration?** Verify the MCP config was copied to the correct client and the client was restarted. MCP registration formats vary slightly across platforms; the plugin currently generates Claude Code format. You can also give the config to your AI and ask it to convert for your platform.
+- Is there an order between starting SiYuan and starting MCP? No. Once MCP is registered, AI Agent can discover the tools even if SiYuan isn't running. Reading or modifying notes requires SiYuan to be started first, as an explicit authorization step. The tool will prompt to open SiYuan (and tell AI not to try on its own). Some Agents may lose registered MCP connections after proxy or VPN state changes; in that case you may need to restart the Agent.
 
-- **Using SiYuan on two computers?** The plugin syncs with your workspace, but the MCP launch script must use absolute paths for each machine. Open plugin settings on each computer and copy the machine-specific config.
+- After setup, AI still can't see the tools? Confirm you copied the generated MCP config into the correct AI client and restarted the client. Different AI Agents use slightly different MCP registration formats; the plugin currently generates Claude Code format; you can also hand the config to AI and ask it to convert to the format your platform needs.
 
-- **What's the telemetry program?** The experience improvement program anonymously collects tool success rates to identify usability issues. It's off by default. When enabled, it only records version, tool name, duration, success/failure, and error type — no note content, search queries, or conversation data is uploaded. Anonymous stats are available on the [public dashboard](https://zingerplayground.top/code/siyuan-bridge-telemetry/).
+- What is the user experience improvement program? It anonymously collects SiYuan Bridge tool call success rates to find poorly designed tools. Off by default. When on, it records only version, tool name, execution time, success, and error type; it does not upload note content, search content, or conversations, and collects no specific note info or AI chat history. Anonymous stats can be viewed on the public dashboard.
 
-  ![Siyuan Bridge telemetry dashboard](image/README/1784553421493.png)
+- Windows marketplace update reports `rename ... Access is denied`? Older SiYuan Bridge MCP used the plugin directory as its working directory, which could block marketplace replacement when running in the background. Before the first upgrade to the fixed version, stop all MCP processes connected to this plugin (including AI client background services), keep SiYuan open, and retry the update; don't delete plugin data or bulk-kill Python processes. The fixed version no longer uses the plugin directory as its working directory, so existing MCP registrations and configs need no changes. Pause tool calls during the upgrade, then restart the SiYuan Bridge MCP process after the update to load the new code; starting a new conversation alone may not restart the process. If the error persists, check for other programs holding the directory or directory permissions.
 
-- **Content disappears, conflicts, or crashes after editing?** This is typically caused by two computers running the same workspace with auto-sync enabled. Set sync to manual, or sync only on startup and shutdown. You can also ask AI to trigger a sync after completing edits.
+  ![Telemetry dashboard](image/README/1784553421493.png)
 
-- **No snapshot created before edit/write?** Auto-sync also creates snapshots. During sync, SiYuan may consider data unchanged and skip Siyuan Bridge's snapshot request. Set sync to manual, or sync only on startup and shutdown.
+- Content disappeared, conflicts, or SiYuan crashed after a change? A common cause is two computers opening the same workspace with auto cloud sync on. Set sync to manual, or sync only at startup and shutdown. You can ask AI to call SiYuan's built-in sync when needed. SiYuan Bridge first follows the native flow to check config and sync source, and only asks you to decide upload/download when the native flow requires a choice; it doesn't preset a direction; regular sync and native empty-cloud auto-upload follow the native flow. After a timeout or connection failure it doesn't auto-retry, and won't claim sync succeeded based only on HTTP success.
 
-- **Tags written by AI (#tag#) appear as plain text?** Whether SiYuan parses paired `#tag#` into real tags is controlled by an editor setting. Open SiYuan "Settings → Editor → Markdown inline syntax" and enable "#foo#" (tag syntax). Once enabled, tags written by AI become clickable real tags that show up in the tag panel; when disabled, all Markdown writes — including SiYuan's native API — leave them as plain text.
+- Why wasn't a new snapshot created before a change? Auto cloud sync also creates snapshots. During sync SiYuan may judge there's no new data and skip the snapshot SiYuan Bridge requested. Set auto sync to manual, or sync only at startup and shutdown.
 
-- **Will snapshots keep growing?** SiYuan has built-in snapshot cleanup (typically keeps 2 per day, deletes after 180 days), but this requires cloud sync. For local-only workspaces without sync, periodically clean up manually via Settings → Data Repository → Cleanup.
+- AI-written #tags# became plain text? Whether SiYuan parses paired `#tag#` into tags depends on editor settings. Open SiYuan "Settings → Editor → Markdown inline syntax" and enable "#foo#" (tag syntax). Once on, `#tag#` written by AI becomes a clickable real tag and appears in the tag panel; when off, all Markdown writes, including SiYuan's native APIs, won't parse tags and they become plain text.
 
-- **What can Siyuan Bridge do with documents?** Create notebooks and documents. Rename, copy, and export only affect the current document. Move and delete affect the entire document subtree (the document and all its children). Deleting entire notebooks is not currently supported.
+- Do snapshots keep growing? SiYuan has built-in snapshot cleanup, usually keeping two per day and deleting after 180 days. But auto cleanup requires cloud sync to trigger. For a purely local workspace without cloud sync, periodically clean up via "Settings → Data Repository → Cleanup".
 
-- **How do I check forward and backward references?** Ask "Which blocks does this document reference?" for `siyuan_operate(action="check_forward_references")`, which shows referenced blocks grouped by target document. Ask "Which blocks reference this document?" for `action="check_backward_references"`, which shows referring blocks grouped by source document. Both include references within the same document and recursively summarize counts for child documents. By default, each list shows up to 10 visible counterpart or child documents; use `limit="none"` to show all. Display limits do not change relationship totals. Hidden counterparts contribute only to relationship counts; their paths, IDs, content, and document counts are not disclosed.
+- How can SiYuan Bridge manage documents? It can create notebooks and documents, and rename, move, copy, export, or delete documents. Rename, copy, and export apply only to the current document; move and delete apply to the entire document subtree, i.e. the document and all its descendants. Deleting an entire notebook is not currently offered.
 
-- **Will delete or overwrite break block references?** Any operation that would make existing document or block IDs disappear first checks for references. When references exist, Siyuan Bridge defaults to rejecting the operation and shows visible reference sources. The AI can only proceed after you've reviewed the impact and explicitly allowed it.
+- How do I view a document's forward and backward references? Tell AI "which blocks does this document reference", corresponding to `siyuan_operate(action="check_forward_references")`, which shows referenced blocks grouped by target document; asking "which blocks reference this document" uses `action="check_backward_references"`, showing referencing blocks grouped by source document. Both count internal references and recursively aggregate sub-documents. By default each shows 10 visible peer/sub-documents; use `limit="none"` to see all, and the display limit doesn't affect total counts. Hidden peers only count relationships, without exposing paths, IDs, content, or document counts.
 
-## Feedback and Community
+- Will deletion or rewrite break block references? Any operation that makes document IDs or block IDs disappear first checks whether those contents are still referenced by other notes. If references exist, SiYuan Bridge refuses by default and shows the viewable reference sources. Only after you understand the impact and explicitly agree can AI break these references.
 
-Run into issues or have ideas? Tell your AI "submit feedback," or head to [GitHub](https://github.com/alone-tree/siyuan-bridge) to open an issue.
+## Community and feedback
 
-Community discussion: [Chain Drops (链滴)](https://ld246.com/article/1785319302029)
+If you run into problems or have ideas, tell AI "submit feedback", or visit [GitHub](https://github.com/alone-tree/siyuan-bridge) to file an issue.
 
-If Siyuan Bridge helps you, donations are appreciated!
+For more introductions and discussions, see the community post on [链滴](https://ld246.com/article/1780911033554).
 
-![Donation QR code](image/README/1778197765819.png)
+If SiYuan Bridge helps you, feel free to show your support!
+
+![Reward code](image/README/1778197765819.png)
 
 ---
 
